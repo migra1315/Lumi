@@ -1,0 +1,6 @@
+__pycache__/*
+*.pyc
+JAKA_SDK_LINUX_ARM/*
+JAKA_SDK_LINUX_X86/*
+JAKA_SDK_WINDOWS/*
+*.db
