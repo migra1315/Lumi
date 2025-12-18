@@ -72,7 +72,7 @@ class TaskDatabase:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 
-                stations_json = json.dumps([station.to_dict() for station in task.stations])
+                stations_json = json.dumps(task.station.to_dict())
                 metadata_json = json.dumps(task.metadata)
                 
                 cursor.execute('''

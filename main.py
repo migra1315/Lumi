@@ -1,6 +1,6 @@
 import logging
 from robot.MockRobotController import MockRobotController  # 假设已存在的机器人控制器
-from robot.RobotControllerAdapter import RobotControllerAdapter
+# from robot.RobotControllerAdapter import RobotControllerAdapter
 from robot.config_example import SYSTEM_CONFIG
 from task.TaskManager import TaskManager,OperationMode  # 假设已存在的任务管理器
 import json
@@ -167,30 +167,30 @@ def main():
         }
     }
     }
-    stations_data = json_instruction.get("stations", {})
+    # stations_data = json_instruction.get("stations", {})
     
     # 遍历每个站点，作为单独任务提交
-    for station_id, station_info in stations_data.items():
-        # 为每个站点创建一个单独的任务结构
-        single_station_task = {
-            "stations": {
-                station_id: station_info
-            }
-        }
+    # for station_id, station_info in stations_data.items():
+    #     # 为每个站点创建一个单独的任务结构
+    #     single_station_task = {
+    #         "stations": {
+    #             station_id: station_info
+    #         }
+    #     }
         
-        # 4. 提交任务
-        task_id = task_manager.receive_task_from_json(single_station_task)
-        print(f"站点 {station_id} 已作为单独任务提交，任务ID: {task_id}")
+    # 4. 提交任务
+    task_id = task_manager.receive_task_from_json(json_instruction)
+    # print(f"站点 {station_id} 已作为单独任务提交，任务ID: {task_id}")
 
-        # 5. 监控任务状态
-        while True:
-            status = task_manager.get_task_status(task_id)
-            print(f"任务状态: {status.get('status')}")
-            
-            if status.get('status') in ['completed', 'failed']:
-                break
-            
-            time.sleep(1)
+    # 5. 监控任务状态
+    while True:
+        status = task_manager.get_task_status(task_id)
+        print(f"任务状态: {status.get('status')}")
+        
+        if status.get('status') in ['completed', 'failed']:
+            break
+        
+        time.sleep(1)
 
     # 6. 获取历史任务
     all_tasks = task_manager.get_all_tasks()

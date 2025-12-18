@@ -4,3 +4,7 @@ JAKA_SDK_LINUX_ARM/*
 JAKA_SDK_LINUX_X86/*
 JAKA_SDK_WINDOWS/*
 *.db
+.DS_Store
+docs/~$流式通信接口.docx
+docs/双向流式通信接口.docx
+docs/通信协议.md

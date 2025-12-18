@@ -20,7 +20,7 @@ class OperationMode(Enum):
     # 可以扩展其他操作模式
 
 @dataclass
-class StationTask:
+class StationConfig:
     """单个站点任务"""
     station_id: str  # 如 "station1"
     name: str        # 站点名称
@@ -43,9 +43,9 @@ class StationTask:
 
 @dataclass
 class InspectionTask:
-    """巡检任务（包含多个站点）"""
+    """巡检任务(对站点任务参数的封装。增加相关任务信息)"""
     task_id: str                     # 任务ID
-    stations: List[StationTask]      # 站点列表
+    station: StationConfig           # 单个站点
     priority: int = 1               # 优先级 (1-10, 10最高)
     status: TaskStatus = TaskStatus.PENDING
     created_at: datetime = None
@@ -65,7 +65,7 @@ class InspectionTask:
     def to_dict(self):
         return {
             "task_id": self.task_id,
-            "stations": [station.to_dict() for station in self.stations],
+            "station": self.station.to_dict(),
             "priority": self.priority,
             "status": self.status.value,
             "created_at": self.created_at.isoformat() if self.created_at else None,
@@ -76,3 +76,5 @@ class InspectionTask:
             "error_message": self.error_message,
             "metadata": self.metadata
         }
+
+        

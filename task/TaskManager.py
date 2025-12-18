@@ -5,7 +5,7 @@ import hashlib
 from typing import Dict, List
 from task.TaskDatabase import TaskDatabase
 from task.TaskScheduler import TaskScheduler
-from task.TaskModels import StationTask, InspectionTask, OperationMode
+from task.TaskModels import StationConfig, InspectionTask, OperationMode
 import logging
 class TaskManager:
     """任务管理器 - 主控制器"""
@@ -25,15 +25,15 @@ class TaskManager:
         self.scheduler.register_callback("on_task_failed", self._on_task_failed)
     
     def receive_task_from_json(self, json_data: Dict) -> str:
-        """从JSON接收任务"""
+        """从JSON接收单个任务"""
         try:
             # 解析JSON数据
             stations_data = json_data.get("stations", {})
             
-            # 创建站点任务列表
-            stations = []
+            # 为每个站点创建一个单独的InspectionTask对象
+            task_ids = []
             for station_id, station_info in stations_data.items():
-                station = StationTask(
+                station = StationConfig(
                     station_id=station_id,
                     name=station_info.get("name", ""),
                     agv_marker=station_info.get("agv_marker", ""),
@@ -42,23 +42,24 @@ class TaskManager:
                     operation_mode=OperationMode(station_info.get("operation_mode", "None")),
                     door_id=station_info.get("door_id")
                 )
-                stations.append(station)
+                
+                # 生成任务ID
+                task_id = self._generate_task_id({**json_data, "station_id": station_id})
+                
+                # 创建巡检任务
+                task = InspectionTask(
+                    task_id=task_id,
+                    station=station,
+                    priority=self._calculate_priority([station]),
+                    metadata={"source": "json", "station_id": station_id}
+                )
+                
+                # 添加到调度器
+                self.scheduler.add_task(task)
+                task_ids.append(task_id)
             
-            # 生成任务ID
-            task_id = self._generate_task_id(json_data)
-            
-            # 创建巡检任务
-            task = InspectionTask(
-                task_id=task_id,
-                stations=stations,
-                priority=self._calculate_priority(stations),
-                metadata={"source": "json"}
-            )
-            
-            # 添加到调度器
-            self.scheduler.add_task(task)
-            
-            return task_id
+            # 返回第一个任务ID或空字符串
+            return task_ids[0] if task_ids else ""
             
         except Exception as e:
             self.logger.error(f"接收任务失败: {e}")
@@ -76,7 +77,7 @@ class TaskManager:
         
         return f"TASK_{timestamp}_{hash_str}_{random_str}"
     
-    def _calculate_priority(self, stations: List[StationTask]) -> int:
+    def _calculate_priority(self, stations: List[StationConfig]) -> int:
         """计算任务优先级"""
         # TODO: 实现根据任务内容计算优先级的逻辑
         # 根据任务内容计算优先级

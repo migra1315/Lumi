@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 import logging
 from task.TaskDatabase import TaskDatabase
-from task.TaskModels import OperationMode,StationTask,InspectionTask, TaskStatus
+from task.TaskModels import OperationMode,StationConfig,InspectionTask, TaskStatus
 
 class TaskScheduler:
     """任务调度器"""
@@ -95,19 +95,12 @@ class TaskScheduler:
         try:
             self.logger.info(f"开始执行任务 {task.task_id}")
             
-            for station_task in task.stations:
-                if not self._execute_station_task(task, station_task):
-                    # 如果某个站点失败，尝试继续执行其他站点
-                    self.logger.warning(f"站点 {station_task.station_id} 执行失败，继续下一个")
-                    # # TODO: 丰富日志信息，包括失败原因
-                    # self.database.log_task_action(
-                    #     task.task_id, station_task.station_id,
-                    #     "station_execution", "failed", "站点执行失败"
-                    # )
-                    # 根据策略决定是否继续
-                    continue_after_failure = True
-                    # if not self._should_continue_after_failure(task, station_task):
-                    return not continue_after_failure
+            station_task = task.station
+            if not self._execute_station_task(task, station_task):
+                # 站点执行失败
+                self.logger.warning(f"站点 {station_task.station_id} 执行失败")
+                continue_after_failure = True
+                return not continue_after_failure
             
             return True
             
@@ -116,7 +109,7 @@ class TaskScheduler:
             return False
     
     def _execute_station_task(self, task: InspectionTask, 
-                            station_task: StationTask) -> bool:
+                            station_task: StationConfig) -> bool:
         """执行单个站点任务"""
         try:
             self.database.log_task_action(
@@ -212,7 +205,7 @@ class TaskScheduler:
             return False
     
     def _should_continue_after_failure(self, task: InspectionTask, 
-                                      failed_station: StationTask) -> bool:
+                                      failed_station: StationConfig) -> bool:
         """判断任务失败后是否继续"""
         # 这里可以根据业务逻辑实现不同的策略
         # 例如：充电桩任务失败后可以跳过继续执行
@@ -242,7 +235,7 @@ class TaskScheduler:
                     # 重新加入队列
                     self.task_queue.put((-task.priority, task.task_id, task))
                     self.database.log_task_action(
-                        task.task_id, task.stations[0].station_id,
+                        task.task_id, task.station.station_id,
                         "station_execution", "retrying", "站点执行重试, 重试次数: " + str(task.retry_count)
                     )
                     self.logger.info(f"任务 {task.task_id} 将进行第{task.retry_count}次重试")
@@ -253,7 +246,7 @@ class TaskScheduler:
                         "达到最大重试次数"
                     )
                     self.database.log_task_action(
-                        task.task_id, task.stations[0].station_id,
+                        task.task_id, task.station.station_id,
                         "station_execution", "failed", "站点执行失败")
                     
                     self._trigger_callback("on_task_failed", task)
