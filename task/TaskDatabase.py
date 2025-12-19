@@ -1,6 +1,6 @@
 from datetime import datetime
 import json
-from task.TaskModels import InspectionTask,TaskStatus
+from dataModels.TaskModels import Task,TaskStatus
 import sqlite3
 from contextlib import contextmanager
 from typing import Generator, List, Dict, Any
@@ -66,7 +66,7 @@ class TaskDatabase:
         finally:
             conn.close()
     
-    def save_task(self, task: InspectionTask):
+    def save_task(self, task: Task):
         """保存任务到数据库"""
         try:
             with self._get_connection() as conn:

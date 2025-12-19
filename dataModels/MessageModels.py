@@ -3,7 +3,8 @@ from enum import Enum
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import json
-from task.TaskModels import InspectionTask
+from dataModels.TaskModels import Task
+
 
 
 class MsgType(Enum):
@@ -50,11 +51,11 @@ class PositionInfo:
 class TaskInfo:
     """任务信息"""
     # 直接封装InspectionTask类
-    inspection_task: InspectionTask
+    inspection_task_list: List[Task]
     
     def to_dict(self) -> Dict[str, Any]:
         # 使用InspectionTask的to_dict方法直接转换
-        return self.inspection_task.to_dict()
+        return [task.to_dict() for task in self.inspection_task_list]
 
 
 @dataclass
@@ -111,16 +112,25 @@ class EnvironmentInfo:
 
 
 @dataclass
+class ArriveServicePointInfo:
+    """是否到达服务点"""
+    isArrive: bool          # 是否到达服务点
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class DeviceDataJson:
     """设备巡检数据"""
     positionInfo: PositionInfo
-    taskInfo: List[TaskInfo]
+    taskInfo: TaskInfo
     deviceInfo: DeviceInfo
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             "positionInfo": self.positionInfo.to_dict(),
-            "taskInfo": [task.to_dict() for task in self.taskInfo],
+            "taskInfo": self.taskInfo.to_dict(),
             "deviceInfo": self.deviceInfo.to_dict()
         }
 
@@ -129,13 +139,13 @@ class DeviceDataJson:
 class EnvironmentDataJson:
     """环境巡检数据"""
     positionInfo: PositionInfo
-    taskInfo: List[TaskInfo]
+    taskInfo: TaskInfo
     environmentInfo: EnvironmentInfo
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             "positionInfo": self.positionInfo.to_dict(),
-            "taskInfo": [task.to_dict() for task in self.taskInfo],
+            "taskInfo": self.taskInfo.to_dict(),
             "environmentInfo": self.environmentInfo.to_dict()
         }
 
@@ -145,7 +155,7 @@ class RobotStatusDataJson:
     """机器人状态数据"""
     batteryInfo: BatteryInfo
     positionInfo: PositionInfo
-    taskInfo: List[TaskInfo]
+    taskInfo: TaskInfo
     systemStatus: SystemStatus
     errorInfo: Optional[ErrorInfo] = None
     
@@ -153,13 +163,27 @@ class RobotStatusDataJson:
         result = {
             "batteryInfo": self.batteryInfo.to_dict(),
             "positionInfo": self.positionInfo.to_dict(),
-            "taskInfo": [task.to_dict() for task in self.taskInfo],
+            "taskInfo": self.taskInfo.to_dict(),
             "systemStatus": self.systemStatus.to_dict()
         }
         if self.errorInfo:
             result["errorInfo"] = self.errorInfo.to_dict()
         return result
 
+
+@dataclass
+class ArriveServePointDataJson:
+    """是否到达服务点数据"""
+    positionInfo: PositionInfo
+    taskInfo: TaskInfo
+    arriveServePointInfo: ArriveServicePointInfo
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "positionInfo": self.positionInfo.to_dict(),
+            "taskInfo": self.taskInfo.to_dict(),
+            "arriveServePointInfo": self.arriveServePointInfo.to_dict()
+        }
 
 @dataclass
 class MessageEnvelope:
@@ -254,6 +278,29 @@ def create_environment_data_message(
         msgId=msg_id,
         msgTime=int(datetime.now().timestamp() * 1000),  # 毫秒时间戳
         msgType=MsgType.ENVIRONMENT_DATA,
+        robotId=robot_id,
+        dataJson=data_json.to_dict()
+    )
+
+
+def create_arrive_serve_point_message(
+    msg_id: str,
+    robot_id: str,
+    position_info: PositionInfo,
+    task_info: List[TaskInfo],
+    arrive_service_point_info: ArriveServicePointInfo
+) -> MessageEnvelope:
+    """创建是否到达服务点消息"""
+    data_json = ArriveServePointDataJson(
+        positionInfo=position_info,
+        taskInfo=task_info,
+        arriveServePointInfo=arrive_service_point_info
+    )
+    
+    return MessageEnvelope(
+        msgId=msg_id,
+        msgTime=int(datetime.now().timestamp() * 1000),  # 毫秒时间戳
+        msgType=MsgType.ARRIVE_SERVICE_POINT,
         robotId=robot_id,
         dataJson=data_json.to_dict()
     )

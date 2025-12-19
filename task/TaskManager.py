@@ -5,7 +5,7 @@ import hashlib
 from typing import Dict, List
 from task.TaskDatabase import TaskDatabase
 from task.TaskScheduler import TaskScheduler
-from task.TaskModels import StationConfig, InspectionTask, OperationMode, OperationConfig
+from dataModels.TaskModels import StationConfig, Task, OperationMode, OperationConfig
 import logging
 class TaskManager:
     """任务管理器 - 主控制器"""
@@ -54,7 +54,7 @@ class TaskManager:
                 task_id = self._generate_task_id({**json_data, "station_id": station_id})
                 
                 # 创建巡检任务
-                task = InspectionTask(
+                task = Task(
                     task_id=task_id,
                     station=station,
                     priority=self._calculate_priority([station]),
@@ -141,17 +141,17 @@ class TaskManager:
         self.logger.info(f"重试任务: {task_id}")
         return True
     
-    def _on_task_start(self, task: InspectionTask):
+    def _on_task_start(self, task: Task):
         """任务开始回调"""
         self.logger.info(f"任务开始: {task.task_id}")
         # 可以在这里发送通知或更新UI
     
-    def _on_task_complete(self, task: InspectionTask):
+    def _on_task_complete(self, task: Task):
         """任务完成回调"""
         self.logger.info(f"任务完成: {task.task_id}")
         # 可以在这里发送通知或更新UI
     
-    def _on_task_failed(self, task: InspectionTask):
+    def _on_task_failed(self, task: Task):
         """任务失败回调"""
         self.logger.error(f"任务失败: {task.task_id}")
         # 可以在这里发送通知或更新UI

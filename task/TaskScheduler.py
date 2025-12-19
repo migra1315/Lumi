@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 import logging
 from task.TaskDatabase import TaskDatabase
-from task.TaskModels import OperationMode,StationConfig,InspectionTask, TaskStatus,OperationConfig
+from dataModels.TaskModels import OperationMode,StationConfig,Task, TaskStatus,OperationConfig
 
 class TaskScheduler:
     """任务调度器"""
@@ -14,7 +14,7 @@ class TaskScheduler:
         self.robot_controller = robot_controller
         self.database = database
         self.task_queue = queue.PriorityQueue()  # 优先级队列
-        self.current_task: Optional[InspectionTask] = None
+        self.current_task: Optional[Task] = None
         self.is_running = False
         self.scheduler_thread: Optional[threading.Thread] = None
         self.executor = ThreadPoolExecutor(max_workers=1)  # 单任务执行
@@ -45,7 +45,7 @@ class TaskScheduler:
         self.executor.shutdown(wait=False)
         self.logger.info("任务调度器已停止")
     
-    def add_task(self, task: InspectionTask):
+    def add_task(self, task: Task):
         """添加任务到队列"""
         # 优先级队列使用负数，因为队列是越小优先级越高
         self.task_queue.put((-task.priority,task.task_id, task))
@@ -78,7 +78,7 @@ class TaskScheduler:
                 self.logger.error(f"调度器循环异常: {e}")
                 time.sleep(1)
     
-    def _execute_task(self, task: InspectionTask):
+    def _execute_task(self, task: Task):
         """执行任务"""
         self.current_task = task
         self.database.update_task_status(task.task_id, TaskStatus.RUNNING)
@@ -90,7 +90,7 @@ class TaskScheduler:
         future = self.executor.submit(self._execute_task_internal, task)
         future.add_done_callback(lambda f: self._task_execution_done(f, task))
     
-    def _execute_task_internal(self, task: InspectionTask) -> bool:
+    def _execute_task_internal(self, task: Task) -> bool:
         """执行任务内部逻辑"""
         try:
             self.logger.info(f"开始执行任务 {task.task_id}")
@@ -108,7 +108,7 @@ class TaskScheduler:
             self.logger.error(f"任务执行异常: {e}")
             return False
     
-    def _execute_station_task(self, task: InspectionTask, 
+    def _execute_station_task(self, task: Task, 
                             station_task: StationConfig) -> bool:
         """执行单个站点任务"""
         try:
@@ -217,7 +217,7 @@ class TaskScheduler:
             self.logger.error(f"关门操作失败: {e}")
             return False
     
-    def _should_continue_after_failure(self, task: InspectionTask, 
+    def _should_continue_after_failure(self, task: Task, 
                                       failed_station: StationConfig) -> bool:
         """判断任务失败后是否继续"""
         # 这里可以根据业务逻辑实现不同的策略
@@ -227,7 +227,7 @@ class TaskScheduler:
         # 默认策略：非关键任务失败后继续
         return True
     
-    def _task_execution_done(self, future, task: InspectionTask):
+    def _task_execution_done(self, future, task: Task):
         """任务执行完成回调"""
         try:
             success = future.result()
@@ -278,7 +278,7 @@ class TaskScheduler:
         if event in self.task_callbacks:
             self.task_callbacks[event].append(callback)
     
-    def _trigger_callback(self, event: str, task: InspectionTask):
+    def _trigger_callback(self, event: str, task: Task):
         """触发回调函数"""
         for callback in self.task_callbacks.get(event, []):
             try:
