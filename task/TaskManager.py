@@ -5,7 +5,7 @@ import hashlib
 from typing import Dict, List
 from task.TaskDatabase import TaskDatabase
 from task.TaskScheduler import TaskScheduler
-from task.TaskModels import StationConfig, InspectionTask, OperationMode
+from task.TaskModels import StationConfig, InspectionTask, OperationMode, OperationConfig
 import logging
 class TaskManager:
     """任务管理器 - 主控制器"""
@@ -33,14 +33,21 @@ class TaskManager:
             # 为每个站点创建一个单独的InspectionTask对象
             task_ids = []
             for station_id, station_info in stations_data.items():
+                # 创建操作配置对象
+                operation_config_data = station_info.get("operation_config", {})
+                operation_config = OperationConfig(
+                    operation_mode=OperationMode(operation_config_data.get("operation_mode", "None")),
+                    door_ip=operation_config_data.get("door_ip"),
+                    device_id=operation_config_data.get("device_id")
+                )
+                
                 station = StationConfig(
                     station_id=station_id,
                     name=station_info.get("name", ""),
                     agv_marker=station_info.get("agv_marker", ""),
-                    robot_home_pos=station_info.get("robot_home_pos", []),
-                    ext_home_pos=station_info.get("ext_home_pos", []),
-                    operation_mode=OperationMode(station_info.get("operation_mode", "None")),
-                    door_id=station_info.get("door_id")
+                    robot_pos=station_info.get("robot_pos", []),
+                    ext_pos=station_info.get("ext_pos", []),
+                    operation_config=operation_config
                 )
                 
                 # 生成任务ID

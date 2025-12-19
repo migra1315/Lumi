@@ -49,13 +49,13 @@ SYSTEM_CONFIG = {
     "stations": {
         "marker_1": {
             "name": "实验室1门口",
-            "robot_home_pos": [0, 30, 100, 0, 60, -90],
-            "ext_home_pos": [10, 0, 0, 0]
+            "robot_pos": [0, 30, 100, 0, 60, -90],
+            "ext_pos": [10, 0, 0, 0]
         },
         "charge_point_1F_6010": {
             "name": "充电桩",
-            "robot_home_pos": [0, -90, 0, 0, 0, -90],
-            "ext_home_pos": [80, 0, 0, 0]
+            "robot_pos": [0, -90, 0, 0, 0, -90],
+            "ext_pos": [80, 0, 0, 0]
         }
     }
 }

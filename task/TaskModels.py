@@ -13,11 +13,27 @@ class TaskStatus(Enum):
     RETRYING = "retrying"    # 重试中
 
 class OperationMode(Enum):
-    OPEN_DOOR = "opendoor"
-    CLOSE_DOOR = "closedoor"
-    NONE = "None"
-    CAPTURE = "capture"
+    OPEN_DOOR = "open_door" # 打开门
+    CLOSE_DOOR = "close_door" # 关闭门
+    NONE = "None" # 无操作
+    CAPTURE = "capture" # 拍照
+    SERVE = "serve" # 服务
     # 可以扩展其他操作模式
+
+@dataclass
+class OperationConfig:
+    """操作任务"""
+    operation_mode: OperationMode  # 操作模式
+    door_ip: Optional[str]        # 门ID
+    device_id: Optional[str]      # 设备ID
+    
+    def to_dict(self):
+        return {
+            "operation_mode": self.operation_mode.value,
+            "door_ip": self.door_ip,
+            "device_id": self.device_id
+        }
+    
 
 @dataclass
 class StationConfig:
@@ -25,20 +41,18 @@ class StationConfig:
     station_id: str  # 如 "station1"
     name: str        # 站点名称
     agv_marker: str  # AGV导航点
-    robot_home_pos: List[float]  # 机械臂归位位置
-    ext_home_pos: List[float]    # 外部轴归位位置
-    operation_mode: OperationMode  # 操作模式
-    door_id: Optional[str]        # 门ID
+    robot_pos: List[float]  # 机械臂归位位置
+    ext_pos: List[float]    # 外部轴归位位置
+    operation_config: OperationConfig  # 操作任务
     
     def to_dict(self):
         return {
             "station_id": self.station_id,
             "name": self.name,
             "agv_marker": self.agv_marker,
-            "robot_home_pos": self.robot_home_pos,
-            "ext_home_pos": self.ext_home_pos,
-            "operation_mode": self.operation_mode.value,
-            "door_id": self.door_id
+            "robot_pos": self.robot_pos,
+            "ext_pos": self.ext_pos,
+            "operation_config": self.operation_config.to_dict(),
         }
 
 @dataclass

@@ -50,7 +50,7 @@ def main():
         "station1": {
             "name": "实验室1门口",
             "agv_marker": "marker_1",
-            "robot_home_pos": [
+            "robot_pos": [
                 0,
                 30,
                 100,
@@ -58,19 +58,22 @@ def main():
                 60,
                 -90
             ],
-            "ext_home_pos": [
+            "ext_pos": [
                 10,
                 0,
                 0,
                 0
             ],
-            "operation_mode": "opendoor",
-            "door_id": "door1"
+            "operation_config": {
+                "operation_mode": "open_door",
+                "door_ip": "192.168.1.101",
+                "device_id": "0005"
+            },
         },
         "station2": {
             "name": "实验室1门里",
             "agv_marker": "marker_2",
-            "robot_home_pos": [
+            "robot_pos": [
                 -50,
                 30,
                 100,
@@ -78,19 +81,22 @@ def main():
                 60,
                 -90
             ],
-            "ext_home_pos": [
+            "ext_pos": [
                 50,
                 0,
                 0,
                 0
             ],
-            "operation_mode": "closedoor",
-            "door_id": "door1"
+            "operation_config": {
+                "operation_mode": "close_door",
+                "door_ip": "192.168.1.100",
+                "device_id": "0004"
+            },
         },
         "station3": {
             "name": "实验室1巡检点1",
             "agv_marker": "marker_3",
-            "robot_home_pos": [
+            "robot_pos": [
                 -80,
                 30,
                 100,
@@ -98,18 +104,22 @@ def main():
                 60,
                 -90
             ],
-            "ext_home_pos": [
+            "ext_pos": [
                 80,
                 0,
                 0,
                 0
             ],
-            "operation_mode": "capture"
+            "operation_config": {
+                "operation_mode": "capture",
+                "door_ip": "None",
+                "device_id": "0003"
+            },
         },
         "station4": {
             "name": "实验室1巡检点2",
             "agv_marker": "marker_4",
-            "robot_home_pos": [
+            "robot_pos": [
                 -120,
                 30,
                 100,
@@ -117,18 +127,22 @@ def main():
                 60,
                 -90
             ],
-            "ext_home_pos": [
+            "ext_pos": [
                 120,
                 0,
                 0,
                 0
             ],
-            "operation_mode": "capture"
+            "operation_config": {
+                "operation_mode": "capture",
+                "door_ip": "None",
+                "device_id": "0002"
+            },
         },
         "station5": {
             "name": "实验室1门里",
             "agv_marker": "marker_1",
-            "robot_home_pos": [
+            "robot_pos": [
                 -90,
                 30,
                 100,
@@ -136,19 +150,22 @@ def main():
                 60,
                 -90
             ],
-            "ext_home_pos": [
+            "ext_pos": [
                 150,
                 0,
                 0,
                 30
             ],
-            "operation_mode": "opendoor",
-            "door_id": "door1"
+            "operation_config": {
+                "operation_mode": "open_door",
+                "door_ip": "127.0.0.1",
+                "device_id": "0001"
+            },
         },
         "station6": {
             "name": "充电桩",
             "agv_marker": "charge_point_1F_6010",
-            "robot_home_pos": [
+            "robot_pos": [
                 0,
                 -90,
                 0,
@@ -156,13 +173,17 @@ def main():
                 0,
                 -90
             ],
-            "ext_home_pos": [
+            "ext_pos": [
                 80,
                 0,
                 0,
                 0
             ],
-            "operation_mode": "None",
+            "operation_config": {
+                "operation_mode": "None",
+                "door_ip": "None",
+                "device_id": "None"
+            },
             "door_id": "None"
         }
     }

@@ -158,8 +158,8 @@ classDiagram
         +station_id: str
         +name: str
         +agv_marker: str
-        +robot_home_pos: List[float]
-        +ext_home_pos: List[float]
+        +robot_pos: List[float]
+        +ext_pos: List[float]
         +operation_mode: OperationMode
         +door_id: Optional[str]
         +to_dict() Dict
@@ -329,12 +329,12 @@ sequenceDiagram
         HW-->>RC: 移动完成
         RC-->>TS: 返回成功
         
-        TS->>RC: move_robot_to_position(robot_home_pos)
+        TS->>RC: move_robot_to_position(robot_pos)
         RC->>HW: 控制机械臂移动
         HW-->>RC: 移动完成
         RC-->>TS: 返回成功
         
-        TS->>RC: move_ext_to_position(ext_home_pos)
+        TS->>RC: move_ext_to_position(ext_pos)
         RC->>HW: 控制外部轴移动
         HW-->>RC: 移动完成
         RC-->>TS: 返回成功

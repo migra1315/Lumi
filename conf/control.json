@@ -67,7 +67,7 @@
         "station1": {
             "name": "实验室1门口",
             "agv_marker": "marker_1",
-            "robot_home_pos": [
+            "robot_pos": [
                 0,
                 30,
                 100,
@@ -75,7 +75,7 @@
                 60,
                 -90
             ],
-            "ext_home_pos": [
+            "ext_pos": [
                 10,
                 0,
                 0,
@@ -87,7 +87,7 @@
         "station6": {
             "name": "充电桩",
             "agv_marker": "charge_point_1F_6010",
-            "robot_home_pos": [
+            "robot_pos": [
                 0,
                 -90,
                 0,
@@ -95,7 +95,7 @@
                 0,
                 -90
             ],
-            "ext_home_pos": [
+            "ext_pos": [
                 80,
                 0,
                 0,

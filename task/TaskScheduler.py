@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 import logging
 from task.TaskDatabase import TaskDatabase
-from task.TaskModels import OperationMode,StationConfig,InspectionTask, TaskStatus
+from task.TaskModels import OperationMode,StationConfig,InspectionTask, TaskStatus,OperationConfig
 
 class TaskScheduler:
     """任务调度器"""
@@ -129,7 +129,7 @@ class TaskScheduler:
             # 2. 机械臂移动到归位位置
             self.logger.info("移动机械臂到归位位置")
             success = self.robot_controller.jaka_controller.move_to_position(
-                station_task.robot_home_pos
+                station_task.robot_pos
             )
             if not success:
                 self.logger.error("机械臂移动失败")
@@ -138,20 +138,19 @@ class TaskScheduler:
             # 3. 外部轴移动到归位位置
             self.logger.info("移动外部轴到归位位置")
             success = self.robot_controller.ext_controller.move_to_position(
-                station_task.ext_home_pos
+                station_task.ext_pos
             )
             if not success:
                 self.logger.error("外部轴移动失败")
                 return False
             
             # 4. 执行操作模式
-            if station_task.operation_mode != OperationMode.NONE:
+            if station_task.operation_config.operation_mode != OperationMode.NONE:
                 success = self._execute_operation(
-                    station_task.operation_mode, 
-                    station_task.door_id
+                    station_task.operation_config
                 )
                 if not success:
-                    self.logger.error(f"操作失败: {station_task.operation_mode}")
+                    self.logger.error(f"操作失败: {station_task.operation_config.operation_mode}")
                     return False
             
             self.database.log_task_action(
@@ -168,19 +167,33 @@ class TaskScheduler:
             )
             return False
     
-    def _execute_operation(self, operation_mode: OperationMode, 
-                          door_id: Optional[str]) -> bool:
+    def _execute_operation(self, operation_config: OperationConfig) -> bool:
         """执行特定操作"""
-        if operation_mode == OperationMode.OPEN_DOOR:
+        if operation_config.operation_mode == OperationMode.OPEN_DOOR:
             # 执行开门操作
-            return self._open_door(door_id)
-        elif operation_mode == OperationMode.CLOSE_DOOR:
+            return self._open_door(operation_config.door_ip)
+        elif operation_config.operation_mode == OperationMode.CLOSE_DOOR:
             # 执行关门操作
-            return self._close_door(door_id)
+            return self._close_door(operation_config.door_ip)
+        elif operation_config.operation_mode == OperationMode.CAPTURE:
+            # 执行捕获操作
+            return self._capture(operation_config.device_id)
         else:
-            self.logger.warning(f"未知操作模式: {operation_mode}")
+            self.logger.warning(f"未知操作模式: {operation_config.operation_mode}")
             return True
-    
+        
+    def _capture(self,device_id:str) -> bool:
+        """捕获操作实现"""
+        # 这里需要调用具体的捕获逻辑
+        try:
+            self.logger.info(f"执行捕获操作: {device_id}")
+            # TODO: 实现具体的捕获逻辑
+            time.sleep(0.5)  # 模拟操作时间
+            return True
+        except Exception as e:
+            self.logger.error(f"捕获操作失败: {e}")
+            return False
+        
     def _open_door(self, door_id: str) -> bool:
         """开门操作实现"""
         # 这里需要调用具体的开门逻辑
