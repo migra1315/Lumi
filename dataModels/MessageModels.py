@@ -210,6 +210,83 @@ class MessageEnvelope:
 
 # 辅助函数
 
+# 消息类型与对应数据类的映射
+_MSG_TYPE_TO_DATA_CLASS = {
+    MsgType.ROBOT_STATUS: RobotStatusDataJson,
+    MsgType.DEVICE_DATA: DeviceDataJson,
+    MsgType.ENVIRONMENT_DATA: EnvironmentDataJson,
+    MsgType.ARRIVE_SERVER_POINT: ArriveServePointDataJson,
+}
+
+# 消息类型与数据类参数名的映射
+_MSG_TYPE_TO_PARAM_NAME = {
+    MsgType.ROBOT_STATUS: {
+        "batteryInfo": "battery_info",
+        "positionInfo": "position_info", 
+        "taskInfo": "task_info",
+        "systemStatus": "system_status",
+        "errorInfo": "error_info"
+    },
+    MsgType.DEVICE_DATA: {
+        "positionInfo": "position_info",
+        "taskInfo": "task_info",
+        "deviceInfo": "device_info"
+    },
+    MsgType.ENVIRONMENT_DATA: {
+        "positionInfo": "position_info",
+        "taskInfo": "task_info",
+        "environmentInfo": "environment_info"
+    },
+    MsgType.ARRIVE_SERVER_POINT: {
+        "positionInfo": "position_info",
+        "taskInfo": "task_info",
+        "arriveServePointInfo": "arrive_service_point_info"
+    },
+}
+
+def create_message_envelope(
+    msg_id: str,
+    robot_id: str,
+    msg_type: MsgType,
+    **kwargs
+) -> MessageEnvelope:
+    """创建消息信封（通用工厂方法）
+    
+    Args:
+        msg_id: 消息ID
+        robot_id: 机器人ID
+        msg_type: 消息类型
+        **kwargs: 消息数据参数
+        
+    Returns:
+        MessageEnvelope: 消息信封
+    """
+    if msg_type not in _MSG_TYPE_TO_DATA_CLASS:
+        raise ValueError(f"不支持的消息类型: {msg_type}")
+    
+    # 获取对应的数据类和参数名映射
+    data_class = _MSG_TYPE_TO_DATA_CLASS[msg_type]
+    param_mapping = _MSG_TYPE_TO_PARAM_NAME[msg_type]
+    
+    # 转换参数名
+    data_params = {}
+    for data_param, kwarg_param in param_mapping.items():
+        if kwarg_param in kwargs:
+            data_params[data_param] = kwargs[kwarg_param]
+    
+    # 创建数据对象
+    data_obj = data_class(**data_params)
+    
+    # 创建消息信封
+    return MessageEnvelope(
+        msgId=msg_id,
+        msgTime=int(datetime.now().timestamp() * 1000),  # 毫秒时间戳
+        msgType=msg_type,
+        robotId=robot_id,
+        dataJson=data_obj.to_dict()
+    )
+
+# 保留原有的便捷方法，内部调用通用工厂方法
 def create_robot_status_message(
     msg_id: str,
     robot_id: str,
@@ -220,22 +297,16 @@ def create_robot_status_message(
     error_info: Optional[ErrorInfo] = None
 ) -> MessageEnvelope:
     """创建机器人状态消息"""
-    data_json = RobotStatusDataJson(
-        batteryInfo=battery_info,
-        positionInfo=position_info,
-        taskInfo=task_info,
-        systemStatus=system_status,
-        errorInfo=error_info
+    return create_message_envelope(
+        msg_id=msg_id,
+        robot_id=robot_id,
+        msg_type=MsgType.ROBOT_STATUS,
+        battery_info=battery_info,
+        position_info=position_info,
+        task_info=task_info,
+        system_status=system_status,
+        error_info=error_info
     )
-    
-    return MessageEnvelope(
-        msgId=msg_id,
-        msgTime=int(datetime.now().timestamp() * 1000),  # 毫秒时间戳
-        msgType=MsgType.ROBOT_STATUS,
-        robotId=robot_id,
-        dataJson=data_json.to_dict()
-    )
-
 
 def create_device_data_message(
     msg_id: str,
@@ -245,20 +316,14 @@ def create_device_data_message(
     device_info: DeviceInfo
 ) -> MessageEnvelope:
     """创建设备巡检数据消息"""
-    data_json = DeviceDataJson(
-        positionInfo=position_info,
-        taskInfo=task_info,
-        deviceInfo=device_info
+    return create_message_envelope(
+        msg_id=msg_id,
+        robot_id=robot_id,
+        msg_type=MsgType.DEVICE_DATA,
+        position_info=position_info,
+        task_info=task_info,
+        device_info=device_info
     )
-    
-    return MessageEnvelope(
-        msgId=msg_id,
-        msgTime=int(datetime.now().timestamp() * 1000),  # 毫秒时间戳
-        msgType=MsgType.DEVICE_DATA,
-        robotId=robot_id,
-        dataJson=data_json.to_dict()
-    )
-
 
 def create_environment_data_message(
     msg_id: str,
@@ -268,39 +333,28 @@ def create_environment_data_message(
     environment_info: EnvironmentInfo
 ) -> MessageEnvelope:
     """创建环境巡检数据消息"""
-    data_json = EnvironmentDataJson(
-        positionInfo=position_info,
-        taskInfo=task_info,
-        environmentInfo=environment_info
+    return create_message_envelope(
+        msg_id=msg_id,
+        robot_id=robot_id,
+        msg_type=MsgType.ENVIRONMENT_DATA,
+        position_info=position_info,
+        task_info=task_info,
+        environment_info=environment_info
     )
-    
-    return MessageEnvelope(
-        msgId=msg_id,
-        msgTime=int(datetime.now().timestamp() * 1000),  # 毫秒时间戳
-        msgType=MsgType.ENVIRONMENT_DATA,
-        robotId=robot_id,
-        dataJson=data_json.to_dict()
-    )
-
 
 def create_arrive_serve_point_message(
     msg_id: str,
     robot_id: str,
     position_info: PositionInfo,
     task_info: List[TaskInfo],
-    arrive_service_point_info: ArriveServicePointInfo
+    arrive_service_point_info: ArriveServePointInfo
 ) -> MessageEnvelope:
     """创建是否到达服务点消息"""
-    data_json = ArriveServePointDataJson(
-        positionInfo=position_info,
-        taskInfo=task_info,
-        arriveServePointInfo=arrive_service_point_info
-    )
-    
-    return MessageEnvelope(
-        msgId=msg_id,
-        msgTime=int(datetime.now().timestamp() * 1000),  # 毫秒时间戳
-        msgType=MsgType.ARRIVE_SERVICE_POINT,
-        robotId=robot_id,
-        dataJson=data_json.to_dict()
+    return create_message_envelope(
+        msg_id=msg_id,
+        robot_id=robot_id,
+        msg_type=MsgType.ARRIVE_SERVER_POINT,
+        position_info=position_info,
+        task_info=task_info,
+        arrive_service_point_info=arrive_service_point_info
     )

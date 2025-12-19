@@ -62,14 +62,14 @@ class Task:
     task_id: str                     # 任务ID
     station: StationConfig           # 单个站点
     priority: int = 1               # 优先级 (1-10, 10最高)
-    status: TaskStatus = TaskStatus.PENDING
-    created_at: datetime = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    retry_count: int = 0
-    max_retries: int = 3
+    status: TaskStatus = TaskStatus.PENDING # 任务状态
+    created_at: datetime = None # 创建时间
+    started_at: Optional[datetime] = None # 开始时间
+    completed_at: Optional[datetime] = None # 完成时间
+    retry_count: int = 0 # 重试次数
+    max_retries: int = 3  # 最大重试次数
     error_message: Optional[str] = None
-    metadata: Dict[str, Any] = None
+    metadata: Dict[str, Any] = None  # 元数据，用于存储额外信息
     
     def __post_init__(self):
         if self.created_at is None:
