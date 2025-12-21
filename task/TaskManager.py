@@ -24,6 +24,54 @@ class TaskManager:
         self.scheduler.register_callback("on_task_complete", self._on_task_complete)
         self.scheduler.register_callback("on_task_failed", self._on_task_failed)
     
+    def receive_task_from_cmd(self, task_cmd) -> str:
+        """从TaskCmd接收任务"""
+        try:
+            # 提取任务信息
+            task_id = task_cmd.taskId
+            robot_mode = task_cmd.robotMode
+            station_tasks = task_cmd.stationTasks
+            
+            # 为每个站点创建一个单独的Task对象
+            task_ids = []
+            for station_data in station_tasks:
+                # 创建站点配置
+                station = StationConfig(
+                    station_id=station_data.station_id,
+                    sort=station_data.sort,
+                    name=station_data.name,
+                    agv_marker=station_data.agv_marker,
+                    robot_pos=station_data.robot_pos,
+                    ext_pos=station_data.ext_pos,
+                    operation_config=station_data.operation_config
+                )
+                
+                # 生成任务ID
+                task_id = f"{task_id}_{station.station_id}"
+                
+                # 创建巡检任务
+                task = Task(
+                    task_id=task_id,
+                    station=station,
+                    priority=self._calculate_priority([station]),
+                    metadata={
+                        "source": "cmd", 
+                        "station_id": station.station_id,
+                        "robot_mode": robot_mode
+                    }
+                )
+                
+                # 添加到调度器
+                self.scheduler.add_task(task)
+                task_ids.append(task_id)
+            
+            # 返回第一个任务ID或空字符串
+            return task_ids[0] if task_ids else ""
+            
+        except Exception as e:
+            self.logger.error(f"从TaskCmd接收任务失败: {e}")
+            raise
+    
     def receive_task_from_json(self, json_data: Dict) -> str:
         """从JSON接收单个任务"""
         try:
