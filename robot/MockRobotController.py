@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Optional
 """
 MockRobotController.py
 Mock机器人控制器实现
@@ -17,8 +17,9 @@ class MockRobotController(RobotControllerBase):
         super().__init__(config, debug)
         
         # Mock特定配置
-        self.success_rate = self.config.get('success_rate', 0.9)
+        self.success_rate = self.config.get('success_rate', 0.95)
         self.base_latency = self.config.get('latency', 0.1)
+        self.max_error_rate = self.config.get('max_error_rate', 0.1)
         
         # Mock数据
         self._marker_positions = {
@@ -32,12 +33,34 @@ class MockRobotController(RobotControllerBase):
         self.robot_joints = [0.0] * 6
         self.ext_axis = [0.0] * 4
         
+        # 模拟设备状态
+        self.device_states = {
+            "camera": "online",
+            "lidar": "online",
+            "ultrasonic": "online",
+            "door_sensor": "closed"
+        }
+        
         # Mock错误场景
         self.error_scenarios = {
             "agv_stuck": False,
             "arm_collision": False,
             "sensor_failure": False,
-            "communication_error": False
+            "communication_error": False,
+            "battery_low": False,
+            "camera_failure": False
+        }
+        
+        # 模拟环境数据
+        self.environment_data = {
+            "temperature": 22.5,
+            "humidity": 45.0,
+            "oxygen": 20.9,
+            "carbon_dioxide": 400.0,
+            "pm25": 12.5,
+            "pm10": 25.0,
+            "etvoc": 0.2,
+            "noise": 45.0
         }
         
         # Mock子控制器
@@ -51,6 +74,11 @@ class MockRobotController(RobotControllerBase):
         
         # 启动监控
         self.start_monitoring()
+        
+        # 模拟环境数据更新线程
+        self._env_thread = None
+        self._stop_env_monitor = False
+        self.start_environment_monitoring()
     
     def setup_system(self) -> bool:
         """Mock系统初始化"""
@@ -69,8 +97,84 @@ class MockRobotController(RobotControllerBase):
         """Mock系统关闭"""
         self.logger.info("Mock系统关闭...")
         self.stop_monitoring()
+        self.stop_environment_monitoring()
         self._system_initialized = False
         self.status = RobotStatus.IDLE
+    
+    def get_environment_data(self) -> Dict[str, float]:
+        """获取模拟环境数据"""
+        return self.environment_data.copy()
+    
+    def get_device_states(self) -> Dict[str, str]:
+        """获取设备状态"""
+        return self.device_states.copy()
+    
+    def set_error_scenario(self, scenario: str, enabled: bool):
+        """设置错误场景"""
+        if scenario in self.error_scenarios:
+            self.error_scenarios[scenario] = enabled
+            self.logger.info(f"错误场景 {scenario} 已{'启用' if enabled else '禁用'}")
+        else:
+            self.logger.warning(f"未知错误场景: {scenario}")
+    
+    def capture_image(self, device_id: str) -> str:
+        """模拟拍照功能"""
+        self.logger.info(f"模拟拍照设备: {device_id}")
+        time.sleep(0.5)  # 模拟拍照延迟
+        # 模拟返回base64编码的图像数据
+        return f"mock_image_data_{device_id}_{int(time.time())}"
+    
+    def start_environment_monitoring(self):
+        """启动环境数据监控"""
+        if self._env_thread is None:
+            self._stop_env_monitor = False
+            self._env_thread = threading.Thread(
+                target=self._environment_monitoring_loop,
+                daemon=True
+            )
+            self._env_thread.start()
+            self.logger.info("环境数据监控已启动")
+    
+    def stop_environment_monitoring(self):
+        """停止环境数据监控"""
+        self._stop_env_monitor = True
+        if self._env_thread:
+            self._env_thread.join(timeout=2.0)
+            self._env_thread = None
+            self.logger.info("环境数据监控已停止")
+    
+    def _environment_monitoring_loop(self):
+        """环境数据监控循环"""
+        self.logger.info("环境数据监控循环已启动")
+        
+        while not self._stop_env_monitor:
+            try:
+                # 模拟环境数据变化
+                self.environment_data["temperature"] += random.uniform(-0.5, 0.5)
+                self.environment_data["temperature"] = max(15.0, min(35.0, self.environment_data["temperature"]))
+                
+                self.environment_data["humidity"] += random.uniform(-2.0, 2.0)
+                self.environment_data["humidity"] = max(20.0, min(80.0, self.environment_data["humidity"]))
+                
+                self.environment_data["pm25"] += random.uniform(-2.0, 2.0)
+                self.environment_data["pm25"] = max(0.0, min(100.0, self.environment_data["pm25"]))
+                
+                self.environment_data["pm10"] += random.uniform(-3.0, 3.0)
+                self.environment_data["pm10"] = max(0.0, min(150.0, self.environment_data["pm10"]))
+                
+                # 随机生成错误
+                if random.random() < self.max_error_rate:
+                    # 随机选择一个错误场景
+                    error_scenario = random.choice(list(self.error_scenarios.keys()))
+                    if not self.error_scenarios[error_scenario]:
+                        self.error_scenarios[error_scenario] = True
+                        self.logger.warning(f"模拟错误发生: {error_scenario}")
+                
+                time.sleep(5)  # 每5秒更新一次环境数据
+                
+            except Exception as e:
+                self.logger.error(f"环境数据监控异常: {e}")
+                time.sleep(1)
     
     def move_to_marker(self, marker_id: str) -> bool:
         """Mock移动AGV到标记点"""
@@ -164,6 +268,8 @@ class MockRobotController(RobotControllerBase):
             "robot_joints": self.robot_joints,
             "ext_axis": self.ext_axis,
             "error_scenarios": self.error_scenarios,
+            "environment_data": self.environment_data,
+            "device_states": self.device_states,
             "mock_data": True
         })
         return base_status
@@ -171,14 +277,55 @@ class MockRobotController(RobotControllerBase):
     def emergency_stop(self) -> bool:
         """Mock紧急停止"""
         self.logger.warning("Mock紧急停止!")
-        self.stop_monitoring()
         self.status = RobotStatus.IDLE
         
         # 清除错误场景
         for key in self.error_scenarios:
             self.error_scenarios[key] = False
         
+        # 停止所有监控
+        self.stop_monitoring()
+        self.stop_environment_monitoring()
+        
         return True
+    
+    def reset_errors(self) -> bool:
+        """重置错误状态"""
+        self.logger.info("重置错误状态...")
+        # 清除错误场景
+        for key in self.error_scenarios:
+            self.error_scenarios[key] = False
+        
+        # 恢复设备状态
+        for device in self.device_states:
+            self.device_states[device] = "online"
+        
+        # 恢复监控
+        self.start_monitoring()
+        self.start_environment_monitoring()
+        
+        self.status = RobotStatus.IDLE
+        return True
+    
+    def charge(self) -> bool:
+        """模拟充电操作"""
+        self.logger.info("开始充电")
+        self.status = RobotStatus.CHARGING
+        
+        # 模拟充电过程
+        threading.Thread(target=self._simulate_charging, daemon=True).start()
+        return True
+    
+    def _simulate_charging(self):
+        """模拟充电过程"""
+        while self.battery_level < 100.0 and self.status == RobotStatus.CHARGING:
+            self.battery_level += random.uniform(0.5, 1.0)
+            self.battery_level = min(100.0, self.battery_level)
+            time.sleep(2)  # 每2秒增加一次电量
+        
+        if self.status == RobotStatus.CHARGING:
+            self.logger.info("充电完成")
+            self.status = RobotStatus.IDLE
     
     # ==================== Mock特有方法 ====================
     def start_monitoring(self):
@@ -209,7 +356,8 @@ class MockRobotController(RobotControllerBase):
                               RobotStatus.EXT_OPERATING, RobotStatus.DOOR_OPERATING]:
                 self.battery_level -= random.uniform(0.05, 0.15)
             elif self.status == RobotStatus.CHARGING:
-                self.battery_level += random.uniform(0.5, 1.0)
+                # 充电过程在_simulate_charging中处理
+                pass
             
             # 限制电量范围
             self.battery_level = max(0.0, min(100.0, self.battery_level))
@@ -224,14 +372,29 @@ class MockRobotController(RobotControllerBase):
                 self.battery_status = BatteryStatus.LOW
             else:
                 self.battery_status = BatteryStatus.CRITICAL
+                # 触发低电量错误
+                self.error_scenarios["battery_low"] = True
             
             if old_status != self.battery_status:
                 self._trigger_callback("on_battery_change", self.battery_status)
+            
+            # 随机改变设备状态
+            if random.random() < 0.05:  # 5%概率改变设备状态
+                device = random.choice(list(self.device_states.keys()))
+                new_state = "offline" if self.device_states[device] == "online" else "online"
+                self.device_states[device] = new_state
+                self.logger.info(f"设备 {device} 状态变为: {new_state}")
             
             time.sleep(1)
     
     def _simulate_operation(self, operation_name: str) -> bool:
         """模拟操作"""
+        # 检查是否有错误场景启用
+        for scenario, enabled in self.error_scenarios.items():
+            if enabled:
+                self.logger.warning(f"操作失败: {operation_name}, 错误场景: {scenario}")
+                return False
+        
         # 模拟延迟
         latency = self.base_latency + random.uniform(0, 0.2)
         time.sleep(latency)

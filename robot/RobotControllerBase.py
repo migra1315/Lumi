@@ -69,6 +69,8 @@ class RobotControllerBase(ABC):
         else:
             logger.setLevel(logging.INFO)
         
+        logger.propagate = False  # 禁用日志传播到父logger
+        
         if not logger.handlers:
             console_handler = logging.StreamHandler()
             formatter = logging.Formatter(
