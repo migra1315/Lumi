@@ -11,8 +11,8 @@ class TaskDatabase:
     
     def __init__(self, db_path: str = "tasks.db"):
         self.db_path = db_path
-        self._init_database()
         self.logger = logging.getLogger(__name__)
+        self._init_database()
     
     def _init_database(self):
         """初始化数据库表"""
@@ -47,6 +47,32 @@ class TaskDatabase:
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     details TEXT,
                     FOREIGN KEY (task_id) REFERENCES tasks (task_id)
+                )
+            ''')
+            
+            # 创建机器人接收消息表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS robot_received_messages (
+                    msg_id TEXT PRIMARY KEY,
+                    msg_time INTEGER NOT NULL,
+                    cmd_type TEXT NOT NULL,
+                    robot_id TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    processed BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # 创建机器人发送消息表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS robot_sent_messages (
+                    msg_id TEXT PRIMARY KEY,
+                    msg_time INTEGER NOT NULL,
+                    msg_type TEXT NOT NULL,
+                    robot_id TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
@@ -95,7 +121,7 @@ class TaskDatabase:
                     metadata_json
                 ))
         except Exception as e:
-            self.logger.error(f"保存任务失败: {e}")
+            self.logger.error(f"保存任务失败: {e},\n {task}")
             raise
     
     def update_task_status(self, task_id: str, status: TaskStatus, 
@@ -157,3 +183,117 @@ class TaskDatabase:
                 ORDER BY priority DESC, created_at ASC
             ''')
             return [dict(row) for row in cursor.fetchall()]
+    
+    # ==================== 机器人消息相关方法 ====================
+    def save_received_message(self, msg_id: str, msg_time: int, cmd_type: str, robot_id: str, data_json: str):
+        """保存机器人接收的消息"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO robot_received_messages 
+                (msg_id, msg_time, cmd_type, robot_id, data_json)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (msg_id, msg_time, cmd_type, robot_id, data_json))
+    
+    def mark_message_processed(self, msg_id: str):
+        """标记消息已处理"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE robot_received_messages 
+                SET processed = TRUE 
+                WHERE msg_id = ?
+            ''', (msg_id,))
+    
+    def get_unprocessed_messages(self) -> List[Dict[str, Any]]:
+        """获取未处理的消息"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM robot_received_messages 
+                WHERE processed = FALSE
+                ORDER BY msg_time ASC
+            ''')
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def save_sent_message(self, msg_id: str, msg_time: int, msg_type: str, robot_id: str, data_json: str, status: str = 'pending'):
+        """保存机器人发送的消息"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO robot_sent_messages 
+                (msg_id, msg_time, msg_type, robot_id, data_json, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (msg_id, msg_time, msg_type, robot_id, data_json, status))
+    
+    def update_sent_message_status(self, msg_id: str, status: str):
+        """更新发送消息的状态"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE robot_sent_messages 
+                    SET status = ? 
+                    WHERE msg_id = ?
+                ''', (status, msg_id))
+        except Exception as e:
+            self.logger.error(f"更新发送消息状态失败: {e}")
+            raise
+    
+    def get_received_messages(self, processed: bool = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """获取接收到的消息"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                query = '''
+                    SELECT * FROM robot_received_messages 
+                '''
+                params = []
+                
+                if processed is not None:
+                    query += '''
+                        WHERE processed = ?
+                    '''
+                    params.append(processed)
+                
+                query += '''
+                    ORDER BY msg_time DESC 
+                    LIMIT ?
+                '''
+                params.append(limit)
+                
+                cursor.execute(query, params)
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"获取接收到的消息失败: {e}")
+            raise
+    
+    def get_sent_messages(self, status: str = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """获取发送的消息"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                query = '''
+                    SELECT * FROM robot_sent_messages 
+                '''
+                params = []
+                
+                if status is not None:
+                    query += '''
+                        WHERE status = ?
+                    '''
+                    params.append(status)
+                
+                query += '''
+                    ORDER BY msg_time DESC 
+                    LIMIT ?
+                '''
+                params.append(limit)
+                
+                cursor.execute(query, params)
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"获取发送的消息失败: {e}")
+            raise
