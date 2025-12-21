@@ -292,7 +292,7 @@ def create_robot_status_message(
     robot_id: str,
     battery_info: BatteryInfo,
     position_info: PositionInfo,
-    task_info: List[TaskInfo],
+    task_info: TaskInfo,
     system_status: SystemStatus,
     error_info: Optional[ErrorInfo] = None
 ) -> MessageEnvelope:
@@ -312,7 +312,7 @@ def create_device_data_message(
     msg_id: str,
     robot_id: str,
     position_info: PositionInfo,
-    task_info: List[TaskInfo],
+    task_info: TaskInfo,
     device_info: DeviceInfo
 ) -> MessageEnvelope:
     """创建设备巡检数据消息"""
@@ -329,7 +329,7 @@ def create_environment_data_message(
     msg_id: str,
     robot_id: str,
     position_info: PositionInfo,
-    task_info: List[TaskInfo],
+    task_info: TaskInfo,
     environment_info: EnvironmentInfo
 ) -> MessageEnvelope:
     """创建环境巡检数据消息"""
@@ -346,8 +346,8 @@ def create_arrive_serve_point_message(
     msg_id: str,
     robot_id: str,
     position_info: PositionInfo,
-    task_info: List[TaskInfo],
-    arrive_service_point_info: ArriveServePointInfo
+    task_info: TaskInfo,
+    arrive_service_point_info: ArriveServicePointInfo
 ) -> MessageEnvelope:
     """创建是否到达服务点消息"""
     return create_message_envelope(

@@ -49,6 +49,7 @@ class StationConfig:
     def to_dict(self):
         return {
             "station_id": self.station_id,
+            "sort": self.sort,
             "name": self.name,
             "agv_marker": self.agv_marker,
             "robot_pos": self.robot_pos,

@@ -68,8 +68,8 @@ class TaskCmd:
     taskId: str  # 任务ID
     taskName: str  # 任务名称
     robotMode: RobotMode  # 机器人模式
-    generateTime: datetime = None  # 任务生成时间
     stationTasks: List[StationConfig]  # 站点任务列表
+    generateTime: datetime = None  # 任务生成时间
     def to_dict(self) -> Dict[str, Any]:
         return {
             "taskId": self.taskId,
