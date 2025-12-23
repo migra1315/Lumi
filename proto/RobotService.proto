@@ -1,0 +1,224 @@
+syntax = "proto3";
+
+//生成多个java文件
+option java_multiple_files = true;
+//把生成的文件放到哪个包下
+option java_package = "org.springblade.robot.grpc";
+//输出的类名
+option java_outer_classname = "RobotServiceProto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";  // 用于任意JSON数据
+
+// 服务定义
+service RobotService {
+    // 双向流式通信: 上传机器人状态、设备数据、环境数据、到达服务点位数据
+    rpc clientUpload(stream RobotUploadRequest) returns (stream RobotUploadResponse);
+
+    // 双向流式通信: 推送任务分配、服务指令
+    rpc serverCommand(stream RobotUploadRequest) returns (stream RobotUploadResponse);
+}
+
+// 操作模式枚举
+enum OperationMode {
+    OPERATION_MODE_UNSPECIFIED = 0;
+    OPERATION_MODE_PHOTO = 1;      // 拍照
+    OPERATION_MODE_COLLECT = 2;    // 采集
+    OPERATION_MODE_DOOR = 3;       // 门禁
+    OPERATION_MODE_INSPECTION = 4; // 巡检
+    OPERATION_MODE_SERVICE = 5;    // 服务
+}
+
+// 任务状态枚举
+enum TaskStatus {
+    TASK_STATUS_UNSPECIFIED = 0;
+    TASK_STATUS_PENDING = 1;      // 待执行
+    TASK_STATUS_RUNNING = 2;      // 执行中
+    TASK_STATUS_COMPLETED = 3;    // 已完成
+    TASK_STATUS_FAILED = 4;       // 失败
+    TASK_STATUS_CANCELLED = 5;    // 已取消
+    TASK_STATUS_RETRYING = 6;     // 重试中
+}
+
+// 消息类型
+enum MsgType {
+    ROBOT_STATUS = 0; // 机器人状态
+    DEVICE_DATA = 1; // 巡检设备状态
+    ENVIRONMENT_DATA = 2; // 巡检环境信息
+    ARRIVE_SERVER_POINT = 3; // 到达服务器点通知
+}
+
+// 命令类型
+enum CmdType {
+    RESPONSE_CMD = 0; // 响应命令
+    ROBOT_MODE_CMD = 1; // 机器人模式命令
+    TASK_CMD = 2; // 任务下发命令
+}
+
+// 机器人移动状态
+enum MoveStatus {
+    IDLE = 0; // 空闲状态，未接收移动指令
+    RUNNING = 1; // 正在执行移动任务
+    SUCCEEDED = 2; // 移动任务成功完成
+    FAILED = 3; // 移动任务失败
+    CANCELED = 4; // 移动任务被取消
+}
+
+// 机器人移动状态
+enum RobotMode {
+    INSPECTION = 0; // 正常巡检模式
+    SERVICE = 1; // 服务模式
+    ESTOP = 2; // 紧急停止模式
+}
+
+// 电池信息
+message BatteryInfo {
+    double power_percent = 1;            // 剩余电量百分比
+    string charge_status = 2;    // 电池状态
+}
+
+// 位置信息
+message PositionInfo {
+    repeated double AGVPositionInfo = 1; // AGV位置 [x, y, theta]
+    repeated double ARMPositionInfo = 2; // 机械臂关节位置 [J1-J6]
+    repeated double EXTPositionInfo = 3; // 外部轴位置 [J1-J4]
+    string targetPoint = 4; // 目标点位名称
+    int64 pointId = 5; // 点位ID
+}
+
+// 任务信息
+message TaskInfo {
+    repeated Task inspection_task_list = 1;
+}
+
+// 系统状态
+message SystemStatus {
+    MoveStatus move_status = 1;         // 机器人移动状态
+    bool is_connected = 2;    // 通信连接状态
+    bool soft_estop_status = 3;    // 软急停状态
+    bool hard_estop_status = 4;    // 硬急停状态
+    bool estop_status = 5;    // 急停状态（综合）
+}
+
+// 错误信息
+message ErrorInfo {
+    int32 code = 1;              // 错误编码
+    string level = 2;            // 错误级别
+    string message = 3;          // 错误信息
+}
+
+// 机器人状态上传
+message RobotStatusUpload {
+    BatteryInfo battery_info = 1;
+    PositionInfo position_info = 2;
+    repeated TaskInfo task_info = 3;
+    SystemStatus system_status = 4;
+    ErrorInfo error_info = 5;
+}
+
+// 设备信息
+message DeviceInfo {
+    string device_id = 1;        // 设备ID
+    string data_type = 2;        // 数据类型
+    string image_base64 = 3;     // 图片数据Base64
+}
+
+// 设备数据上传
+message DeviceDataUpload {
+    PositionInfo position_info = 1;
+    TaskInfo task_info = 2;
+    DeviceInfo device_info = 3;
+}
+
+// 传感器数据
+message SensorData {
+    double temperature = 1;      // 温度
+    double humidity = 2;         // 湿度
+    double oxygen = 3;           // O2
+    double carbon_dioxide = 4;   // CO2
+    double pm25 = 5;             // PM2.5
+    double pm10 = 6;             // PM10
+    double etvoc = 7;            // eTVOC
+    double noise = 8;            // 噪音
+}
+
+// 环境数据上传
+message EnvironmentDataUpload {
+    PositionInfo position_info = 1;
+    TaskInfo task_info = 2;
+    SensorData sensor_data = 3;
+}
+
+// 到达服务点位数据上传
+message ArriveServicePointUpload {
+    TaskInfo task_info = 1;
+}
+
+// 请求消息（用于双向流）
+message RobotUploadRequest {
+    int64 msg_id = 1;
+    int64 msg_time = 2;
+    MsgType msg_type = 3;
+    int64 robot_id = 4;
+    oneof data_json {
+        RobotStatusUpload robot_status = 5;
+        DeviceDataUpload device_data = 6;
+        EnvironmentDataUpload environment_data = 7;
+        ArriveServicePointUpload arrive_service_point = 8;
+    }
+}
+
+// 到达服务点位数据上传
+message ServerResponse {
+    string code = 1;
+    string info = 2;
+}
+
+// 响应消息
+message RobotUploadResponse {
+    int64 msg_id = 1;
+    int64 msg_time = 2;
+    MsgType msg_type = 3;
+    int64 robot_id = 4;
+    ServerResponse data_json = 5;
+}
+
+// 机器人模式命令
+message RobotModeCommand {
+    RobotMode robot_mode = 1;
+}
+
+// 操作配置
+message OperationConfig {
+    OperationMode operation_mode = 1;  // 操作模式
+    string door_ip = 2;                // 门禁IP地址（可选）
+    string device_id = 3;              // 设备ID（可选）
+}
+
+// 站点配置
+message StationConfig {
+    string station_id = 1;           // 站点ID（如"station1"）
+    int32 sort = 2;                  // 站点执行顺序
+    string name = 3;                 // 站点名称
+    string agv_marker = 4;           // AGV导航点标识
+    repeated double robot_pos = 5;   // 机械臂归位位置 [x, y, z, ...]
+    repeated double ext_pos = 6;     // 外部轴归位位置 [x, y, z, ...]
+    OperationConfig operation_config = 7; // 操作任务配置
+}
+
+// 巡检任务
+message Task {
+    string task_id = 1;                          // 任务唯一标识符
+    repeated StationConfig station_tasks = 2;    // 站点配置
+    int32 priority = 3;                          // 优先级(1-10,10最高)，默认值在代码中处理
+    TaskStatus status = 4;                       // 任务状态，默认值在代码中处理
+    RobotMode robotMode = 5;                       // 执行任务时的机器人模式
+    int64 generate_time = 6;    // 任务生成时间
+    int64 created_at = 7;    // 创建时间
+    int64 started_at = 8;    // 开始时间（可选）
+    int64 completed_at = 9;   // 完成时间（可选）
+    int32 retry_count = 10;                       // 重试次数，默认值在代码中处理
+    int32 max_retries = 11;                       // 最大重试次数，默认值在代码中处理
+    string error_message = 12;                    // 错误信息（可选）
+    map<string, google.protobuf.Value> metadata = 13;         // 元数据，用于存储任意键值对
+}
