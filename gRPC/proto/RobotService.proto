@@ -159,7 +159,7 @@ message RobotUploadRequest {
     int64 msg_id = 1;
     int64 msg_time = 2;
     MsgType msg_type = 3;
-    int64 robot_id = 4;
+    string robot_id = 4;
     oneof data_json {
         RobotStatusUpload robot_status = 5;
         DeviceDataUpload device_data = 6;
@@ -179,7 +179,7 @@ message RobotUploadResponse {
     int64 msg_id = 1;
     int64 msg_time = 2;
     MsgType msg_type = 3;
-    int64 robot_id = 4;
+    string robot_id = 4;
     ServerResponse data_json = 5;
 }
 
@@ -235,7 +235,7 @@ message ServerCmdRequest {
     int64 command_id = 1;
     int64 command_time = 2;
     CmdType command_type = 3;
-    int64 robot_id = 4;
+    string robot_id = 4;
     oneof data_json {
         RobotModeCommand robot_mode_command = 5;
         Task task_cmd = 6;
@@ -248,6 +248,6 @@ message ServerCmdResponse {
     int64 command_id = 1;
     int64 command_time = 2;
     CmdType command_type = 3;
-    int64 robot_id = 4;
+    string robot_id = 4;
     ServerResponse data_json = 5;
 }

@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-import gRPC.RobotService_pb2 as RobotService__pb2
+from gRPC import RobotService_pb2 as proto_dot_RobotService__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
@@ -18,7 +18,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in RobotService_pb2_grpc.py depends on'
+        + ' but the generated code in proto/RobotService_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -37,13 +37,13 @@ class RobotServiceStub(object):
         """
         self.clientUpload = channel.stream_stream(
                 '/RobotService/clientUpload',
-                request_serializer=RobotService__pb2.RobotUploadRequest.SerializeToString,
-                response_deserializer=RobotService__pb2.RobotUploadResponse.FromString,
+                request_serializer=proto_dot_RobotService__pb2.RobotUploadRequest.SerializeToString,
+                response_deserializer=proto_dot_RobotService__pb2.RobotUploadResponse.FromString,
                 _registered_method=True)
         self.serverCommand = channel.stream_stream(
                 '/RobotService/serverCommand',
-                request_serializer=RobotService__pb2.ServerCmdRequest.SerializeToString,
-                response_deserializer=RobotService__pb2.ServerCmdResponse.FromString,
+                request_serializer=proto_dot_RobotService__pb2.ServerCmdRequest.SerializeToString,
+                response_deserializer=proto_dot_RobotService__pb2.ServerCmdResponse.FromString,
                 _registered_method=True)
 
 
@@ -70,13 +70,13 @@ def add_RobotServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'clientUpload': grpc.stream_stream_rpc_method_handler(
                     servicer.clientUpload,
-                    request_deserializer=RobotService__pb2.RobotUploadRequest.FromString,
-                    response_serializer=RobotService__pb2.RobotUploadResponse.SerializeToString,
+                    request_deserializer=proto_dot_RobotService__pb2.RobotUploadRequest.FromString,
+                    response_serializer=proto_dot_RobotService__pb2.RobotUploadResponse.SerializeToString,
             ),
             'serverCommand': grpc.stream_stream_rpc_method_handler(
                     servicer.serverCommand,
-                    request_deserializer=RobotService__pb2.ServerCmdRequest.FromString,
-                    response_serializer=RobotService__pb2.ServerCmdResponse.SerializeToString,
+                    request_deserializer=proto_dot_RobotService__pb2.ServerCmdRequest.FromString,
+                    response_serializer=proto_dot_RobotService__pb2.ServerCmdResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -105,8 +105,8 @@ class RobotService(object):
             request_iterator,
             target,
             '/RobotService/clientUpload',
-            RobotService__pb2.RobotUploadRequest.SerializeToString,
-            RobotService__pb2.RobotUploadResponse.FromString,
+            proto_dot_RobotService__pb2.RobotUploadRequest.SerializeToString,
+            proto_dot_RobotService__pb2.RobotUploadResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -132,8 +132,8 @@ class RobotService(object):
             request_iterator,
             target,
             '/RobotService/serverCommand',
-            RobotService__pb2.ServerCmdRequest.SerializeToString,
-            RobotService__pb2.ServerCmdResponse.FromString,
+            proto_dot_RobotService__pb2.ServerCmdRequest.SerializeToString,
+            proto_dot_RobotService__pb2.ServerCmdResponse.FromString,
             options,
             channel_credentials,
             insecure,

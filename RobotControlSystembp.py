@@ -1,5 +1,5 @@
 from gRPC import RobotService_pb2_grpc
-from gRPC import PersistentStreamManager
+from gRPC.PersistentStreamManager import PersistentStreamManager
 """
 RobotControlSystem.py
 机器人控制系统主类，负责接收、解析后台指令，协调任务管理和机器人执行
@@ -92,7 +92,6 @@ class RobotControlSystem:
         self.is_connected = False
         # 流管理
         self.stream_manager = None
-        self.robot_id = None
         # 统计
         self.sent_count = 0
         self.received_count = 0
@@ -137,7 +136,7 @@ class RobotControlSystem:
             self.logger.error(f"初始化机器人控制器失败: {e}")
             raise
     
-    def _init_grpc_client(self, robot_id: int = 1):
+    def _init_grpc_client(self):
         """初始化gRPC客户端"""
         try:
             # 创建gRPC通道
@@ -162,12 +161,12 @@ class RobotControlSystem:
                 self.logger.warning(f"连接测试警告: {e}")
 
             # 初始化流管理器
-            self.stream_manager = PersistentStreamManager(self.stub, robot_id)
+            self.stream_manager = PersistentStreamManager(self.stub, self.robot_id)
 
             # 启动持久化流
             if self.stream_manager.start_stream():
                 self.is_connected = True
-                self.logger.info(f"成功建立持久化连接，robot_id: {robot_id}")
+                self.logger.info(f"成功建立持久化连接，robot_id: {self.robot_id}")
                 return True
             else:
                 return False
@@ -197,17 +196,18 @@ class RobotControlSystem:
         
         
         # 启动通信接收
-        if not self._init_grpc_client(self.robot_id):
+        if not self._init_grpc_client():
             self.logger.error("gRPC客户端初始化失败")
             return
         
-        self.stream_manager.set_response_handler(self._handle_grpc_response)
+        self.set_response_handler(self._handle_grpc_response)
         
         # 启动定时上报
         self._start_reporting()
         
         self.logger.info("机器人控制系统已启动")
         self.is_running = True
+
     def stop(self):
         """停止机器人控制系统"""
         if not self.is_running:
@@ -733,7 +733,6 @@ class RobotControlSystem:
             msg_envelope: 消息信封
         """
         # 实际项目中使用gRPC发送消息
-
         # 将MessageEnvelope转换为gRPC RobotUploadRequest
         grpc_msg = self._convert_to_grpc_message(msg_envelope)
         self.stream_manager.send_message(grpc_msg)
@@ -770,7 +769,7 @@ class RobotControlSystem:
         }
         
         grpc_msg_type = msg_type_map.get(msg_envelope.msgType, robot_pb2.MsgType.ROBOT_STATUS)
-        robot_id = int(self.robot_id.split('_')[-1])
+        robot_id = self.robot_id
         
         # 创建基础请求
         # 将msgId转换为整数ID，如果是UUID格式则取前8位转为16进制整数
@@ -953,7 +952,7 @@ if __name__ == "__main__":
     
     # 创建机器人控制系统
     config = {
-        'robot_id': 'ROBOT_001',
+        'robot_id': "ROBOT_001",
         'robot_config': {
             'success_rate': 0.95,
             'latency': 10,

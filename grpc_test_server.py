@@ -46,7 +46,6 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             # 接收客户端消息
             for request in request_iterator:
                 self._handle_client_message(request, client_id)
-                
                 # 发送响应
                 response = robot_service_pb2.RobotUploadResponse(
                     msg_id=request.msg_id,
@@ -94,7 +93,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                     msg_id=self.command_counter,
                     msg_time=int(time.time() * 1000),
                     msg_type=robot_service_pb2.MsgType.ROBOT_STATUS,
-                    robot_id=1,
+                    robot_id="ROBOT_001",
                     data_json=robot_service_pb2.ServerResponse(
                         code="0",
                         info="test_command"

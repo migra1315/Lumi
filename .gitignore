@@ -8,3 +8,6 @@ JAKA_SDK_WINDOWS/*
 docs/~$流式通信接口.docx
 docs/双向流式通信接口.docx
 docs/通信协议.md
+.tare/*
+.vscode/*
+.vscode/settings.json
