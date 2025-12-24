@@ -1,5 +1,4 @@
 syntax = "proto3";
-
 //生成多个java文件
 option java_multiple_files = true;
 //把生成的文件放到哪个包下
@@ -16,7 +15,7 @@ service RobotService {
     rpc clientUpload(stream RobotUploadRequest) returns (stream RobotUploadResponse);
 
     // 双向流式通信: 推送任务分配、服务指令
-    rpc serverCommand(stream RobotUploadRequest) returns (stream RobotUploadResponse);
+    rpc serverCommand(stream ServerCmdRequest) returns (stream ServerCmdResponse);
 }
 
 // 操作模式枚举
@@ -50,9 +49,10 @@ enum MsgType {
 
 // 命令类型
 enum CmdType {
-    RESPONSE_CMD = 0; // 响应命令
-    ROBOT_MODE_CMD = 1; // 机器人模式命令
-    TASK_CMD = 2; // 任务下发命令
+    ROBOT_MODE_CMD = 0; // 机器人模式命令
+    INSPECTION_CMD = 1; // 巡检任务下发命令
+    SERVICE_TASK_CMD = 2; // 服务任务任务下发命令
+    MOUSE_MOVE_CMD = 3; // 鼠标移动命令
 }
 
 // 机器人移动状态
@@ -64,7 +64,7 @@ enum MoveStatus {
     CANCELED = 4; // 移动任务被取消
 }
 
-// 机器人移动状态
+// 机器人模式
 enum RobotMode {
     INSPECTION = 0; // 正常巡检模式
     SERVICE = 1; // 服务模式
@@ -168,13 +168,13 @@ message RobotUploadRequest {
     }
 }
 
-// 到达服务点位数据上传
+// 响应信息
 message ServerResponse {
     string code = 1;
     string info = 2;
 }
 
-// 响应消息
+// 请求消息响应
 message RobotUploadResponse {
     int64 msg_id = 1;
     int64 msg_time = 2;
@@ -220,5 +220,34 @@ message Task {
     int32 retry_count = 10;                       // 重试次数，默认值在代码中处理
     int32 max_retries = 11;                       // 最大重试次数，默认值在代码中处理
     string error_message = 12;                    // 错误信息（可选）
-    map<string, google.protobuf.Value> metadata = 13;         // 元数据，用于存储任意键值对
+    map<string, google.protobuf.Value> meta_data = 13;         // 元数据，用于存储任意键值对
+}
+
+//鼠标控制移动
+message JoyControlCmd {
+    string angular_velocity = 1; // 角速度
+    string linear_velocity = 2; // 线速度
+}
+
+
+// 下发消息（用于双向流）
+message ServerCmdRequest {
+    int64 command_id = 1;
+    int64 command_time = 2;
+    CmdType command_type = 3;
+    int64 robot_id = 4;
+    oneof data_json {
+        RobotModeCommand robot_mode_command = 5;
+        Task task_cmd = 6;
+        JoyControlCmd joy_control_cmd = 7;
+    }
+}
+
+// 下发消息响应
+message ServerCmdResponse {
+    int64 command_id = 1;
+    int64 command_time = 2;
+    CmdType command_type = 3;
+    int64 robot_id = 4;
+    ServerResponse data_json = 5;
 }

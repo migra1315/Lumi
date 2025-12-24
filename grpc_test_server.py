@@ -10,8 +10,8 @@ import time
 import grpc
 from concurrent import futures
 
-import RobotService_pb2 as robot_service_pb2
-import RobotService_pb2_grpc as robot_service_pb2_grpc
+import gRPC.RobotService_pb2 as robot_service_pb2
+import gRPC.RobotService_pb2_grpc as robot_service_pb2_grpc
 
 # 配置日志
 logging.basicConfig(
@@ -39,7 +39,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             响应迭代器
         """
         client_id = context.peer()
-        logger.info(f"新客户端连接到clientUpload: {client_id}")
+        logger.info(f"新客户端连接到 clientUpload: {client_id}")
         self.client_connections.append(client_id)
         
         try:
@@ -80,12 +80,13 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         client_id = context.peer()
         logger.info(f"新客户端连接到serverCommand: {client_id}")
         self.client_connections.append(client_id)
-        
+        for request in request_iterator:
+            logger.info(f"接收客户端{client_id}消息: {request}")
         try:
             # 定期发送测试命令
             while True:
                 # 每30秒发送一次测试命令
-                time.sleep(30)
+                time.sleep(10)
                 self.command_counter += 1
                 
                 # 创建任务命令
@@ -103,7 +104,8 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                 logger.info(f"向客户端发送命令: {self.command_counter}")
                 
                 # 检查上下文是否被取消
-                if context.is_active():
+                if not context.is_active():
+                    logger.info(f"上下文被取消{context.peer()}")
                     break
                     
         except Exception as e:
@@ -121,7 +123,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             client_id: 客户端ID
         """
         msg_type = robot_service_pb2.MsgType.Name(request.msg_type)
-        logger.info(f"接收客户端{client_id}消息: {msg_type} (msg_id: {request.msg_id})")
+        logger.info(f"接收客户端 {client_id} 消息: {msg_type} (msg_id: {request.msg_id})")
         
         # 根据消息类型处理
         if request.msg_type == robot_service_pb2.MsgType.ROBOT_STATUS:
@@ -139,7 +141,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         Args:
             robot_status: 机器人状态
         """
-        logger.debug(f"机器人状态: 电量={robot_status.battery_info.power_percent}%, \
+        logger.info(f"机器人状态: 电量={robot_status.battery_info.power_percent}%, \
                     充电状态={robot_status.battery_info.charge_status}, \
                     移动状态={robot_service_pb2.MoveStatus.Name(robot_status.system_status.move_status)}")
     
@@ -159,7 +161,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             environment_data: 环境数据
         """
         sensor_data = environment_data.sensor_data
-        logger.debug(f"环境数据: 温度={sensor_data.temperature}°C, \
+        logger.info(f"环境数据: 温度={sensor_data.temperature}°C, \
                     湿度={sensor_data.humidity}%, \
                     PM2.5={sensor_data.pm25}")
     

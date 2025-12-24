@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-import RobotService_pb2 as RobotService__pb2
+import gRPC.RobotService_pb2 as RobotService__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
@@ -42,8 +42,8 @@ class RobotServiceStub(object):
                 _registered_method=True)
         self.serverCommand = channel.stream_stream(
                 '/RobotService/serverCommand',
-                request_serializer=RobotService__pb2.RobotUploadRequest.SerializeToString,
-                response_deserializer=RobotService__pb2.RobotUploadResponse.FromString,
+                request_serializer=RobotService__pb2.ServerCmdRequest.SerializeToString,
+                response_deserializer=RobotService__pb2.ServerCmdResponse.FromString,
                 _registered_method=True)
 
 
@@ -75,8 +75,8 @@ def add_RobotServiceServicer_to_server(servicer, server):
             ),
             'serverCommand': grpc.stream_stream_rpc_method_handler(
                     servicer.serverCommand,
-                    request_deserializer=RobotService__pb2.RobotUploadRequest.FromString,
-                    response_serializer=RobotService__pb2.RobotUploadResponse.SerializeToString,
+                    request_deserializer=RobotService__pb2.ServerCmdRequest.FromString,
+                    response_serializer=RobotService__pb2.ServerCmdResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -132,8 +132,8 @@ class RobotService(object):
             request_iterator,
             target,
             '/RobotService/serverCommand',
-            RobotService__pb2.RobotUploadRequest.SerializeToString,
-            RobotService__pb2.RobotUploadResponse.FromString,
+            RobotService__pb2.ServerCmdRequest.SerializeToString,
+            RobotService__pb2.ServerCmdResponse.FromString,
             options,
             channel_credentials,
             insecure,
