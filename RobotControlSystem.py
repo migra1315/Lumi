@@ -12,8 +12,7 @@ from typing import Dict, Any, Optional, Callable, Generator
 import logging
 import grpc
 
-import RobotService_pb2 as robot_pb2
-import RobotService_pb2_grpc as robot_pb2_grpc
+import gRPC.RobotService_pb2 as robot_pb2
 from dataModels.CommandModels import CommandEnvelope, CmdType, create_cmd_envelope, TaskCmd
 from dataModels.MessageModels import (
     MessageEnvelope, MsgType, create_message_envelope,
@@ -23,8 +22,6 @@ from dataModels.MessageModels import (
 from dataModels.TaskModels import Task, TaskStatus, StationConfig, OperationConfig, OperationMode
 from task.TaskManager import TaskManager
 from robot.MockRobotController import MockRobotController
-import RobotService_pb2 as robot_service_pb2
-import RobotService_pb2_grpc as robot_service_pb2_grpc
 
 # 只在不使用mock时导入真实控制器
 RobotController = None
@@ -126,7 +123,7 @@ class RobotControlSystem:
         """初始化gRPC客户端"""
         try:
             import grpc
-            from RobotService_pb2_grpc import RobotServiceStub
+            from gRPC.RobotService_pb2_grpc import RobotServiceStub
             
             self.logger.info(f"正在连接gRPC服务器: {self.grpc_server_address}")
             
@@ -193,16 +190,22 @@ class RobotControlSystem:
     def _start_communication(self):
         """启动通信接收线程"""
         self._stop_communication = False
-        self._communication_thread = threading.Thread(
-            target=self._communication_loop,
+        self._serverCommand_thread = threading.Thread(
+            target=self._serverCommand_loop,
             daemon=True
         )
-        self._communication_thread.start()
-        self.logger.info("通信接收线程已启动")
-    
-    def _communication_loop(self):
-        """通信接收循环 - 使用gRPC双向流"""
-        self.logger.info("通信接收循环已启动")
+        self._clientUpload_thread = threading.Thread(
+            target=self._clientUpload_loop,
+            daemon=True
+        )
+        # self._serverCommand_thread.start()
+        self._clientUpload_thread.start()
+        # self.logger.info("serverCommand线程已启动")
+        self.logger.info("clientUpload线程已启动")
+
+    def _serverCommand_loop(self):
+        """serverCommand循环 - 使用gRPC双向流"""
+        self.logger.info("serverCommand循环已启动")
         
         # 如果gRPC客户端未初始化，先初始化
         if not self.grpc_stub:
@@ -236,14 +239,90 @@ class RobotControlSystem:
                                 )
                             )
                         )
-                        time.sleep(60)  # 每分钟发送一次心跳
+                        self.logger.info("发送心跳信号")
+                        time.sleep(10)  # 每10秒发送一次心跳
                 
                 # 启动gRPC双向流
                 if self.grpc_stub is None:
                     self.logger.error("gRPC stub为None，无法启动通信流")
                     break
-                    
+                
                 responses = self.grpc_stub.serverCommand(request_generator())
+                
+                # 接收服务器发送的命令
+                for response in responses:
+                    self.logger.info(f"收到gRPC命令: {response}")
+                    self._handle_grpc_response(response)
+                    
+            except Exception as e:
+                self.logger.error(f"gRPC通信异常: {e}")
+                self._trigger_callback("on_communication_error", e)
+                
+                # 尝试重新连接
+                self.grpc_channel = None
+                self.grpc_stub = None
+                time.sleep(5)
+    
+
+    def _clientUpload_loop(self):
+        """clientUpload循环 - 使用gRPC双向流"""
+        self.logger.info("clientUpload循环已启动")
+        
+        # 如果gRPC客户端未初始化，先初始化
+        if not self.grpc_stub:
+            try:
+                self._init_grpc_client()
+            except Exception as e:
+                self.logger.error(f"无法初始化gRPC客户端: {e}")
+                return
+        
+        while not self._stop_communication:
+            try:
+                self.logger.info("启动gRPC clientUpload双向流")
+                
+                # 创建消息生成器用于发送空消息，保持连接
+                def request_generator():
+                    while not self._stop_communication:
+                        # 生成随机整数ID
+                        msg_id = int(uuid.uuid4().hex[:8], 16)
+
+                        '''
+                        int64 msg_id = 1;
+                        int64 msg_time = 2;
+                        MsgType msg_type = 3;
+                        int64 robot_id = 4;
+                        oneof data_json {
+                            RobotStatusUpload robot_status = 5;
+                            DeviceDataUpload device_data = 6;
+                            EnvironmentDataUpload environment_data = 7;
+                            ArriveServicePointUpload arrive_service_point = 8;
+                        }
+                        '''
+
+                        yield robot_pb2.RobotUploadRequest(
+                            msg_id=msg_id,
+                            msg_time=int(time.time() * 1000),
+                            msg_type=robot_pb2.MsgType.ROBOT_STATUS,
+                            robot_id=int(self.robot_id.split('_')[-1]),
+                            robot_status=robot_pb2.RobotStatusUpload(
+                                system_status=robot_pb2.SystemStatus(
+                                    move_status=robot_pb2.MoveStatus.IDLE,
+                                    is_connected=True,
+                                    soft_estop_status=False,
+                                    hard_estop_status=False,
+                                    estop_status=False
+                                )
+                            )
+                        )
+                        self.logger.info("发送心跳信号")
+                        time.sleep(10)  # 每10秒发送一次心跳
+                
+                # 启动gRPC双向流
+                if self.grpc_stub is None:
+                    self.logger.error("gRPC stub为None，无法启动通信流")
+                    break
+                
+                responses = self.grpc_stub.clientUpload(request_generator())
                 
                 # 接收服务器发送的命令
                 for response in responses:
