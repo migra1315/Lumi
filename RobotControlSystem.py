@@ -10,18 +10,32 @@ import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, Callable, Generator
 import logging
-import grpc
 
+import grpc
 import gRPC.RobotService_pb2 as robot_pb2
-from dataModels.CommandModels import CommandEnvelope, CmdType, create_cmd_envelope, TaskCmd
-from dataModels.MessageModels import (
-    MessageEnvelope, MsgType, create_message_envelope,
-    BatteryInfo, PositionInfo, TaskInfo, SystemStatus, ErrorInfo,
-    DeviceInfo, EnvironmentInfo, ArriveServicePointInfo
-)
-from dataModels.TaskModels import Task, TaskStatus, StationConfig, OperationConfig, OperationMode
+from gRPC import RobotService_pb2_grpc
+from gRPC.StreamManager import ClientUploadStreamManager, ServerCommandStreamManager
+from gRPC.utils.dataConverter import convert_server_cmd_to_command_envelope, convert_message_to_client_message
+
 from task.TaskManager import TaskManager
 from robot.MockRobotController import MockRobotController
+
+from dataModels.MessageModels import ArriveServicePointInfo, BatteryInfo, DeviceInfo, EnvironmentInfo, MessageEnvelope, MsgType, PositionInfo, SystemStatus, TaskInfo,create_message_envelope
+from dataModels.CommandModels import CmdType, CommandEnvelope, TaskCmd,create_cmd_envelope
+from dataModels.TaskModels import OperationConfig, OperationMode, StationConfig, Task
+
+
+class ClientConfig:
+    """客户端配置"""
+    SERVER_HOST = "localhost"
+    SERVER_PORT = 50051
+    SERVER_ADDRESS = f"{SERVER_HOST}:{SERVER_PORT}"
+    LOG_LEVEL = "INFO"
+    # 连接超时设置
+    CONNECTION_TIMEOUT = 10
+    # 流保持活跃检查间隔
+    STREAM_KEEPALIVE_CHECK = 30
+
 
 # 只在不使用mock时导入真实控制器
 RobotController = None
@@ -69,13 +83,18 @@ class RobotControlSystem:
         self.task_manager.scheduler.register_callback("on_task_failed", self._on_task_failed)
         
         # gRPC相关配置
-        self.grpc_server_address = self.config.get('grpc_server_address', 'localhost:50051')
-        self.grpc_channel = None
-        self.grpc_stub = None
-        self.grpc_client_upload_stream = None
-        self.grpc_server_command_stream = None
-        self.grpc_lock = threading.Lock()
-        
+        self.gRPC_config = ClientConfig()
+        # 连接状态
+        self.channel = None
+        self.stub = None
+        self.is_connected = False
+        # 流管理
+        self.client_upload_manager = None
+        self.server_command_manager = None
+        # 统计
+        self.sent_count = 0
+        self.received_count = 0
+    
         # 通信相关
         self._communication_thread = None
         self._stop_communication = False
@@ -91,9 +110,6 @@ class RobotControlSystem:
             "on_task_executed": [],
             "on_communication_error": []
         }
-        
-        # 初始化gRPC客户端
-        self._init_grpc_client()
         
         self.logger.info("机器人控制系统初始化完成")
     
@@ -122,25 +138,67 @@ class RobotControlSystem:
     def _init_grpc_client(self):
         """初始化gRPC客户端"""
         try:
-            import grpc
-            from gRPC.RobotService_pb2_grpc import RobotServiceStub
-            
-            self.logger.info(f"正在连接gRPC服务器: {self.grpc_server_address}")
-            
             # 创建gRPC通道
-            self.grpc_channel = grpc.insecure_channel(self.grpc_server_address)
+            self.channel = grpc.insecure_channel(
+                self.gRPC_config.SERVER_ADDRESS,
+                options=[
+                    ('grpc.keepalive_time_ms', 10000),
+                    ('grpc.keepalive_timeout_ms', 5000),
+                ]
+            )
+
+            # 创建存根
+            self.stub = RobotService_pb2_grpc.RobotServiceStub(self.channel)
+
+            # 测试连接
+            try:
+               grpc.channel_ready_future(self.channel).result(
+                    timeout=self.gRPC_config.CONNECTION_TIMEOUT
+                )
+            except Exception as e:
+                self.logger.warning(f"连接测试警告: {e}")
+
+            # 初始化流管理器
+            # self.client_upload_manager = ClientUploadStreamManager(self.stub, self.robot_id)
+            self.server_command_manager = ServerCommandStreamManager(self.stub, self.robot_id)
+
+            # 启动持久化流
+            # client_upload_started = self.client_upload_manager.start_stream()
+            client_upload_started = True
+            server_command_started = self.server_command_manager.start_stream()
             
-            # 创建gRPC存根
-            self.grpc_stub = RobotServiceStub(self.grpc_channel)
-            
-            self.logger.info("gRPC客户端初始化成功")
-            
+            if client_upload_started and server_command_started:
+                self.is_connected = True
+                self.logger.info(f"成功建立双向持久化连接，robot_id: {self.robot_id}")
+                return True
+            else:
+                self.logger.error(f"流初始化失败: client_upload={client_upload_started}, server_command={server_command_started}")
+                return False
+
         except Exception as e:
-            self.logger.error(f"初始化gRPC客户端失败: {e}")
-            self.grpc_channel = None
-            self.grpc_stub = None
-            raise
+            self.logger.error(f"连接失败: {e}")
+            return False
     
+    def set_client_upload_response_handler(self, handler):
+        """设置clientUpload流的专用响应处理器"""
+        if self.client_upload_manager:
+            self.client_upload_manager.response_handler = handler
+            self.logger.info("clientUpload专用响应处理器已设置")
+    
+    def set_server_command_response_handler(self, handler):
+        """设置serverCommand流的专用响应处理器"""
+        if self.server_command_manager:
+            self.server_command_manager.response_handler = handler
+            self.logger.info("serverCommand专用响应处理器已设置")
+
+    def is_stream_healthy(self) -> bool:
+        """检查流健康状态"""
+        return (self.is_connected and
+                self.client_upload_manager and
+                self.client_upload_manager.is_stream_active and
+                self.server_command_manager and
+                self.server_command_manager.is_stream_active)
+
     def start(self):
         """启动机器人控制系统"""
         if self.is_running:
@@ -148,16 +206,22 @@ class RobotControlSystem:
             return
         
         self.logger.info("启动机器人控制系统...")
-        self.is_running = True
+        
         
         # 启动通信接收
-        self._start_communication()
+        if not self._init_grpc_client():
+            self.logger.error("gRPC客户端初始化失败")
+            return
+        
+        self.set_client_upload_response_handler(self._handle_clientUpload_response)
+        self.set_server_command_response_handler(self._handle_serverCommand_response)
         
         # 启动定时上报
-        self._start_reporting()
+        # self._start_reporting()
         
         self.logger.info("机器人控制系统已启动")
-    
+        self.is_running = True
+
     def stop(self):
         """停止机器人控制系统"""
         if not self.is_running:
@@ -167,186 +231,32 @@ class RobotControlSystem:
         self.logger.info("停止机器人控制系统...")
         self.is_running = False
         
-        # 停止通信接收
-        self._stop_communication = True
-        if self._communication_thread:
-            self._communication_thread.join(timeout=2.0)
-            self._communication_thread = None
-        
-        # 停止定时上报
-        self._stop_reporting = True
-        if self._report_thread:
-            self._report_thread.join(timeout=2.0)
-            self._report_thread = None
-        
-        # 停止任务管理器
+        '''停止通信接收'''
+        self.logger.info("正在关闭客户端...")
+
+        if self.client_upload_manager:
+            self.client_upload_manager.stop_stream()
+            
+        if self.server_command_manager:
+            self.server_command_manager.stop_stream()
+
+        if self.channel:
+            try:
+                self.channel.close()
+                self.logger.info("gRPC通道已关闭")
+            except Exception as e:
+                self.logger.error(f"关闭通道时出错: {e}")
+
+        self.is_connected = False
+        self.logger.info(f"客户端已关闭 - 发送: {self.sent_count} 条消息, 接收: {self.received_count} 条响应")
+
+        '''停止任务管理器'''
         self.task_manager.shutdown()
         
-        # 关闭机器人系统
+        '''关闭机器人系统'''
         self.robot_controller.shutdown_system()
         
         self.logger.info("机器人控制系统已停止")
-    
-    def _start_communication(self):
-        """启动通信接收线程"""
-        self._stop_communication = False
-        self._serverCommand_thread = threading.Thread(
-            target=self._serverCommand_loop,
-            daemon=True
-        )
-        self._clientUpload_thread = threading.Thread(
-            target=self._clientUpload_loop,
-            daemon=True
-        )
-        # self._serverCommand_thread.start()
-        self._clientUpload_thread.start()
-        # self.logger.info("serverCommand线程已启动")
-        self.logger.info("clientUpload线程已启动")
-
-    def _serverCommand_loop(self):
-        """serverCommand循环 - 使用gRPC双向流"""
-        self.logger.info("serverCommand循环已启动")
-        
-        # 如果gRPC客户端未初始化，先初始化
-        if not self.grpc_stub:
-            try:
-                self._init_grpc_client()
-            except Exception as e:
-                self.logger.error(f"无法初始化gRPC客户端: {e}")
-                return
-        
-        while not self._stop_communication:
-            try:
-                self.logger.info("启动gRPC serverCommand双向流")
-                
-                # 创建消息生成器用于发送空消息，保持连接
-                def request_generator():
-                    while not self._stop_communication:
-                        # 生成随机整数ID
-                        msg_id = int(uuid.uuid4().hex[:8], 16)
-                        yield robot_pb2.RobotUploadRequest(
-                            msg_id=msg_id,
-                            msg_time=int(time.time() * 1000),
-                            msg_type=robot_pb2.MsgType.ROBOT_STATUS,
-                            robot_id=int(self.robot_id.split('_')[-1]),
-                            robot_status=robot_pb2.RobotStatusUpload(
-                                system_status=robot_pb2.SystemStatus(
-                                    move_status=robot_pb2.MoveStatus.IDLE,
-                                    is_connected=True,
-                                    soft_estop_status=False,
-                                    hard_estop_status=False,
-                                    estop_status=False
-                                )
-                            )
-                        )
-                        self.logger.info("发送心跳信号")
-                        time.sleep(10)  # 每10秒发送一次心跳
-                
-                # 启动gRPC双向流
-                if self.grpc_stub is None:
-                    self.logger.error("gRPC stub为None，无法启动通信流")
-                    break
-                
-                responses = self.grpc_stub.serverCommand(request_generator())
-                
-                # 接收服务器发送的命令
-                for response in responses:
-                    self.logger.info(f"收到gRPC命令: {response}")
-                    self._handle_grpc_response(response)
-                    
-            except Exception as e:
-                self.logger.error(f"gRPC通信异常: {e}")
-                self._trigger_callback("on_communication_error", e)
-                
-                # 尝试重新连接
-                self.grpc_channel = None
-                self.grpc_stub = None
-                time.sleep(5)
-    
-
-    def _clientUpload_loop(self):
-        """clientUpload循环 - 使用gRPC双向流"""
-        self.logger.info("clientUpload循环已启动")
-        
-        # 如果gRPC客户端未初始化，先初始化
-        if not self.grpc_stub:
-            try:
-                self._init_grpc_client()
-            except Exception as e:
-                self.logger.error(f"无法初始化gRPC客户端: {e}")
-                return
-        
-        while not self._stop_communication:
-            try:
-                self.logger.info("启动gRPC clientUpload双向流")
-                
-                # 创建消息生成器用于发送空消息，保持连接
-                def request_generator():
-                    while not self._stop_communication:
-                        # 生成随机整数ID
-                        msg_id = int(uuid.uuid4().hex[:8], 16)
-
-                        '''
-                        int64 msg_id = 1;
-                        int64 msg_time = 2;
-                        MsgType msg_type = 3;
-                        int64 robot_id = 4;
-                        oneof data_json {
-                            RobotStatusUpload robot_status = 5;
-                            DeviceDataUpload device_data = 6;
-                            EnvironmentDataUpload environment_data = 7;
-                            ArriveServicePointUpload arrive_service_point = 8;
-                        }
-                        '''
-
-                        yield robot_pb2.RobotUploadRequest(
-                            msg_id=msg_id,
-                            msg_time=int(time.time() * 1000),
-                            msg_type=robot_pb2.MsgType.ROBOT_STATUS,
-                            robot_id=int(self.robot_id.split('_')[-1]),
-                            robot_status=robot_pb2.RobotStatusUpload(
-                                system_status=robot_pb2.SystemStatus(
-                                    move_status=robot_pb2.MoveStatus.IDLE,
-                                    is_connected=True,
-                                    soft_estop_status=False,
-                                    hard_estop_status=False,
-                                    estop_status=False
-                                )
-                            )
-                        )
-                        self.logger.info("发送心跳信号")
-                        time.sleep(10)  # 每10秒发送一次心跳
-                
-                # 启动gRPC双向流
-                if self.grpc_stub is None:
-                    self.logger.error("gRPC stub为None，无法启动通信流")
-                    break
-                
-                responses = self.grpc_stub.clientUpload(request_generator())
-                
-                # 接收服务器发送的命令
-                for response in responses:
-                    self.logger.info(f"收到gRPC命令: {response}")
-                    self._handle_grpc_response(response)
-                    
-            except Exception as e:
-                self.logger.error(f"gRPC通信异常: {e}")
-                self._trigger_callback("on_communication_error", e)
-                
-                # 尝试重新连接
-                self.grpc_channel = None
-                self.grpc_stub = None
-                time.sleep(5)
-    
-    def _handle_grpc_response(self, response):
-        """处理从gRPC服务器收到的响应/命令"""
-        try:
-            # TODO: 这里需要根据实际的响应格式来解析命令
-            # 目前只是记录日志
-            self.logger.info(f"处理gRPC响应: {response}")
-            
-        except Exception as e:
-            self.logger.error(f"处理gRPC响应失败: {e}")
     
     def _simulate_receive_command(self):
         """模拟接收后台指令（仅用于测试）"""
@@ -403,45 +313,59 @@ class RobotControlSystem:
         )
         
         # 处理命令
-        self.handle_command(cmd_envelope.to_dict())
+        self._handle_command(cmd_envelope.to_dict())
     
-    def handle_command(self, command_dict: Dict[str, Any]):
+    #
+    #                               处理serverCommand数据方法
+    #
+
+    def _handle_serverCommand_response(self, response):
+        """处理从gRPC服务器收到的响应/命令"""
+        try:
+            command_envelope = convert_server_cmd_to_command_envelope(response)
+            self._handle_command(command_envelope)
+            self.logger.info(f"处理gRPC响应: {response}")
+            
+        except Exception as e:
+            self.logger.error(f"处理gRPC响应失败: {e}")
+            
+    def _handle_command(self, command_envelope: CommandEnvelope):
         """处理接收到的命令
         
         Args:
-            command_dict: 命令字典
+            command_envelope: 命令信封对象
         """
-        self.logger.debug(f"收到命令: {json.dumps(command_dict, ensure_ascii=False)}")
+        self.logger.debug(f"收到命令: {command_envelope.to_json()}")
         
         try:
             # 保存接收到的消息到数据库
-            msg_id = command_dict.get('cmdId')
-            msg_time = command_dict.get('cmdTime')
-            cmd_type = command_dict.get('cmdType')
-            robot_id = command_dict.get('robotId')
-            data_json = json.dumps(command_dict.get('dataJson', {}))
+            msg_id = command_envelope.cmdId
+            msg_time = command_envelope.cmdTime
+            cmd_type = command_envelope.cmdType
+            robot_id = command_envelope.robotId
+            data_json = json.dumps(command_envelope.dataJson)
             
             # 保存到数据库
             self.task_manager.database.save_received_message(
                 msg_id=msg_id,
                 msg_time=msg_time,
-                cmd_type=cmd_type,
+                cmd_type=cmd_type.value,
                 robot_id=robot_id,
                 data_json=data_json
             )
             
             # 触发命令接收回调
-            self._trigger_callback("on_command_received", command_dict)
+            self._trigger_callback("on_command_received", command_envelope.to_dict())
             
             # 根据命令类型处理
-            if cmd_type == CmdType.TASK_CMD.value:
-                self._handle_task_command(command_dict.get('dataJson', {}))
-            elif cmd_type == CmdType.ROBOT_MODE_CMD.value:
-                self._handle_mode_command(command_dict.get('dataJson', {}))
-            elif cmd_type == CmdType.JOY_CONTROL_CMD.value:
-                self._handle_joy_command(command_dict.get('dataJson', {}))
-            elif cmd_type == CmdType.CHARGE_CMD.value:
-                self._handle_charge_command(command_dict.get('dataJson', {}))
+            if cmd_type == CmdType.TASK_CMD:
+                self._handle_task_command(command_envelope.dataJson)
+            elif cmd_type == CmdType.ROBOT_MODE_CMD:
+                self._handle_mode_command(command_envelope.dataJson)
+            elif cmd_type == CmdType.JOY_CONTROL_CMD:
+                self._handle_joy_command(command_envelope.dataJson)
+            elif cmd_type == CmdType.CHARGE_CMD:
+                self._handle_charge_command(command_envelope.dataJson)
             else:
                 self.logger.warning(f"未知命令类型: {cmd_type}")
             
@@ -458,7 +382,7 @@ class RobotControlSystem:
         Args:
             data_json: 任务命令数据
         """
-        self.logger.debug(f"处理任务命令: {json.dumps(data_json, ensure_ascii=False)}")
+        self.logger.info(f"处理任务命令: {json.dumps(data_json, ensure_ascii=False)}")
         
         try:
             # 从TaskCmd转换为内部任务格式
@@ -563,6 +487,9 @@ class RobotControlSystem:
         except Exception as e:
             self.logger.error(f"处理充电命令失败: {e}")
     
+    #
+    #                               处理clientUpload数据方法
+    #
     def _start_reporting(self):
         """启动定时上报"""
         self._stop_reporting = False
@@ -664,7 +591,7 @@ class RobotControlSystem:
                 system_status=system_status
             )
             
-            # 发送状态消息（实际应通过通信渠道发送）
+            # 发送状态消息
             self._send_message(msg_envelope)
             
             # 触发状态上报回调
@@ -830,21 +757,9 @@ class RobotControlSystem:
             msg_envelope: 消息信封
         """
         # 实际项目中使用gRPC发送消息
-        try:
-            # 将MessageEnvelope转换为gRPC RobotUploadRequest
-            grpc_msg = self._convert_to_grpc_message(msg_envelope)
-            
-            # 如果gRPC客户端未初始化，先初始化
-            if not self.grpc_stub:
-                self._init_grpc_client()
-
-            # 使用gRPC clientUpload流发送消息
-            if self.grpc_client_upload_stream:
-                self.grpc_client_upload_stream.send(grpc_msg)
-                self.logger.debug(f"通过gRPC发送消息: {msg_envelope.msgType}")
-            
-        except Exception as e:
-            self.logger.error(f"通过gRPC发送消息失败: {e}")
+        # 将MessageEnvelope转换为gRPC RobotUploadRequest
+        grpc_msg = convert_message_to_client_message(msg_envelope)
+        self.client_upload_manager.send_message(grpc_msg)
         
         # 保存发送的消息到数据库
         try:
@@ -859,140 +774,21 @@ class RobotControlSystem:
             )
         except Exception as e:
             self.logger.error(f"保存发送的消息到数据库失败: {e}")
-    
-    def _convert_to_grpc_message(self, msg_envelope: MessageEnvelope) -> robot_pb2.RobotUploadRequest:
-        """将MessageEnvelope转换为gRPC RobotUploadRequest
-        
-        Args:
-            msg_envelope: 消息信封
-            
-        Returns:
-            robot_pb2.RobotUploadRequest: gRPC请求消息
-        """
-        # 转换MsgType枚举
-        msg_type_map = {
-            MsgType.ROBOT_STATUS: robot_pb2.MsgType.ROBOT_STATUS,
-            MsgType.DEVICE_DATA: robot_pb2.MsgType.DEVICE_DATA,
-            MsgType.ENVIRONMENT_DATA: robot_pb2.MsgType.ENVIRONMENT_DATA,
-            MsgType.ARRIVE_SERVER_POINT: robot_pb2.MsgType.ARRIVE_SERVER_POINT
-        }
-        
-        grpc_msg_type = msg_type_map.get(msg_envelope.msgType, robot_pb2.MsgType.ROBOT_STATUS)
-        robot_id = int(self.robot_id.split('_')[-1])
-        
-        # 创建基础请求
-        # 将msgId转换为整数ID，如果是UUID格式则取前8位转为16进制整数
-        msg_id_str = msg_envelope.msgId
-        if '_' in msg_id_str:
-            msg_id_str = msg_id_str.split('_')[-1]
-        
+
+    def _handle_clientUpload_response(self, response):
+        """处理从gRPC服务器收到的响应/命令"""
         try:
-            # 尝试直接转换为整数
-            msg_id = int(msg_id_str)
-        except ValueError:
-            # 如果是UUID或其他格式，取前8位转为16进制整数
-            msg_id = int(msg_id_str.replace('-', '')[:8], 16)
+            # TODO: 这里需要根据实际的响应格式来解析命令
+            # 目前只是记录日志
+            self.logger.info(f"处理gRPC响应: {response}")
             
-        grpc_msg = robot_pb2.RobotUploadRequest(
-            msg_id=msg_id,
-            msg_time=msg_envelope.msgTime,
-            msg_type=grpc_msg_type,
-            robot_id=robot_id
-        )
-        
-        data_json = msg_envelope.dataJson
-        
-        # 根据消息类型填充具体数据
-        if msg_envelope.msgType == MsgType.ROBOT_STATUS:
-            # 转换机器人状态
-            battery_info = data_json.get('batteryInfo', {})
-            position_info = data_json.get('positionInfo', {})
-            system_status = data_json.get('systemStatus', {})
-            
-            # 转换MoveStatus枚举
-            move_status_map = {
-                'idle': robot_pb2.MoveStatus.IDLE,
-                'running': robot_pb2.MoveStatus.RUNNING,
-                'succeeded': robot_pb2.MoveStatus.SUCCEEDED,
-                'failed': robot_pb2.MoveStatus.FAILED,
-                'canceled': robot_pb2.MoveStatus.CANCELED
-            }
-            
-            move_status = move_status_map.get(system_status.get('move_status', 'idle'), robot_pb2.MoveStatus.IDLE)
-            
-            # 设置机器人状态数据
-            grpc_msg.robot_status.CopyFrom(robot_pb2.RobotStatusUpload(
-                battery_info=robot_pb2.BatteryInfo(
-                    power_percent=battery_info.get('power_percent', 0.0),
-                    charge_status=battery_info.get('charge_status', 'discharging')
-                ),
-                position_info=robot_pb2.PositionInfo(
-                    AGVPositionInfo=position_info.get('AGVPositionInfo', [0.0, 0.0, 0.0]),
-                    ARMPositionInfo=position_info.get('ARMPositionInfo', [0.0]*6),
-                    EXTPositionInfo=position_info.get('EXTPositionInfo', [0.0]*4),
-                    targetPoint=position_info.get('targetPoint', ''),
-                    pointId=int(position_info.get('pointId', 0)) if position_info.get('pointId') else 0
-                ),
-                system_status=robot_pb2.SystemStatus(
-                    move_status=move_status,
-                    is_connected=system_status.get('is_connected', True),
-                    soft_estop_status=system_status.get('soft_estop_status', False),
-                    hard_estop_status=system_status.get('hard_estop_status', False),
-                    estop_status=system_status.get('estop_status', False)
-                )
-            ))
-        
-        elif msg_envelope.msgType == MsgType.ENVIRONMENT_DATA:
-            # 转换环境数据
-            env_info = data_json.get('environmentInfo', {})
-            position_info = data_json.get('positionInfo', {})
-            
-            grpc_msg.environment_data.CopyFrom(robot_pb2.EnvironmentDataUpload(
-                position_info=robot_pb2.PositionInfo(
-                    AGVPositionInfo=position_info.get('AGVPositionInfo', [0.0, 0.0, 0.0]),
-                    ARMPositionInfo=position_info.get('ARMPositionInfo', [0.0]*6),
-                    EXTPositionInfo=position_info.get('EXTPositionInfo', [0.0]*4),
-                    targetPoint=position_info.get('targetPoint', ''),
-                    pointId=int(position_info.get('pointId', 0)) if position_info.get('pointId') else 0
-                ),
-                sensor_data=robot_pb2.SensorData(
-                    temperature=env_info.get('temperature', 0.0),
-                    humidity=env_info.get('humidity', 0.0),
-                    oxygen=env_info.get('oxygen', 0.0),
-                    carbon_dioxide=env_info.get('carbonDioxide', 0.0),
-                    pm25=env_info.get('pm25', 0.0),
-                    pm10=env_info.get('pm10', 0.0),
-                    etvoc=env_info.get('etvoc', 0.0),
-                    noise=env_info.get('noise', 0.0)
-                )
-            ))
-        
-        elif msg_envelope.msgType == MsgType.DEVICE_DATA:
-            # 转换设备数据
-            device_info = data_json.get('deviceInfo', {})
-            position_info = data_json.get('positionInfo', {})
-            
-            grpc_msg.device_data.CopyFrom(robot_pb2.DeviceDataUpload(
-                position_info=robot_pb2.PositionInfo(
-                    AGVPositionInfo=position_info.get('AGVPositionInfo', [0.0, 0.0, 0.0]),
-                    ARMPositionInfo=position_info.get('ARMPositionInfo', [0.0]*6),
-                    EXTPositionInfo=position_info.get('EXTPositionInfo', [0.0]*4),
-                    targetPoint=position_info.get('targetPoint', ''),
-                    pointId=int(position_info.get('pointId', 0)) if position_info.get('pointId') else 0
-                ),
-                device_info=robot_pb2.DeviceInfo(
-                    device_id=device_info.get('deviceId', ''),
-                    data_type=device_info.get('dataType', ''),
-                    image_base64=device_info.get('imageBase64', '')
-                )
-            ))
-        
-        elif msg_envelope.msgType == MsgType.ARRIVE_SERVER_POINT:
-            # 转换到达服务点数据
-            grpc_msg.arrive_service_point.CopyFrom(robot_pb2.ArriveServicePointUpload())
-        
-        return grpc_msg
-    
+        except Exception as e:
+            self.logger.error(f"处理gRPC响应失败: {e}")
+
+    #
+    #                               回调函数
+    #
+
     def _on_task_complete(self, task: Task):
         """任务完成回调
         
@@ -1049,6 +845,78 @@ class RobotControlSystem:
             except Exception as e:
                 self.logger.error(f"回调函数执行异常: {e}")
     
+    def send_server_command(self, command_data: Dict[str, Any]) -> bool:
+        """通过serverCommand流发送服务端命令
+        
+        Args:
+            command_data: 命令数据字典
+            
+        Returns:
+            bool: 发送是否成功
+        """
+        if not self.server_command_manager or not self.server_command_manager.is_stream_active:
+            self.logger.error("serverCommand流未激活，无法发送命令")
+            return False
+        
+        try:
+            # 创建ServerCmdRequest消息
+            import uuid
+            msg_id = int(uuid.uuid4().hex[:8], 16)
+            
+            # 获取命令类型
+            cmd_type = command_data.get('cmd_type', 'unknown')
+            
+            # 创建gRPC消息
+            grpc_msg = robot_pb2.ServerCmdRequest(
+                msg_id=msg_id,
+                msg_time=int(time.time()),
+                robot_id=self.robot_id,
+                cmd_type=cmd_type
+            )
+            
+            # 根据命令类型填充数据
+            if cmd_type == 'task':
+                task_data = command_data.get('task_data', {})
+                grpc_msg.task_data.CopyFrom(robot_pb2.TaskCmdData(
+                    task_id=task_data.get('task_id', ''),
+                    task_type=task_data.get('task_type', 'delivery'),
+                    priority=task_data.get('priority', 1),
+                    start_point=task_data.get('start_point', ''),
+                    end_point=task_data.get('end_point', ''),
+                    operation_type=task_data.get('operation_type', 'pickup')
+                ))
+            elif cmd_type == 'mode':
+                mode_data = command_data.get('mode_data', {})
+                grpc_msg.mode_data.CopyFrom(robot_pb2.ModeCmdData(
+                    mode=mode_data.get('mode', 'auto'),
+                    operation_mode=mode_data.get('operation_mode', 'normal')
+                ))
+            elif cmd_type == 'joy':
+                joy_data = command_data.get('joy_data', {})
+                grpc_msg.joy_data.CopyFrom(robot_pb2.JoyCmdData(
+                    linear_x=joy_data.get('linear_x', 0.0),
+                    linear_y=joy_data.get('linear_y', 0.0),
+                    angular_z=joy_data.get('angular_z', 0.0)
+                ))
+            elif cmd_type == 'charge':
+                charge_data = command_data.get('charge_data', {})
+                grpc_msg.charge_data.CopyFrom(robot_pb2.ChargeCmdData(
+                    action=charge_data.get('action', 'start')
+                ))
+            
+            # 发送消息
+            success = self.server_command_manager.send_message(grpc_msg)
+            if success:
+                self.logger.info(f"服务端命令已发送: msg_id={msg_id}, cmd_type={cmd_type}")
+            else:
+                self.logger.error(f"服务端命令发送失败: msg_id={msg_id}, cmd_type={cmd_type}")
+            
+            return success
+            
+        except Exception as e:
+            self.logger.error(f"发送服务端命令异常: {e}")
+            return False
+
     def shutdown(self):
         """关闭机器人控制系统"""
         self.stop()
@@ -1061,7 +929,7 @@ if __name__ == "__main__":
     
     # 创建机器人控制系统
     config = {
-        'robot_id': 'ROBOT_001',
+        'robot_id': "ROBOT_001",
         'robot_config': {
             'success_rate': 0.95,
             'latency': 10,

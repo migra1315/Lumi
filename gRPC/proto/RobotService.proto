@@ -15,7 +15,7 @@ service RobotService {
     rpc clientUpload(stream RobotUploadRequest) returns (stream RobotUploadResponse);
 
     // 双向流式通信: 推送任务分配、服务指令
-    rpc serverCommand(stream ServerCmdRequest) returns (stream ServerCmdResponse);
+    rpc serverCommand(stream ServerCmdResponse) returns (stream ServerCmdRequest);
 }
 
 // 操作模式枚举
@@ -154,33 +154,10 @@ message ArriveServicePointUpload {
     TaskInfo task_info = 1;
 }
 
-// 请求消息（用于双向流）
-message RobotUploadRequest {
-    int64 msg_id = 1;
-    int64 msg_time = 2;
-    MsgType msg_type = 3;
-    string robot_id = 4;
-    oneof data_json {
-        RobotStatusUpload robot_status = 5;
-        DeviceDataUpload device_data = 6;
-        EnvironmentDataUpload environment_data = 7;
-        ArriveServicePointUpload arrive_service_point = 8;
-    }
-}
-
 // 响应信息
 message ServerResponse {
     string code = 1;
     string info = 2;
-}
-
-// 请求消息响应
-message RobotUploadResponse {
-    int64 msg_id = 1;
-    int64 msg_time = 2;
-    MsgType msg_type = 3;
-    string robot_id = 4;
-    ServerResponse data_json = 5;
 }
 
 // 机器人模式命令
@@ -230,6 +207,29 @@ message JoyControlCmd {
 }
 
 
+// 请求消息（用于双向流）
+message RobotUploadRequest {
+    int64 msg_id = 1;
+    int64 msg_time = 2;
+    MsgType msg_type = 3;
+    string robot_id = 4;
+    oneof data_json {
+        RobotStatusUpload robot_status = 5;
+        DeviceDataUpload device_data = 6;
+        EnvironmentDataUpload environment_data = 7;
+        ArriveServicePointUpload arrive_service_point = 8;
+    }
+}
+
+// 下发消息响应
+message ServerCmdResponse {
+    int64 command_id = 1;
+    int64 command_time = 2;
+    CmdType command_type = 3;
+    string robot_id = 4;
+    ServerResponse data_json = 5;
+}
+
 // 下发消息（用于双向流）
 message ServerCmdRequest {
     int64 command_id = 1;
@@ -243,11 +243,12 @@ message ServerCmdRequest {
     }
 }
 
-// 下发消息响应
-message ServerCmdResponse {
-    int64 command_id = 1;
-    int64 command_time = 2;
-    CmdType command_type = 3;
+// 请求消息响应
+message RobotUploadResponse {
+    int64 msg_id = 1;
+    int64 msg_time = 2;
+    MsgType msg_type = 3;
     string robot_id = 4;
     ServerResponse data_json = 5;
 }
+

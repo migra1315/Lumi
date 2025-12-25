@@ -42,8 +42,8 @@ class RobotServiceStub(object):
                 _registered_method=True)
         self.serverCommand = channel.stream_stream(
                 '/RobotService/serverCommand',
-                request_serializer=proto_dot_RobotService__pb2.ServerCmdRequest.SerializeToString,
-                response_deserializer=proto_dot_RobotService__pb2.ServerCmdResponse.FromString,
+                request_serializer=proto_dot_RobotService__pb2.ServerCmdResponse.SerializeToString,
+                response_deserializer=proto_dot_RobotService__pb2.ServerCmdRequest.FromString,
                 _registered_method=True)
 
 
@@ -75,8 +75,8 @@ def add_RobotServiceServicer_to_server(servicer, server):
             ),
             'serverCommand': grpc.stream_stream_rpc_method_handler(
                     servicer.serverCommand,
-                    request_deserializer=proto_dot_RobotService__pb2.ServerCmdRequest.FromString,
-                    response_serializer=proto_dot_RobotService__pb2.ServerCmdResponse.SerializeToString,
+                    request_deserializer=proto_dot_RobotService__pb2.ServerCmdResponse.FromString,
+                    response_serializer=proto_dot_RobotService__pb2.ServerCmdRequest.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -132,8 +132,8 @@ class RobotService(object):
             request_iterator,
             target,
             '/RobotService/serverCommand',
-            proto_dot_RobotService__pb2.ServerCmdRequest.SerializeToString,
-            proto_dot_RobotService__pb2.ServerCmdResponse.FromString,
+            proto_dot_RobotService__pb2.ServerCmdResponse.SerializeToString,
+            proto_dot_RobotService__pb2.ServerCmdRequest.FromString,
             options,
             channel_credentials,
             insecure,
