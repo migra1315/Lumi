@@ -159,12 +159,12 @@ class RobotControlSystem:
                 self.logger.warning(f"连接测试警告: {e}")
 
             # 初始化流管理器
-            # self.client_upload_manager = ClientUploadStreamManager(self.stub, self.robot_id)
+            self.client_upload_manager = ClientUploadStreamManager(self.stub, self.robot_id)
             self.server_command_manager = ServerCommandStreamManager(self.stub, self.robot_id)
 
             # 启动持久化流
-            # client_upload_started = self.client_upload_manager.start_stream()
-            client_upload_started = True
+            client_upload_started = self.client_upload_manager.start_stream()
+            # client_upload_started = True
             server_command_started = self.server_command_manager.start_stream()
             
             if client_upload_started and server_command_started:
@@ -217,7 +217,7 @@ class RobotControlSystem:
         self.set_server_command_response_handler(self._handle_serverCommand_response)
         
         # 启动定时上报
-        # self._start_reporting()
+        self._start_reporting()
         
         self.logger.info("机器人控制系统已启动")
         self.is_running = True
