@@ -1,13 +1,13 @@
 from datetime import datetime
 import json
-from typing import Generator, List, Dict, Any, Optional
+from dataModels.TaskModels import Station,StationTaskStatus
 import sqlite3
 from contextlib import contextmanager
+from typing import Generator, List, Dict, Any
 import logging
-from dataModels.TaskModels import Task, Station, StationTaskStatus, TaskStatus
 
 class TaskDatabase:
-    """任务数据库管理 - 负责任务和消息的持久化存储"""
+    """任务数据库管理"""
     
     def __init__(self, db_path: str = "tasks.db"):
         self.db_path = db_path
@@ -23,34 +23,16 @@ class TaskDatabase:
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tasks (
                     task_id TEXT PRIMARY KEY,
-                    task_name TEXT NOT NULL,
-                    robot_mode TEXT NOT NULL,
+                    stations_json TEXT NOT NULL,
+                    priority INTEGER DEFAULT 1,
                     status TEXT DEFAULT 'pending',
-                    generate_time TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    started_at TIMESTAMP,
-                    completed_at TIMESTAMP,
-                    error_message TEXT,
-                    metadata_json TEXT DEFAULT '{}'
-                )
-            ''')
-            
-            # 创建站点任务表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS station_tasks (
-                    station_id TEXT PRIMARY KEY,
-                    task_id TEXT NOT NULL,
-                    station_config_json TEXT NOT NULL,
-                    status TEXT DEFAULT 'pending',
-                    sort INTEGER NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     started_at TIMESTAMP,
                     completed_at TIMESTAMP,
                     retry_count INTEGER DEFAULT 0,
                     max_retries INTEGER DEFAULT 3,
                     error_message TEXT,
-                    metadata_json TEXT DEFAULT '{}',
-                    FOREIGN KEY (task_id) REFERENCES tasks (task_id)
+                    metadata_json TEXT DEFAULT '{}'
                 )
             ''')
             
@@ -110,86 +92,41 @@ class TaskDatabase:
         finally:
             conn.close()
     
-    def save_task(self, task: Task):
+    def save_task(self, station: Station):
         """保存任务到数据库"""
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # 保存任务主表
+                stations_json = json.dumps(station.station_config.to_dict())
+                metadata_json = json.dumps(station.metadata)
+                
                 cursor.execute('''
                     INSERT OR REPLACE INTO tasks 
-                    (task_id, task_name, robot_mode, status, generate_time, 
-                     created_at, started_at, completed_at, error_message, metadata_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (task_id, stations_json, priority, status, created_at, 
+                     started_at, completed_at, retry_count, max_retries, 
+                     error_message, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
-                    task.task_id,
-                    task.task_name,
-                    task.robot_mode.value,
-                    task.status.value,
-                    task.generate_time,
-                    task.created_at,
-                    task.started_at,
-                    task.completed_at,
-                    task.error_message,
-                    json.dumps(task.metadata)
+                    station.station_id,
+                    stations_json,
+                    station.priority,
+                    station.status.value,
+                    station.created_at,
+                    station.started_at,
+                    station.completed_at,
+                    station.retry_count,
+                    station.max_retries,
+                    station.error_message,
+                    metadata_json
                 ))
-                
-                # 保存站点任务
-                for station in task.station_list:
-                    cursor.execute('''
-                        INSERT OR REPLACE INTO station_tasks 
-                        (station_id, task_id, station_config_json, status, sort, 
-                         created_at, started_at, completed_at, retry_count, max_retries, 
-                         error_message, metadata_json)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        f"{task.task_id}_{station.station_config.station_id}",
-                        task.task_id,
-                        json.dumps(station.station_config.to_dict()),
-                        station.status.value,
-                        station.station_config.sort,
-                        station.created_at,
-                        station.started_at,
-                        station.completed_at,
-                        station.retry_count,
-                        station.max_retries,
-                        station.error_message,
-                        json.dumps(station.metadata)
-                    ))
         except Exception as e:
-            self.logger.error(f"保存任务失败: {e}")
+            self.logger.error(f"保存任务失败: {e},\n {station}")
             raise
     
-    def update_task_status(self, task_id: str, status: TaskStatus, error_message: str = None):
+    def update_task_status(self, task_id: str, status: StationTaskStatus, 
+                          error_message: str = None):
         """更新任务状态"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            update_fields = ["status = ?"]
-            params = [status.value]
-            
-            if status == TaskStatus.RUNNING:
-                update_fields.append("started_at = ?")
-                params.append(datetime.now())
-            elif status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED]:
-                update_fields.append("completed_at = ?")
-                params.append(datetime.now())
-            
-            if error_message:
-                update_fields.append("error_message = ?")
-                params.append(error_message)
-            
-            params.append(task_id)
-            
-            cursor.execute(f'''
-                UPDATE tasks 
-                SET {', '.join(update_fields)}
-                WHERE task_id = ?
-            ''', params)
-    
-    def update_station_task_status(self, station_id: str, status: StationTaskStatus, error_message: str = None):
-        """更新站点任务状态"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
@@ -207,23 +144,23 @@ class TaskDatabase:
                 update_fields.append("error_message = ?")
                 params.append(error_message)
             
-            params.append(station_id)
+            params.append(task_id)
             
             cursor.execute(f'''
-                UPDATE station_tasks 
+                UPDATE tasks 
                 SET {', '.join(update_fields)}
-                WHERE station_id = ?
+                WHERE task_id = ?
             ''', params)
     
-    def add_station_retry_count(self, station_id: str):
-        """增加站点任务重试次数"""
+    def add_retry_count(self, task_id: str):
+        """增加重试次数"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                UPDATE station_tasks 
+                UPDATE tasks 
                 SET retry_count = retry_count + 1 
-                WHERE station_id = ?
-            ''', (station_id,))
+                WHERE task_id = ?
+            ''', (task_id,))
     
     def log_task_action(self, task_id: str, station_id: str, 
                        action: str, status: str, details: str = None):
@@ -242,31 +179,9 @@ class TaskDatabase:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT * FROM tasks 
-                WHERE status IN ('pending')
-                ORDER BY created_at ASC
+                WHERE status IN ('pending', 'retrying')
+                ORDER BY priority DESC, created_at ASC
             ''')
-            return [dict(row) for row in cursor.fetchall()]
-    
-    def get_task_by_id(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """根据ID获取任务"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM tasks 
-                WHERE task_id = ?
-            ''', (task_id,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
-    
-    def get_station_tasks(self, task_id: str) -> List[Dict[str, Any]]:
-        """获取任务的所有站点任务"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM station_tasks 
-                WHERE task_id = ?
-                ORDER BY sort ASC
-            ''', (task_id,))
             return [dict(row) for row in cursor.fetchall()]
     
     # ==================== 机器人消息相关方法 ====================

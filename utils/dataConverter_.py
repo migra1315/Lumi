@@ -1,3 +1,6 @@
+from dataModels.TaskModels import TaskStatus
+from datetime import datetime
+from dataModels.TaskModels import Task
 import gRPC.RobotService_pb2 as robot_pb2
 
 from dataModels.CommandModels import (
@@ -6,10 +9,10 @@ from dataModels.CommandModels import (
 )
 from dataModels.MessageModels import (
     MessageEnvelope, MsgType, create_message_envelope,
-    BatteryInfo, PositionInfo, TaskInfo, SystemStatus, ErrorInfo,
+    BatteryInfo, PositionInfo, TaskListInfo, SystemStatus, ErrorInfo,
     DeviceInfo, EnvironmentInfo, ArriveServicePointInfo
 )
-from dataModels.TaskModels import Task, TaskStatus, StationConfig, OperationConfig, OperationMode
+from dataModels.TaskModels import Station, StationTaskStatus, StationConfig, OperationConfig, OperationMode
 
 def convert_server_cmd_to_command_envelope(server_cmd_request: robot_pb2.ServerCmdRequest) -> CommandEnvelope:
     """将gRPC ServerCmdRequest转换为CommandEnvelope
@@ -22,6 +25,7 @@ def convert_server_cmd_to_command_envelope(server_cmd_request: robot_pb2.ServerC
     """
     # 转换CmdType枚举
     cmd_type_map = {
+        
         robot_pb2.CmdType.ROBOT_MODE_CMD: CmdType.ROBOT_MODE_CMD,
         robot_pb2.CmdType.INSPECTION_CMD: CmdType.TASK_CMD,
         robot_pb2.CmdType.SERVICE_TASK_CMD: CmdType.TASK_CMD,
@@ -78,23 +82,22 @@ def convert_server_cmd_to_command_envelope(server_cmd_request: robot_pb2.ServerC
         
         # 转换OperationMode枚举
         operation_mode_map = {
-            robot_pb2.OperationMode.OPERATION_MODE_UNSPECIFIED: "unspecified",
-            robot_pb2.OperationMode.OPERATION_MODE_PHOTO: "capture",
-            robot_pb2.OperationMode.OPERATION_MODE_COLLECT: "collect",
-            robot_pb2.OperationMode.OPERATION_MODE_DOOR: "door",
-            robot_pb2.OperationMode.OPERATION_MODE_INSPECTION: "inspection",
-            robot_pb2.OperationMode.OPERATION_MODE_SERVICE: "service",
+            robot_pb2.OperationMode.OPERATION_MODE_NONE: OperationMode.NONE,
+            robot_pb2.OperationMode.OPERATION_MODE_CAPTURE: OperationMode.CAPTURE,
+            robot_pb2.OperationMode.OPERATION_MODE_OPEN_DOOR: OperationMode.OPEN_DOOR,
+            robot_pb2.OperationMode.OPERATION_MODE_CLOSE_DOOR: OperationMode.CLOSE_DOOR,
+            robot_pb2.OperationMode.OPERATION_MODE_SERVICE: OperationMode.SERVICE,
         }
         
         # 转换TaskStatus枚举
         task_status_map = {
-            robot_pb2.TaskStatus.TASK_STATUS_UNSPECIFIED: "unspecified",
-            robot_pb2.TaskStatus.TASK_STATUS_PENDING: "pending",
-            robot_pb2.TaskStatus.TASK_STATUS_RUNNING: "running",
-            robot_pb2.TaskStatus.TASK_STATUS_COMPLETED: "completed",
-            robot_pb2.TaskStatus.TASK_STATUS_FAILED: "failed",
-            robot_pb2.TaskStatus.TASK_STATUS_CANCELLED: "cancelled",
-            robot_pb2.TaskStatus.TASK_STATUS_RETRYING: "retrying",
+            robot_pb2.TaskStatus.TASK_STATUS_UNSPECIFIED: StationTaskStatus.UNSPECIFIED,
+            robot_pb2.TaskStatus.TASK_STATUS_PENDING: StationTaskStatus.PENDING,
+            robot_pb2.TaskStatus.TASK_STATUS_RUNNING: StationTaskStatus.RUNNING,
+            robot_pb2.TaskStatus.TASK_STATUS_COMPLETED: StationTaskStatus.COMPLETED,
+            robot_pb2.TaskStatus.TASK_STATUS_FAILED: StationTaskStatus.FAILED,
+            robot_pb2.TaskStatus.TASK_STATUS_CANCELLED: StationTaskStatus.CANCELLED,
+            robot_pb2.TaskStatus.TASK_STATUS_RETRYING: StationTaskStatus.RETRYING,
         }
         
         # 转换站点配置
@@ -140,11 +143,11 @@ def convert_server_cmd_to_command_envelope(server_cmd_request: robot_pb2.ServerC
     
     # 创建命令信封
     command_envelope = CommandEnvelope(
-        cmdId=str(server_cmd_request.command_id),
-        cmdTime=int(server_cmd_request.command_time),
-        cmdType=cmd_type,
+        cmd_id=str(server_cmd_request.command_id),
+        cmd_time=int(server_cmd_request.command_time),
+        cmd_type=cmd_type,
         robotId=server_cmd_request.robot_id,
-        dataJson=data_json
+        data_json=data_json
     )
     
     return command_envelope
@@ -282,3 +285,69 @@ def convert_message_to_client_message(msg_envelope: MessageEnvelope) -> robot_pb
     
     return grpc_msg
 
+def convert_task_cmd_to_task(task_cmd: TaskCmd) -> Task:
+        """将TaskCmd转换为Task对象
+        
+        Args:
+            task_cmd: 任务命令对象
+            
+        Returns:
+            Task: 转换后的任务对象
+        """
+        # 创建站点列表
+        station_list = []
+        for station_config in task_cmd.station_config_tasks:
+            # 转换OperationMode
+            operation_mode = OperationMode(station_config.operation_config.operation_mode)
+            
+            # 创建操作配置
+            operation_config = OperationConfig(
+                operation_mode=operation_mode,
+                door_ip=station_config.operation_config.door_ip,
+                device_id=station_config.operation_config.device_id
+            )
+            
+            # 创建站点配置
+            station_config_obj = StationConfig(
+                station_id=station_config.station_id,
+                sort=station_config.sort,
+                name=station_config.name,
+                agv_marker=station_config.agv_marker,
+                robot_pos=station_config.robot_pos,
+                ext_pos=station_config.ext_pos,
+                operation_config=operation_config
+            )
+            
+            # 创建站点任务
+            station = Station(
+                station_config=station_config_obj,
+                status=StationTaskStatus.PENDING,
+                created_at=datetime.now(),
+                retry_count=0,
+                max_retries=3,
+                metadata={
+                    "source": "cmd",
+                    "task_id": task_cmd.task_id
+                }
+            )
+            
+            station_list.append(station)
+        
+        # 创建任务对象
+        task = Task(
+            task_id=task_cmd.task_id,
+            task_name=task_cmd.task_name,
+            station_list=station_list,
+            status=TaskStatus.PENDING,
+            robot_mode=task_cmd.robot_mode,
+            generate_time=task_cmd.generate_time,
+            created_at=datetime.now(),
+            metadata={
+                "source": "cmd",
+                "generate_time": task_cmd.generate_time.isoformat() if task_cmd.generate_time else None
+            }
+        )
+        
+        return task
+    
+    

@@ -22,11 +22,10 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
-from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x18proto/RobotService.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cgoogle/protobuf/struct.proto\";\n\x0b\x42\x61tteryInfo\x12\x15\n\rpower_percent\x18\x01 \x01(\x01\x12\x15\n\rcharge_status\x18\x02 \x01(\t\"\x7f\n\x0cPositionInfo\x12\x17\n\x0f\x41GVPositionInfo\x18\x01 \x03(\x01\x12\x17\n\x0f\x41RMPositionInfo\x18\x02 \x03(\x01\x12\x17\n\x0f\x45XTPositionInfo\x18\x03 \x03(\x01\x12\x13\n\x0btargetPoint\x18\x04 \x01(\t\x12\x0f\n\x07pointId\x18\x05 \x01(\x03\"/\n\x08TaskInfo\x12#\n\x14inspection_task_list\x18\x01 \x03(\x0b\x32\x05.Task\"\x92\x01\n\x0cSystemStatus\x12 \n\x0bmove_status\x18\x01 \x01(\x0e\x32\x0b.MoveStatus\x12\x14\n\x0cis_connected\x18\x02 \x01(\x08\x12\x19\n\x11soft_estop_status\x18\x03 \x01(\x08\x12\x19\n\x11hard_estop_status\x18\x04 \x01(\x08\x12\x14\n\x0c\x65stop_status\x18\x05 \x01(\x08\"9\n\tErrorInfo\x12\x0c\n\x04\x63ode\x18\x01 \x01(\x05\x12\r\n\x05level\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\"\xc1\x01\n\x11RobotStatusUpload\x12\"\n\x0c\x62\x61ttery_info\x18\x01 \x01(\x0b\x32\x0c.BatteryInfo\x12$\n\rposition_info\x18\x02 \x01(\x0b\x32\r.PositionInfo\x12\x1c\n\ttask_info\x18\x03 \x03(\x0b\x32\t.TaskInfo\x12$\n\rsystem_status\x18\x04 \x01(\x0b\x32\r.SystemStatus\x12\x1e\n\nerror_info\x18\x05 \x01(\x0b\x32\n.ErrorInfo\"H\n\nDeviceInfo\x12\x11\n\tdevice_id\x18\x01 \x01(\t\x12\x11\n\tdata_type\x18\x02 \x01(\t\x12\x14\n\x0cimage_base64\x18\x03 \x01(\t\"x\n\x10\x44\x65viceDataUpload\x12$\n\rposition_info\x18\x01 \x01(\x0b\x32\r.PositionInfo\x12\x1c\n\ttask_info\x18\x02 \x01(\x0b\x32\t.TaskInfo\x12 \n\x0b\x64\x65vice_info\x18\x03 \x01(\x0b\x32\x0b.DeviceInfo\"\x95\x01\n\nSensorData\x12\x13\n\x0btemperature\x18\x01 \x01(\x01\x12\x10\n\x08humidity\x18\x02 \x01(\x01\x12\x0e\n\x06oxygen\x18\x03 \x01(\x01\x12\x16\n\x0e\x63\x61rbon_dioxide\x18\x04 \x01(\x01\x12\x0c\n\x04pm25\x18\x05 \x01(\x01\x12\x0c\n\x04pm10\x18\x06 \x01(\x01\x12\r\n\x05\x65tvoc\x18\x07 \x01(\x01\x12\r\n\x05noise\x18\x08 \x01(\x01\"}\n\x15\x45nvironmentDataUpload\x12$\n\rposition_info\x18\x01 \x01(\x0b\x32\r.PositionInfo\x12\x1c\n\ttask_info\x18\x02 \x01(\x0b\x32\t.TaskInfo\x12 \n\x0bsensor_data\x18\x03 \x01(\x0b\x32\x0b.SensorData\"8\n\x18\x41rriveServicePointUpload\x12\x1c\n\ttask_info\x18\x01 \x01(\x0b\x32\t.TaskInfo\",\n\x0eServerResponse\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0c\n\x04info\x18\x02 \x01(\t\"2\n\x10RobotModeCommand\x12\x1e\n\nrobot_mode\x18\x01 \x01(\x0e\x32\n.RobotMode\"]\n\x0fOperationConfig\x12&\n\x0eoperation_mode\x18\x01 \x01(\x0e\x32\x0e.OperationMode\x12\x0f\n\x07\x64oor_ip\x18\x02 \x01(\t\x12\x11\n\tdevice_id\x18\x03 \x01(\t\"\xa3\x01\n\rStationConfig\x12\x12\n\nstation_id\x18\x01 \x01(\t\x12\x0c\n\x04sort\x18\x02 \x01(\x05\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x12\n\nagv_marker\x18\x04 \x01(\t\x12\x11\n\trobot_pos\x18\x05 \x03(\x01\x12\x0f\n\x07\x65xt_pos\x18\x06 \x03(\x01\x12*\n\x10operation_config\x18\x07 \x01(\x0b\x32\x10.OperationConfig\"\x93\x03\n\x04Task\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12%\n\rstation_tasks\x18\x02 \x03(\x0b\x32\x0e.StationConfig\x12\x10\n\x08priority\x18\x03 \x01(\x05\x12\x1b\n\x06status\x18\x04 \x01(\x0e\x32\x0b.TaskStatus\x12\x1d\n\trobotMode\x18\x05 \x01(\x0e\x32\n.RobotMode\x12\x15\n\rgenerate_time\x18\x06 \x01(\x03\x12\x12\n\ncreated_at\x18\x07 \x01(\x03\x12\x12\n\nstarted_at\x18\x08 \x01(\x03\x12\x14\n\x0c\x63ompleted_at\x18\t \x01(\x03\x12\x13\n\x0bretry_count\x18\n \x01(\x05\x12\x13\n\x0bmax_retries\x18\x0b \x01(\x05\x12\x15\n\rerror_message\x18\x0c \x01(\t\x12&\n\tmeta_data\x18\r \x03(\x0b\x32\x13.Task.MetaDataEntry\x1aG\n\rMetaDataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12%\n\x05value\x18\x02 \x01(\x0b\x32\x16.google.protobuf.Value:\x02\x38\x01\"B\n\rJoyControlCmd\x12\x18\n\x10\x61ngular_velocity\x18\x01 \x01(\t\x12\x17\n\x0flinear_velocity\x18\x02 \x01(\t\"\xb6\x02\n\x12RobotUploadRequest\x12\x0e\n\x06msg_id\x18\x01 \x01(\x03\x12\x10\n\x08msg_time\x18\x02 \x01(\x03\x12\x1a\n\x08msg_type\x18\x03 \x01(\x0e\x32\x08.MsgType\x12\x10\n\x08robot_id\x18\x04 \x01(\t\x12*\n\x0crobot_status\x18\x05 \x01(\x0b\x32\x12.RobotStatusUploadH\x00\x12(\n\x0b\x64\x65vice_data\x18\x06 \x01(\x0b\x32\x11.DeviceDataUploadH\x00\x12\x32\n\x10\x65nvironment_data\x18\x07 \x01(\x0b\x32\x16.EnvironmentDataUploadH\x00\x12\x39\n\x14\x61rrive_service_point\x18\x08 \x01(\x0b\x32\x19.ArriveServicePointUploadH\x00\x42\x0b\n\tdata_json\"\x93\x01\n\x11ServerCmdResponse\x12\x12\n\ncommand_id\x18\x01 \x01(\x03\x12\x14\n\x0c\x63ommand_time\x18\x02 \x01(\x03\x12\x1e\n\x0c\x63ommand_type\x18\x03 \x01(\x0e\x32\x08.CmdType\x12\x10\n\x08robot_id\x18\x04 \x01(\t\x12\"\n\tdata_json\x18\x05 \x01(\x0b\x32\x0f.ServerResponse\"\xf2\x01\n\x10ServerCmdRequest\x12\x12\n\ncommand_id\x18\x01 \x01(\x03\x12\x14\n\x0c\x63ommand_time\x18\x02 \x01(\x03\x12\x1e\n\x0c\x63ommand_type\x18\x03 \x01(\x0e\x32\x08.CmdType\x12\x10\n\x08robot_id\x18\x04 \x01(\t\x12/\n\x12robot_mode_command\x18\x05 \x01(\x0b\x32\x11.RobotModeCommandH\x00\x12\x19\n\x08task_cmd\x18\x06 \x01(\x0b\x32\x05.TaskH\x00\x12)\n\x0fjoy_control_cmd\x18\x07 \x01(\x0b\x32\x0e.JoyControlCmdH\x00\x42\x0b\n\tdata_json\"\x89\x01\n\x13RobotUploadResponse\x12\x0e\n\x06msg_id\x18\x01 \x01(\x03\x12\x10\n\x08msg_time\x18\x02 \x01(\x03\x12\x1a\n\x08msg_type\x18\x03 \x01(\x0e\x32\x08.MsgType\x12\x10\n\x08robot_id\x18\x04 \x01(\t\x12\"\n\tdata_json\x18\x05 \x01(\x0b\x32\x0f.ServerResponse*\xb9\x01\n\rOperationMode\x12\x1e\n\x1aOPERATION_MODE_UNSPECIFIED\x10\x00\x12\x18\n\x14OPERATION_MODE_PHOTO\x10\x01\x12\x1a\n\x16OPERATION_MODE_COLLECT\x10\x02\x12\x17\n\x13OPERATION_MODE_DOOR\x10\x03\x12\x1d\n\x19OPERATION_MODE_INSPECTION\x10\x04\x12\x1a\n\x16OPERATION_MODE_SERVICE\x10\x05*\xc3\x01\n\nTaskStatus\x12\x1b\n\x17TASK_STATUS_UNSPECIFIED\x10\x00\x12\x17\n\x13TASK_STATUS_PENDING\x10\x01\x12\x17\n\x13TASK_STATUS_RUNNING\x10\x02\x12\x19\n\x15TASK_STATUS_COMPLETED\x10\x03\x12\x16\n\x12TASK_STATUS_FAILED\x10\x04\x12\x19\n\x15TASK_STATUS_CANCELLED\x10\x05\x12\x18\n\x14TASK_STATUS_RETRYING\x10\x06*[\n\x07MsgType\x12\x10\n\x0cROBOT_STATUS\x10\x00\x12\x0f\n\x0b\x44\x45VICE_DATA\x10\x01\x12\x14\n\x10\x45NVIRONMENT_DATA\x10\x02\x12\x17\n\x13\x41RRIVE_SERVER_POINT\x10\x03*[\n\x07\x43mdType\x12\x12\n\x0eROBOT_MODE_CMD\x10\x00\x12\x12\n\x0eINSPECTION_CMD\x10\x01\x12\x14\n\x10SERVICE_TASK_CMD\x10\x02\x12\x12\n\x0eMOUSE_MOVE_CMD\x10\x03*L\n\nMoveStatus\x12\x08\n\x04IDLE\x10\x00\x12\x0b\n\x07RUNNING\x10\x01\x12\r\n\tSUCCEEDED\x10\x02\x12\n\n\x06\x46\x41ILED\x10\x03\x12\x0c\n\x08\x43\x41NCELED\x10\x04*3\n\tRobotMode\x12\x0e\n\nINSPECTION\x10\x00\x12\x0b\n\x07SERVICE\x10\x01\x12\t\n\x05\x45STOP\x10\x02\x32\x89\x01\n\x0cRobotService\x12=\n\x0c\x63lientUpload\x12\x13.RobotUploadRequest\x1a\x14.RobotUploadResponse(\x01\x30\x01\x12:\n\rserverCommand\x12\x12.ServerCmdResponse\x1a\x11.ServerCmdRequest(\x01\x30\x01\x42\x31\n\x1aorg.springblade.robot.grpcB\x11RobotServiceProtoP\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x18proto/RobotService.proto\x1a\x1cgoogle/protobuf/struct.proto\";\n\x0b\x42\x61tteryInfo\x12\x15\n\rpower_percent\x18\x01 \x01(\x01\x12\x15\n\rcharge_status\x18\x02 \x01(\t\"Y\n\x0cPositionInfo\x12\x17\n\x0f\x41GVPositionInfo\x18\x01 \x03(\x01\x12\x17\n\x0f\x41RMPositionInfo\x18\x02 \x03(\x01\x12\x17\n\x0f\x45XTPositionInfo\x18\x03 \x03(\x01\"6\n\x0cTaskListInfo\x12&\n\x14inspection_task_list\x18\x01 \x03(\x0b\x32\x08.Station\"\x92\x01\n\x0cSystemStatus\x12 \n\x0bmove_status\x18\x01 \x01(\x0e\x32\x0b.MoveStatus\x12\x14\n\x0cis_connected\x18\x02 \x01(\x08\x12\x19\n\x11soft_estop_status\x18\x03 \x01(\x08\x12\x19\n\x11hard_estop_status\x18\x04 \x01(\x08\x12\x14\n\x0c\x65stop_status\x18\x05 \x01(\x08\"9\n\tErrorInfo\x12\x0c\n\x04\x63ode\x18\x01 \x01(\x05\x12\r\n\x05level\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\"H\n\nDeviceInfo\x12\x11\n\tdevice_id\x18\x01 \x01(\t\x12\x11\n\tdata_type\x18\x02 \x01(\t\x12\x14\n\x0cimage_base64\x18\x03 \x03(\t\"\x99\x01\n\x0f\x45nvironmentInfo\x12\x13\n\x0btemperature\x18\x01 \x01(\x01\x12\x10\n\x08humidity\x18\x02 \x01(\x01\x12\x0e\n\x06oxygen\x18\x03 \x01(\x01\x12\x15\n\rcarbonDioxide\x18\x04 \x01(\x01\x12\x0c\n\x04pm25\x18\x05 \x01(\x01\x12\x0c\n\x04pm10\x18\x06 \x01(\x01\x12\r\n\x05\x65tvoc\x18\x07 \x01(\x01\x12\r\n\x05noise\x18\x08 \x01(\x01\"+\n\x16\x41rriveServicePointInfo\x12\x11\n\tis_arrive\x18\x01 \x01(\x08\"\xca\x01\n\x11RobotStatusUpload\x12\"\n\x0c\x62\x61ttery_info\x18\x01 \x01(\x0b\x32\x0c.BatteryInfo\x12$\n\rposition_info\x18\x02 \x01(\x0b\x32\r.PositionInfo\x12%\n\x0etask_list_info\x18\x03 \x01(\x0b\x32\r.TaskListInfo\x12$\n\rsystem_status\x18\x04 \x01(\x0b\x32\r.SystemStatus\x12\x1e\n\nerror_info\x18\x05 \x01(\x0b\x32\n.ErrorInfo\"\x81\x01\n\x10\x44\x65viceDataUpload\x12$\n\rposition_info\x18\x01 \x01(\x0b\x32\r.PositionInfo\x12%\n\x0etask_list_info\x18\x02 \x01(\x0b\x32\r.TaskListInfo\x12 \n\x0b\x64\x65vice_info\x18\x03 \x01(\x0b\x32\x0b.DeviceInfo\"\x90\x01\n\x15\x45nvironmentDataUpload\x12$\n\rposition_info\x18\x01 \x01(\x0b\x32\r.PositionInfo\x12%\n\x0etask_list_info\x18\x02 \x01(\x0b\x32\r.TaskListInfo\x12*\n\x10\x65nvironment_info\x18\x03 \x01(\x0b\x32\x10.EnvironmentInfo\"\xa3\x01\n\x18\x41rriveServicePointUpload\x12$\n\rposition_info\x18\x01 \x01(\x0b\x32\r.PositionInfo\x12%\n\x0etask_list_info\x18\x02 \x01(\x0b\x32\r.TaskListInfo\x12:\n\x19\x61rrive_service_point_info\x18\x03 \x01(\x0b\x32\x17.ArriveServicePointInfo\",\n\x0eServerResponse\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0c\n\x04info\x18\x02 \x01(\t\"\xb6\x02\n\x12RobotUploadRequest\x12\x0e\n\x06msg_id\x18\x01 \x01(\x03\x12\x10\n\x08msg_time\x18\x02 \x01(\x03\x12\x1a\n\x08msg_type\x18\x03 \x01(\x0e\x32\x08.MsgType\x12\x10\n\x08robot_id\x18\x04 \x01(\t\x12*\n\x0crobot_status\x18\x05 \x01(\x0b\x32\x12.RobotStatusUploadH\x00\x12(\n\x0b\x64\x65vice_data\x18\x06 \x01(\x0b\x32\x11.DeviceDataUploadH\x00\x12\x32\n\x10\x65nvironment_data\x18\x07 \x01(\x0b\x32\x16.EnvironmentDataUploadH\x00\x12\x39\n\x14\x61rrive_service_point\x18\x08 \x01(\x0b\x32\x19.ArriveServicePointUploadH\x00\x42\x0b\n\tdata_json\"\x89\x01\n\x13RobotUploadResponse\x12\x0e\n\x06msg_id\x18\x01 \x01(\x03\x12\x10\n\x08msg_time\x18\x02 \x01(\x03\x12\x1a\n\x08msg_type\x18\x03 \x01(\x0e\x32\x08.MsgType\x12\x10\n\x08robot_id\x18\x04 \x01(\t\x12\"\n\tdata_json\x18\x05 \x01(\x0b\x32\x0f.ServerResponse\"]\n\x0fOperationConfig\x12&\n\x0eoperation_mode\x18\x01 \x01(\x0e\x32\x0e.OperationMode\x12\x0f\n\x07\x64oor_ip\x18\x02 \x01(\t\x12\x11\n\tdevice_id\x18\x03 \x01(\t\"\xa3\x01\n\rStationConfig\x12\x12\n\nstation_id\x18\x01 \x01(\t\x12\x0c\n\x04sort\x18\x02 \x01(\x05\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x12\n\nagv_marker\x18\x04 \x01(\t\x12\x11\n\trobot_pos\x18\x05 \x03(\x01\x12\x0f\n\x07\x65xt_pos\x18\x06 \x03(\x01\x12*\n\x10operation_config\x18\x07 \x01(\x0b\x32\x10.OperationConfig\"\xdf\x02\n\x07Station\x12&\n\x0estation_config\x18\x01 \x01(\x0b\x32\x0e.StationConfig\x12\"\n\x06status\x18\x02 \x01(\x0e\x32\x12.StationTaskStatus\x12\x15\n\rgenerate_time\x18\x03 \x01(\x03\x12\x12\n\ncreated_at\x18\x04 \x01(\x03\x12\x12\n\nstarted_at\x18\x05 \x01(\x03\x12\x14\n\x0c\x63ompleted_at\x18\x06 \x01(\x03\x12\x13\n\x0bretry_count\x18\x07 \x01(\x05\x12\x13\n\x0bmax_retries\x18\x08 \x01(\x05\x12\x15\n\rerror_message\x18\t \x01(\t\x12)\n\tmeta_data\x18\n \x03(\x0b\x32\x16.Station.MetaDataEntry\x1aG\n\rMetaDataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12%\n\x05value\x18\x02 \x01(\x0b\x32\x16.google.protobuf.Value:\x02\x38\x01\".\n\x0cRobotModeCmd\x12\x1e\n\nrobot_mode\x18\x01 \x01(\x0e\x32\n.RobotMode\"B\n\rJoyControlCmd\x12\x18\n\x10\x61ngular_velocity\x18\x01 \x01(\t\x12\x17\n\x0flinear_velocity\x18\x02 \x01(\t\"\x93\x01\n\x11ServerCmdResponse\x12\x12\n\ncommand_id\x18\x01 \x01(\x03\x12\x14\n\x0c\x63ommand_time\x18\x02 \x01(\x03\x12\x1e\n\x0c\x63ommand_type\x18\x03 \x01(\x0e\x32\x08.CmdType\x12\x10\n\x08robot_id\x18\x04 \x01(\t\x12\"\n\tdata_json\x18\x05 \x01(\x0b\x32\x0f.ServerResponse\"\xf1\x01\n\x10ServerCmdRequest\x12\x12\n\ncommand_id\x18\x01 \x01(\x03\x12\x14\n\x0c\x63ommand_time\x18\x02 \x01(\x03\x12\x1e\n\x0c\x63ommand_type\x18\x03 \x01(\x0e\x32\x08.CmdType\x12\x10\n\x08robot_id\x18\x04 \x01(\t\x12+\n\x12robot_mode_command\x18\x05 \x01(\x0b\x32\r.RobotModeCmdH\x00\x12\x1c\n\x08task_cmd\x18\x06 \x01(\x0b\x32\x08.StationH\x00\x12)\n\x0fjoy_control_cmd\x18\x07 \x01(\x0b\x32\x0e.JoyControlCmdH\x00\x42\x0b\n\tdata_json*\x9d\x01\n\rOperationMode\x12\x17\n\x13OPERATION_MODE_NONE\x10\x00\x12\x1c\n\x18OPERATION_MODE_OPEN_DOOR\x10\x01\x12\x1d\n\x19OPERATION_MODE_CLOSE_DOOR\x10\x02\x12\x1a\n\x16OPERATION_MODE_CAPTURE\x10\x03\x12\x1a\n\x16OPERATION_MODE_SERVICE\x10\x04*\xa4\x02\n\x11StationTaskStatus\x12#\n\x1fSTATION_TASK_STATUS_UNSPECIFIED\x10\x00\x12\x1f\n\x1bSTATION_TASK_STATUS_PENDING\x10\x01\x12\x1f\n\x1bSTATION_TASK_STATUS_RUNNING\x10\x02\x12!\n\x1dSTATION_TASK_STATUS_COMPLETED\x10\x03\x12\x1e\n\x1aSTATION_TASK_STATUS_FAILED\x10\x04\x12!\n\x1dSTATION_TASK_STATUS_CANCELLED\x10\x05\x12 \n\x1cSTATION_TASK_STATUS_RETRYING\x10\x06\x12 \n\x1cSTATION_TASK_STATUS_TO_RETRY\x10\x07*\xc3\x01\n\nTaskStatus\x12\x1b\n\x17TASK_STATUS_UNSPECIFIED\x10\x00\x12\x17\n\x13TASK_STATUS_PENDING\x10\x01\x12\x17\n\x13TASK_STATUS_RUNNING\x10\x02\x12\x19\n\x15TASK_STATUS_COMPLETED\x10\x03\x12\x16\n\x12TASK_STATUS_FAILED\x10\x04\x12\x19\n\x15TASK_STATUS_CANCELLED\x10\x05\x12\x18\n\x14TASK_STATUS_RETRYING\x10\x06*[\n\x07MsgType\x12\x10\n\x0cROBOT_STATUS\x10\x00\x12\x0f\n\x0b\x44\x45VICE_DATA\x10\x01\x12\x14\n\x10\x45NVIRONMENT_DATA\x10\x02\x12\x17\n\x13\x41RRIVE_SERVER_POINT\x10\x03*\x8f\x01\n\x07\x43mdType\x12\x10\n\x0cRESPONSE_CMD\x10\x00\x12\x12\n\x0eROBOT_MODE_CMD\x10\x01\x12\x0c\n\x08TASK_CMD\x10\x02\x12\x13\n\x0fJOY_CONTROL_CMD\x10\x03\x12\x12\n\x0eSET_MARKER_CMD\x10\x04\x12\x0e\n\nCHARGE_CMD\x10\x05\x12\x17\n\x13POSITION_ADJUST_CMD\x10\x06*L\n\nMoveStatus\x12\x08\n\x04IDLE\x10\x00\x12\x0b\n\x07RUNNING\x10\x01\x12\r\n\tSUCCEEDED\x10\x02\x12\n\n\x06\x46\x41ILED\x10\x03\x12\x0c\n\x08\x43\x41NCELED\x10\x04*P\n\tRobotMode\x12\x0e\n\nINSPECTION\x10\x00\x12\x0b\n\x07SERVICE\x10\x01\x12\x0f\n\x0bJOY_CONTROL\x10\x02\x12\t\n\x05\x45STOP\x10\x03\x12\n\n\x06\x43HARGE\x10\x04\x32\x89\x01\n\x0cRobotService\x12=\n\x0c\x63lientUpload\x12\x13.RobotUploadRequest\x1a\x14.RobotUploadResponse(\x01\x30\x01\x12:\n\rserverCommand\x12\x12.ServerCmdResponse\x1a\x11.ServerCmdRequest(\x01\x30\x01\x42\x31\n\x1aorg.springblade.robot.grpcB\x11RobotServiceProtoP\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,64 +33,68 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'proto.RobotService_pb2', _g
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\032org.springblade.robot.grpcB\021RobotServiceProtoP\001'
-  _globals['_TASK_METADATAENTRY']._loaded_options = None
-  _globals['_TASK_METADATAENTRY']._serialized_options = b'8\001'
-  _globals['_OPERATIONMODE']._serialized_start=2949
-  _globals['_OPERATIONMODE']._serialized_end=3134
-  _globals['_TASKSTATUS']._serialized_start=3137
-  _globals['_TASKSTATUS']._serialized_end=3332
-  _globals['_MSGTYPE']._serialized_start=3334
-  _globals['_MSGTYPE']._serialized_end=3425
-  _globals['_CMDTYPE']._serialized_start=3427
-  _globals['_CMDTYPE']._serialized_end=3518
-  _globals['_MOVESTATUS']._serialized_start=3520
-  _globals['_MOVESTATUS']._serialized_end=3596
-  _globals['_ROBOTMODE']._serialized_start=3598
-  _globals['_ROBOTMODE']._serialized_end=3649
-  _globals['_BATTERYINFO']._serialized_start=91
-  _globals['_BATTERYINFO']._serialized_end=150
-  _globals['_POSITIONINFO']._serialized_start=152
-  _globals['_POSITIONINFO']._serialized_end=279
-  _globals['_TASKINFO']._serialized_start=281
-  _globals['_TASKINFO']._serialized_end=328
-  _globals['_SYSTEMSTATUS']._serialized_start=331
-  _globals['_SYSTEMSTATUS']._serialized_end=477
-  _globals['_ERRORINFO']._serialized_start=479
-  _globals['_ERRORINFO']._serialized_end=536
-  _globals['_ROBOTSTATUSUPLOAD']._serialized_start=539
-  _globals['_ROBOTSTATUSUPLOAD']._serialized_end=732
-  _globals['_DEVICEINFO']._serialized_start=734
-  _globals['_DEVICEINFO']._serialized_end=806
-  _globals['_DEVICEDATAUPLOAD']._serialized_start=808
-  _globals['_DEVICEDATAUPLOAD']._serialized_end=928
-  _globals['_SENSORDATA']._serialized_start=931
-  _globals['_SENSORDATA']._serialized_end=1080
-  _globals['_ENVIRONMENTDATAUPLOAD']._serialized_start=1082
-  _globals['_ENVIRONMENTDATAUPLOAD']._serialized_end=1207
-  _globals['_ARRIVESERVICEPOINTUPLOAD']._serialized_start=1209
-  _globals['_ARRIVESERVICEPOINTUPLOAD']._serialized_end=1265
-  _globals['_SERVERRESPONSE']._serialized_start=1267
-  _globals['_SERVERRESPONSE']._serialized_end=1311
-  _globals['_ROBOTMODECOMMAND']._serialized_start=1313
-  _globals['_ROBOTMODECOMMAND']._serialized_end=1363
-  _globals['_OPERATIONCONFIG']._serialized_start=1365
-  _globals['_OPERATIONCONFIG']._serialized_end=1458
-  _globals['_STATIONCONFIG']._serialized_start=1461
-  _globals['_STATIONCONFIG']._serialized_end=1624
-  _globals['_TASK']._serialized_start=1627
-  _globals['_TASK']._serialized_end=2030
-  _globals['_TASK_METADATAENTRY']._serialized_start=1959
-  _globals['_TASK_METADATAENTRY']._serialized_end=2030
-  _globals['_JOYCONTROLCMD']._serialized_start=2032
-  _globals['_JOYCONTROLCMD']._serialized_end=2098
-  _globals['_ROBOTUPLOADREQUEST']._serialized_start=2101
-  _globals['_ROBOTUPLOADREQUEST']._serialized_end=2411
-  _globals['_SERVERCMDRESPONSE']._serialized_start=2414
-  _globals['_SERVERCMDRESPONSE']._serialized_end=2561
-  _globals['_SERVERCMDREQUEST']._serialized_start=2564
-  _globals['_SERVERCMDREQUEST']._serialized_end=2806
-  _globals['_ROBOTUPLOADRESPONSE']._serialized_start=2809
-  _globals['_ROBOTUPLOADRESPONSE']._serialized_end=2946
-  _globals['_ROBOTSERVICE']._serialized_start=3652
-  _globals['_ROBOTSERVICE']._serialized_end=3789
+  _globals['_STATION_METADATAENTRY']._loaded_options = None
+  _globals['_STATION_METADATAENTRY']._serialized_options = b'8\001'
+  _globals['_OPERATIONMODE']._serialized_start=3024
+  _globals['_OPERATIONMODE']._serialized_end=3181
+  _globals['_STATIONTASKSTATUS']._serialized_start=3184
+  _globals['_STATIONTASKSTATUS']._serialized_end=3476
+  _globals['_TASKSTATUS']._serialized_start=3479
+  _globals['_TASKSTATUS']._serialized_end=3674
+  _globals['_MSGTYPE']._serialized_start=3676
+  _globals['_MSGTYPE']._serialized_end=3767
+  _globals['_CMDTYPE']._serialized_start=3770
+  _globals['_CMDTYPE']._serialized_end=3913
+  _globals['_MOVESTATUS']._serialized_start=3915
+  _globals['_MOVESTATUS']._serialized_end=3991
+  _globals['_ROBOTMODE']._serialized_start=3993
+  _globals['_ROBOTMODE']._serialized_end=4073
+  _globals['_BATTERYINFO']._serialized_start=58
+  _globals['_BATTERYINFO']._serialized_end=117
+  _globals['_POSITIONINFO']._serialized_start=119
+  _globals['_POSITIONINFO']._serialized_end=208
+  _globals['_TASKLISTINFO']._serialized_start=210
+  _globals['_TASKLISTINFO']._serialized_end=264
+  _globals['_SYSTEMSTATUS']._serialized_start=267
+  _globals['_SYSTEMSTATUS']._serialized_end=413
+  _globals['_ERRORINFO']._serialized_start=415
+  _globals['_ERRORINFO']._serialized_end=472
+  _globals['_DEVICEINFO']._serialized_start=474
+  _globals['_DEVICEINFO']._serialized_end=546
+  _globals['_ENVIRONMENTINFO']._serialized_start=549
+  _globals['_ENVIRONMENTINFO']._serialized_end=702
+  _globals['_ARRIVESERVICEPOINTINFO']._serialized_start=704
+  _globals['_ARRIVESERVICEPOINTINFO']._serialized_end=747
+  _globals['_ROBOTSTATUSUPLOAD']._serialized_start=750
+  _globals['_ROBOTSTATUSUPLOAD']._serialized_end=952
+  _globals['_DEVICEDATAUPLOAD']._serialized_start=955
+  _globals['_DEVICEDATAUPLOAD']._serialized_end=1084
+  _globals['_ENVIRONMENTDATAUPLOAD']._serialized_start=1087
+  _globals['_ENVIRONMENTDATAUPLOAD']._serialized_end=1231
+  _globals['_ARRIVESERVICEPOINTUPLOAD']._serialized_start=1234
+  _globals['_ARRIVESERVICEPOINTUPLOAD']._serialized_end=1397
+  _globals['_SERVERRESPONSE']._serialized_start=1399
+  _globals['_SERVERRESPONSE']._serialized_end=1443
+  _globals['_ROBOTUPLOADREQUEST']._serialized_start=1446
+  _globals['_ROBOTUPLOADREQUEST']._serialized_end=1756
+  _globals['_ROBOTUPLOADRESPONSE']._serialized_start=1759
+  _globals['_ROBOTUPLOADRESPONSE']._serialized_end=1896
+  _globals['_OPERATIONCONFIG']._serialized_start=1898
+  _globals['_OPERATIONCONFIG']._serialized_end=1991
+  _globals['_STATIONCONFIG']._serialized_start=1994
+  _globals['_STATIONCONFIG']._serialized_end=2157
+  _globals['_STATION']._serialized_start=2160
+  _globals['_STATION']._serialized_end=2511
+  _globals['_STATION_METADATAENTRY']._serialized_start=2440
+  _globals['_STATION_METADATAENTRY']._serialized_end=2511
+  _globals['_ROBOTMODECMD']._serialized_start=2513
+  _globals['_ROBOTMODECMD']._serialized_end=2559
+  _globals['_JOYCONTROLCMD']._serialized_start=2561
+  _globals['_JOYCONTROLCMD']._serialized_end=2627
+  _globals['_SERVERCMDRESPONSE']._serialized_start=2630
+  _globals['_SERVERCMDRESPONSE']._serialized_end=2777
+  _globals['_SERVERCMDREQUEST']._serialized_start=2780
+  _globals['_SERVERCMDREQUEST']._serialized_end=3021
+  _globals['_ROBOTSERVICE']._serialized_start=4076
+  _globals['_ROBOTSERVICE']._serialized_end=4213
 # @@protoc_insertion_point(module_scope)

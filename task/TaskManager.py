@@ -1,14 +1,16 @@
 from datetime import datetime
 import json
 import uuid
-import hashlib
-from typing import Dict, List
+import logging
+from typing import Dict, List, Any
+from utils.dataConverter import convert_task_cmd_to_task
 from task.TaskDatabase import TaskDatabase
 from task.TaskScheduler import TaskScheduler
-from dataModels.TaskModels import StationConfig, Task, OperationMode, OperationConfig
-import logging
+from dataModels.CommandModels import TaskCmd, CmdType
+from dataModels.TaskModels import Task, Station, StationConfig, OperationConfig, OperationMode, RobotMode, TaskStatus, StationTaskStatus
+
 class TaskManager:
-    """任务管理器 - 主控制器"""
+    """任务管理器 - 主控制器，负责任务的接收、解析和调度"""
     
     def __init__(self, robot_controller):
         self.robot_controller = robot_controller
@@ -23,172 +25,188 @@ class TaskManager:
         self.scheduler.register_callback("on_task_start", self._on_task_start)
         self.scheduler.register_callback("on_task_complete", self._on_task_complete)
         self.scheduler.register_callback("on_task_failed", self._on_task_failed)
+        self.scheduler.register_callback("on_station_start", self._on_station_start)
+        self.scheduler.register_callback("on_station_complete", self._on_station_complete)
+        self.scheduler.register_callback("on_station_failed", self._on_station_failed)
+        self.scheduler.register_callback("on_station_retry", self._on_station_retry)
     
-    def receive_task_from_cmd(self, task_cmd) -> str:
-        """从TaskCmd接收任务"""
+    def receive_task_from_cmd(self, task_cmd: TaskCmd) -> str:
+        """从TaskCmd接收任务
+        
+        Args:
+            task_cmd: 任务命令对象
+            
+        Returns:
+            str: 生成的任务ID
+        """
         try:
-            # 提取任务信息
-            task_id = task_cmd.taskId
-            robot_mode = task_cmd.robotMode
-            station_tasks = task_cmd.stationTasks
+            # 解析TaskCmd为Task对象
+            task = convert_task_cmd_to_task(task_cmd)
             
-            # 为每个站点创建一个单独的Task对象
-            task_ids = []
-            for station_data in station_tasks:
-                # 创建站点配置
-                station = StationConfig(
-                    station_id=station_data.station_id,
-                    sort=station_data.sort,
-                    name=station_data.name,
-                    agv_marker=station_data.agv_marker,
-                    robot_pos=station_data.robot_pos,
-                    ext_pos=station_data.ext_pos,
-                    operation_config=station_data.operation_config
-                )
-                
-                # 生成任务ID
-                task_id = f"{task_id}_{station.station_id}"
-                
-                # 创建巡检任务
-                task = Task(
-                    task_id=task_id,
-                    station=station,
-                    priority=self._calculate_priority([station]),
-                    metadata={
-                        "source": "cmd", 
-                        "station_id": station.station_id,
-                        "robot_mode": robot_mode
-                    }
-                )
-                
-                # 添加到调度器
-                self.scheduler.add_task(task)
-                task_ids.append(task_id)
+            # 添加到调度器
+            self.scheduler.add_task(task)
             
-            # 返回第一个任务ID或空字符串
-            return task_ids[0] if task_ids else ""
+            self.logger.info(f"从TaskCmd接收任务成功，任务ID: {task.task_id}")
+            return task.task_id
             
         except Exception as e:
             self.logger.error(f"从TaskCmd接收任务失败: {e}")
             raise
     
-    def receive_task_from_json(self, json_data: Dict) -> str:
-        """从JSON接收单个任务"""
-        try:
-            # 解析JSON数据
-            stations_data = json_data.get("stations", {})
+
+    def receive_task_from_dict(self, task_dict: Dict[str, Any]) -> str:
+        """从字典接收任务
+        
+        Args:
+            task_dict: 任务字典
             
-            # 为每个站点创建一个单独的InspectionTask对象
-            task_ids = []
-            for station_id, station_info in stations_data.items():
-                # 创建操作配置对象
-                operation_config_data = station_info.get("operation_config", {})
+        Returns:
+            str: 生成的任务ID
+        """
+        try:
+            # 提取任务信息
+            task_id = task_dict.get("task_id", f"TASK_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            task_name = task_dict.get("task_name", "未知任务")
+            robot_mode = RobotMode(task_dict.get("robot_mode", "inspection"))
+            generate_time = datetime.fromisoformat(task_dict.get("generate_time")) if task_dict.get("generate_time") else datetime.now()
+            
+            # 创建站点列表
+            station_list = []
+            station_configs = task_dict.get("station_config_tasks", [])
+            
+            for station_config_dict in station_configs:
+                # 创建操作配置
+                operation_config_dict = station_config_dict.get("operation_config", {})
                 operation_config = OperationConfig(
-                    operation_mode=OperationMode(operation_config_data.get("operation_mode", "None")),
-                    door_ip=operation_config_data.get("door_ip"),
-                    device_id=operation_config_data.get("device_id")
+                    operation_mode=OperationMode(operation_config_dict.get("operation_mode", "none")),
+                    door_ip=operation_config_dict.get("door_ip"),
+                    device_id=operation_config_dict.get("device_id")
                 )
                 
-                station = StationConfig(
-                    station_id=station_id,
-                    name=station_info.get("name", ""),
-                    agv_marker=station_info.get("agv_marker", ""),
-                    robot_pos=station_info.get("robot_pos", []),
-                    ext_pos=station_info.get("ext_pos", []),
+                # 创建站点配置
+                station_config = StationConfig(
+                    station_id=station_config_dict.get("station_id"),
+                    sort=station_config_dict.get("sort", 0),
+                    name=station_config_dict.get("name", "未知站点"),
+                    agv_marker=station_config_dict.get("agv_marker", ""),
+                    robot_pos=station_config_dict.get("robot_pos", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+                    ext_pos=station_config_dict.get("ext_pos", [0.0, 0.0, 0.0, 0.0]),
                     operation_config=operation_config
                 )
                 
-                # 生成任务ID
-                task_id = self._generate_task_id({**json_data, "station_id": station_id})
-                
-                # 创建巡检任务
-                task = Task(
-                    task_id=task_id,
-                    station=station,
-                    priority=self._calculate_priority([station]),
-                    metadata={"source": "json", "station_id": station_id}
+                # 创建站点任务
+                station = Station(
+                    station_config=station_config,
+                    status=StationTaskStatus.PENDING,
+                    created_at=datetime.now(),
+                    retry_count=0,
+                    max_retries=3,
+                    metadata={
+                        "source": "dict",
+                        "task_id": task_id
+                    }
                 )
                 
-                # 添加到调度器
-                self.scheduler.add_task(task)
-                task_ids.append(task_id)
+                station_list.append(station)
             
-            # 返回第一个任务ID或空字符串
-            return task_ids[0] if task_ids else ""
+            # 创建任务对象
+            task = Task(
+                task_id=task_id,
+                task_name=task_name,
+                station_list=station_list,
+                status=TaskStatus.PENDING,
+                robot_mode=robot_mode,
+                generate_time=generate_time,
+                created_at=datetime.now(),
+                metadata={
+                    "source": "dict",
+                    "generate_time": generate_time.isoformat()
+                }
+            )
+            
+            # 添加到调度器
+            self.scheduler.add_task(task)
+            
+            self.logger.info(f"从字典接收任务成功，任务ID: {task.task_id}")
+            return task.task_id
             
         except Exception as e:
-            self.logger.error(f"接收任务失败: {e}")
+            self.logger.error(f"从字典接收任务失败: {e}")
             raise
     
-    def _generate_task_id(self, json_data: Dict) -> str:
-        """生成唯一任务ID"""
-        # 使用JSON内容的哈希值作为任务ID的一部分
-        json_str = json.dumps(json_data, sort_keys=True)
-        hash_str = hashlib.md5(json_str.encode()).hexdigest()[:8]
+    def get_task_status(self, task_id: str) -> Dict[str, Any]:
+        """获取任务状态
         
-        # 加上时间戳和随机数
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        random_str = str(uuid.uuid4())[:4]
-        
-        return f"TASK_{timestamp}_{hash_str}_{random_str}"
-    
-    def _calculate_priority(self, stations: List[StationConfig]) -> int:
-        """计算任务优先级"""
-        # TODO: 实现根据任务内容计算优先级的逻辑
-        # 根据任务内容计算优先级
-        # 例如：有充电任务优先级较高
-        for station in stations:
-            if "充电" in station.name:
-                return 10  # 最高优先级
-        return 1
-    
-    def get_task_status(self, task_id: str) -> Dict:
-        """获取任务状态"""
+        Args:
+            task_id: 任务ID
+            
+        Returns:
+            Dict[str, Any]: 任务状态信息
+        """
         try:
-            with self.database._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
-                row = cursor.fetchone()
-                
-                if row:
-                    return dict(row)
-                else:
-                    return {"error": "任务不存在"}
+            task = self.database.get_task_by_id(task_id)
+            if not task:
+                return {"error": "任务不存在"}
+            
+            # 获取站点任务
+            station_tasks = self.database.get_station_tasks(task_id)
+            
+            # 构建返回结果
+            result = {
+                "task": task,
+                "station_tasks": station_tasks
+            }
+            
+            return result
         except Exception as e:
             self.logger.error(f"获取任务状态失败: {e}")
             return {"error": str(e)}
     
-    def get_all_tasks(self, status: str = None) -> List[Dict]:
-        """获取所有任务"""
+    def get_all_tasks(self, status: str = None) -> List[Dict[str, Any]]:
+        """获取所有任务
+        
+        Args:
+            status: 任务状态过滤
+            
+        Returns:
+            List[Dict[str, Any]]: 任务列表
+        """
         try:
-            with self.database._get_connection() as conn:
-                cursor = conn.cursor()
-                
-                if status:
-                    cursor.execute(
-                        "SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC",
-                        (status,)
-                    )
-                else:
-                    cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC")
-                
-                return [dict(row) for row in cursor.fetchall()]
+            # 从数据库获取任务
+            # TODO: 实现按状态过滤
+            tasks = self.database.get_pending_tasks()
+            return tasks
         except Exception as e:
             self.logger.error(f"获取任务列表失败: {e}")
             return []
     
     def cancel_task(self, task_id: str) -> bool:
-        """取消任务"""
+        """取消任务
+        
+        Args:
+            task_id: 任务ID
+            
+        Returns:
+            bool: 是否取消成功
+        """
         # TODO: 实现任务取消逻辑
         self.logger.info(f"取消任务: {task_id}")
         return True
     
     def retry_task(self, task_id: str) -> bool:
-        """重试任务"""
+        """重试任务
+        
+        Args:
+            task_id: 任务ID
+            
+        Returns:
+            bool: 是否重试成功
+        """
         # TODO: 实现任务重试逻辑
         self.logger.info(f"重试任务: {task_id}")
         return True
     
+    # ==================== 回调函数 ====================
     def _on_task_start(self, task: Task):
         """任务开始回调"""
         self.logger.info(f"任务开始: {task.task_id}")
@@ -202,6 +220,26 @@ class TaskManager:
     def _on_task_failed(self, task: Task):
         """任务失败回调"""
         self.logger.error(f"任务失败: {task.task_id}")
+        # 可以在这里发送通知或更新UI
+    
+    def _on_station_start(self, station: Station):
+        """站点开始回调"""
+        self.logger.info(f"站点开始: {station.station_config.station_id}")
+        # 可以在这里发送通知或更新UI
+    
+    def _on_station_complete(self, station: Station):
+        """站点完成回调"""
+        self.logger.info(f"站点完成: {station.station_config.station_id}")
+        # 可以在这里发送通知或更新UI
+    
+    def _on_station_failed(self, station: Station):
+        """站点失败回调"""
+        self.logger.error(f"站点失败: {station.station_config.station_id}")
+        # 可以在这里发送通知或更新UI
+    
+    def _on_station_retry(self, station: Station):
+        """站点重试回调"""
+        self.logger.warning(f"站点重试: {station.station_config.station_id}, 重试次数: {station.retry_count}")
         # 可以在这里发送通知或更新UI
     
     def shutdown(self):
