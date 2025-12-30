@@ -7,7 +7,6 @@ import json
 from dataModels.TaskModels import Task
 
 
-
 class MsgType(Enum):
     """消息类型枚举"""
     ROBOT_STATUS = "robot_status"          # 机器人状态
@@ -23,6 +22,8 @@ class MoveStatus(Enum):
     SUCCEEDED = "succeeded"# 移动任务成功完成
     FAILED = "failed"      # 移动任务失败
     CANCELED = "canceled"  # 移动任务被取消
+    UNKNOWN = "unknown"    # 未知状态
+
 
 @dataclass
 class UploadResponse:
@@ -48,10 +49,9 @@ class BatteryInfo:
 @dataclass
 class PositionInfo:
     """位置信息"""
-    AGVPositionInfo: List[float]   # AGV位置信息 [x,y,theta]
-    ARMPositionInfo: List[float]   # 机械臂位置信息 [J1,J2,J3,J4,J5,J6]
-    EXTPositionInfo: List[float]   # 外部轴位置信息 [J1,J2,J3,J4]
-    targetPoint: str               # 目标点位
+    agv_position_info: List[float]   # AGV位置信息 [x,y,theta]
+    arm_position_info: List[float]   # 机械臂位置信息 [J1,J2,J3,J4,J5,J6]
+    ext_position_info: List[float]   # 外部轴位置信息 [J1,J2,J3,J4]
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -96,9 +96,9 @@ class ErrorInfo:
 @dataclass
 class DeviceInfo:
     """设备信息"""
-    deviceId: str           # 设备ID
-    dataType: str           # 数据类型
-    imageBase64: list[str]        # 图片数据
+    device_id: str           # 设备ID
+    data_type: str           # 数据类型
+    image_base64: list[str]        # 图片数据
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -110,7 +110,7 @@ class EnvironmentInfo:
     temperature: float       # 温度
     humidity: float          # 湿度
     oxygen: float            # O2浓度
-    carbonDioxide: float     # CO2浓度
+    carbon_dioxide: float     # CO2浓度
     pm25: float              # PM2.5浓度
     pm10: float              # PM10浓度
     etvoc: float             # eTVOC浓度
@@ -123,7 +123,7 @@ class EnvironmentInfo:
 @dataclass
 class ArriveServicePointInfo:
     """是否到达服务点"""
-    isArrive: bool          # 是否到达服务点
+    is_arrive: bool          # 是否到达服务点
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -132,83 +132,84 @@ class ArriveServicePointInfo:
 @dataclass
 class RobotStatusDataJson:
     """机器人状态数据"""
-    batteryInfo: BatteryInfo
-    positionInfo: PositionInfo
-    taskListInfo: TaskListInfo
-    systemStatus: SystemStatus
-    errorInfo: Optional[ErrorInfo] = None
+    battery_info: BatteryInfo
+    position_info: PositionInfo
+    task_info: Task
+    system_status: SystemStatus
+    error_info: Optional[ErrorInfo] = None
     
     def to_dict(self) -> Dict[str, Any]:
         result = {
-            "batteryInfo": self.batteryInfo.to_dict(),
-            "positionInfo": self.positionInfo.to_dict(),
-            "taskListInfo": self.taskListInfo.to_dict(),
-            "systemStatus": self.systemStatus.to_dict()
+            "battery_info": self.battery_info.to_dict(),
+            "position_info": self.position_info.to_dict(),
+            "task_info": self.task_info.to_dict(),
+            "system_status": self.system_status.to_dict()
         }
-        if self.errorInfo:
-            result["errorInfo"] = self.errorInfo.to_dict()
+        if self.error_info:
+            result["error_info"] = self.error_info.to_dict()
         return result
 
 @dataclass
 class DeviceDataJson:
     """设备巡检数据"""
-    positionInfo: PositionInfo
-    taskListInfo: TaskListInfo
-    deviceInfo: DeviceInfo
+    position_info: PositionInfo
+    task_info: Task
+    device_info: DeviceInfo
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "positionInfo": self.positionInfo.to_dict(),
-            "taskListInfo": self.taskListInfo.to_dict(),
-            "deviceInfo": self.deviceInfo.to_dict()
+            "position_info": self.position_info.to_dict(),
+            "task_info": self.task_info.to_dict(),
+            "device_info": self.device_info.to_dict()
         }
 
 
 @dataclass
 class EnvironmentDataJson:
     """环境巡检数据"""
-    positionInfo: PositionInfo
-    taskListInfo: TaskListInfo
-    environmentInfo: EnvironmentInfo
+    position_info: PositionInfo
+    task_info: Task
+    environment_info: EnvironmentInfo
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "positionInfo": self.positionInfo.to_dict(),
-            "taskListInfo": self.taskListInfo.to_dict(),
-            "environmentInfo": self.environmentInfo.to_dict()
+            "position_info": self.position_info.to_dict(),
+            "task_info": self.task_info.to_dict(),
+            "environment_info": self.environment_info.to_dict()
         }
 
 
 @dataclass
 class ArriveServePointDataJson:
     """是否到达服务点数据"""
-    positionInfo: PositionInfo
-    taskListInfo: TaskListInfo
-    arriveServePointInfo: ArriveServicePointInfo
+    position_info: PositionInfo
+    task_info: Task
+    arrive_service_point_info: ArriveServicePointInfo
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "positionInfo": self.positionInfo.to_dict(),
-            "taskListInfo": self.taskListInfo.to_dict(),
-            "arriveServePointInfo": self.arriveServePointInfo.to_dict()
+            "position_info": self.position_info.to_dict(),
+            "task_info": self.task_info.to_dict(),
+            "arrive_service_point_info": self.arrive_service_point_info.to_dict()
         }
+
 
 @dataclass
 class MessageEnvelope:
     """消息信封 - 所有数据传输的包装器"""
-    msgId: str              # 唯一消息ID，用于请求响应匹配和消息去重
-    msgTime: int            # 消息产生的时间戳（毫秒）
-    msgType: MsgType        # 核心路由字段，标识功能类型
-    robotId: str            # 机器人标识，用于会话管理和消息路由
-    dataJson: Dict[str, Any]  # 实际的功能数据Json
+    msg_id: str              # 唯一消息ID，用于请求响应匹配和消息去重
+    msg_time: int            # 消息产生的时间戳（毫秒）
+    msg_type: MsgType        # 核心路由字段，标识功能类型
+    robot_id: str            # 机器人标识，用于会话管理和消息路由
+    data_json: Dict[str, Any]  # 实际的功能数据Json
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "msgId": self.msgId,
-            "msgTime": self.msgTime,
-            "msgType": self.msgType.value,
-            "robotId": self.robotId,
-            "dataJson": self.dataJson
+            "msg_id": self.msg_id,
+            "msg_time": self.msg_time,
+            "msg_type": self.msg_type.value,
+            "robot_id": self.robot_id,
+            "data_json": self.data_json
         }
     
     def to_json(self) -> str:
@@ -229,26 +230,26 @@ _MSG_TYPE_TO_DATA_CLASS = {
 # 消息类型与数据类参数名的映射
 _MSG_TYPE_TO_PARAM_NAME = {
     MsgType.ROBOT_STATUS: {
-        "batteryInfo": "battery_info",
-        "positionInfo": "position_info", 
-        "taskInfo": "task_info",
-        "systemStatus": "system_status",
-        "errorInfo": "error_info"
+        "battery_info": "battery_info",
+        "position_info": "position_info", 
+        "task_info": "task_info",
+        "system_status": "system_status",
+        "error_info": "error_info"
     },
     MsgType.DEVICE_DATA: {
-        "positionInfo": "position_info",
-        "taskInfo": "task_info",
-        "deviceInfo": "device_info"
+        "position_info": "position_info",
+        "task_info": "task_info",
+        "device_info": "device_info"
     },
     MsgType.ENVIRONMENT_DATA: {
-        "positionInfo": "position_info",
-        "taskInfo": "task_info",
-        "environmentInfo": "environment_info"
+        "position_info": "position_info",
+        "task_info": "task_info",
+        "environment_info": "environment_info"
     },
     MsgType.ARRIVE_SERVER_POINT: {
-        "positionInfo": "position_info",
-        "taskInfo": "task_info",
-        "arriveServePointInfo": "arrive_service_point_info"
+        "position_info": "position_info",
+        "task_info": "task_info",
+        "arrive_service_point_info": "arrive_service_point_info"
     },
 }
 
@@ -287,11 +288,11 @@ def create_message_envelope(
     
     # 创建消息信封
     return MessageEnvelope(
-        msgId=msg_id,
-        msgTime=int(datetime.now().timestamp() * 1000),  # 毫秒时间戳
-        msgType=msg_type,
-        robotId=robot_id,
-        dataJson=data_obj.to_dict()
+        msg_id=msg_id,
+        msg_time=int(datetime.now().timestamp() * 1000),  # 毫秒时间戳
+        msg_type=msg_type,
+        robot_id=robot_id,
+        data_json=data_obj.to_dict()
     )
 
 # 保留原有的便捷方法，内部调用通用工厂方法
@@ -300,7 +301,7 @@ def create_robot_status_message(
     robot_id: str,
     battery_info: BatteryInfo,
     position_info: PositionInfo,
-    task_info: TaskListInfo,
+    task_info: Task,
     system_status: SystemStatus,
     error_info: Optional[ErrorInfo] = None
 ) -> MessageEnvelope:

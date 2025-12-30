@@ -84,27 +84,31 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         # 用于存储客户端消息的队列
         client_messages = queue.Queue()
         
-        # 创建一个线程来处理客户端消息
         def process_client_messages():
             """在单独的线程中处理客户端消息"""
+            logger.info(f"开始处理客户端消息: {client_id}")
             try:
+                logger.info(f"准备开始迭代请求: {client_id}")
                 for request in request_iterator:
                     # 将消息放入队列供主线程处理
+                    logger.info(f"收到客户端消息: {client_id}, 消息ID: {request.command_id}")
                     client_messages.put(request)
-                    
                     # 可以在这里立即处理客户端消息
-                    self._handle_cmd_response(request, client_id)
+                    # self._handle_cmd_response(request, client_id)
                     
             except Exception as e:
                 logger.error(f"处理客户端消息时出错: {e}")
+                
             finally:
                 # 当客户端断开连接时，放入一个特殊标记
+                logger.info(f"客户端消息处理结束: {client_id}")
                 client_messages.put(None)
-        
+
         # 启动客户端消息处理线程
         client_thread = threading.Thread(target=process_client_messages)
         client_thread.daemon = True
         client_thread.start()
+        time.sleep(1)
         
         try:
             # 命令类型计数器，用于循环生成不同类型的命令
@@ -112,7 +116,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             
             # 上次发送命令的时间
             last_send_time = time.time()
-            
+
             # 主循环：定期发送命令并检查客户端消息
             while True:
                 current_time = time.time()
@@ -125,15 +129,15 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                     command_type = command_type_counter % 4  # 0-3: robot_mode, task, joy_control, charge
                     
                     if command_type == 0:
-                        # 创建RobotModeCmd
-                        request = robot_service_pb2.ServerCmdRequest(
+                        # 创建RobotModeCommand
+                        request = robot_service_pb2.ServerStreamMessage(
                             command_id=self.command_counter,
                             command_time=int(current_time * 1000),
                             command_type=robot_service_pb2.CmdType.ROBOT_MODE_CMD,
-                            robot_id="ROBOT_001"
+                            robot_id=123456
                         )
-                        # 创建RobotModeCmd对象
-                        robot_mode_cmd = robot_service_pb2.RobotModeCmd()
+                        # 创建RobotModeCommand对象
+                        robot_mode_cmd = robot_service_pb2.RobotModeCommand()
                         robot_mode_cmd.robot_mode = robot_service_pb2.RobotMode.INSPECTION
                         
                         # 设置oneof字段
@@ -143,49 +147,12 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                         if not request.HasField('robot_mode_command'):
                             logger.error("RobotModeCommand字段设置失败")
                         else:
-                            logger.info(f"向客户端发送RobotModeCmd: {self.command_counter}, mode={robot_service_pb2.RobotMode.Name(robot_mode_cmd.robot_mode)}")
+                            logger.info(f"向客户端发送RobotModeCommand: {self.command_counter}, mode={robot_service_pb2.RobotMode.Name(robot_mode_cmd.robot_mode)}")
                         
                     elif command_type == 1:
-                        # 创建Task命令（Station类型）
-                        # 首先创建OperationConfig
-                        operation_config = robot_service_pb2.OperationConfig(
-                            operation_mode=robot_service_pb2.OperationMode.OPERATION_MODE_CAPTURE,
-                            door_ip="192.168.1.100",
-                            device_id=f"device_{self.command_counter}"
-                        )
-                        
-                        # 创建StationConfig
-                        station_config = robot_service_pb2.StationConfig(
-                            station_id=f"station_{self.command_counter}",
-                            sort=1,
-                            name=f"测试站点{self.command_counter}",
-                            agv_marker=f"marker_{self.command_counter}",
-                            robot_pos=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-                            ext_pos=[1.0, 2.0, 3.0, 4.0],
-                            operation_config=operation_config
-                        )
-                        
-                        # 创建Station（注意：ServerCmdRequest的task_cmd字段期望的是Station类型）
-                        station = robot_service_pb2.Station(
-                            station_config=station_config,
-                            status=robot_service_pb2.StationTaskStatus.STATION_TASK_STATUS_PENDING,
-                            generate_time=int(current_time * 1000),
-                            created_at=int(current_time * 1000),
-                            retry_count=0,
-                            max_retries=3,
-                            error_message=""
-                        )
-                        
-                        request = robot_service_pb2.ServerCmdRequest(
-                            command_id=self.command_counter,
-                            command_time=int(current_time * 1000),
-                            command_type=robot_service_pb2.CmdType.TASK_CMD,
-                            robot_id="ROBOT_001"
-                        )
-                        
-                        # 设置task_cmd字段（注意：这里是station对象，不是task对象）
-                        request.task_cmd.CopyFrom(station)
-                        logger.info(f"向客户端发送Task命令: {self.command_counter}, station_id={station_config.station_id}")
+                        # 创建Task命令
+                        request = self.create_task()
+                        logger.info(f"向客户端发送Task命令: {self.command_counter}, task_id={request.task_cmd.task_id}")
                         
                     elif command_type == 2:
                         # 创建JoyControlCmd
@@ -194,11 +161,11 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                             linear_velocity="0.3"
                         )
                         
-                        request = robot_service_pb2.ServerCmdRequest(
+                        request = robot_service_pb2.ServerStreamMessage(
                             command_id=self.command_counter,
                             command_time=int(current_time * 1000),
                             command_type=robot_service_pb2.CmdType.JOY_CONTROL_CMD,
-                            robot_id="ROBOT_001"
+                            robot_id=123456
                         )
                         
                         # 设置joy_control_cmd字段
@@ -206,16 +173,16 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                         logger.info(f"向客户端发送JoyControlCmd: {self.command_counter}")
                         
                     else:  # command_type == 3
-                        # 创建RobotModeCmd - 充电模式
-                        request = robot_service_pb2.ServerCmdRequest(
+                        # 创建RobotModeCommand - 充电模式
+                        request = robot_service_pb2.ServerStreamMessage(
                             command_id=self.command_counter,
                             command_time=int(current_time * 1000),
                             command_type=robot_service_pb2.CmdType.ROBOT_MODE_CMD,
-                            robot_id="ROBOT_001"
+                            robot_id=123456
                         )
                         
-                        # 创建RobotModeCmd对象 - 充电模式
-                        robot_mode_cmd = robot_service_pb2.RobotModeCmd()
+                        # 创建RobotModeCommand对象 - 充电模式
+                        robot_mode_cmd = robot_service_pb2.RobotModeCommand()
                         robot_mode_cmd.robot_mode = robot_service_pb2.RobotMode.CHARGE
                         
                         # 设置oneof字段
@@ -249,13 +216,67 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                 
                 # 短暂休眠，避免CPU占用过高
                 time.sleep(0.1)
-                    
+                
         except Exception as e:
             logger.error(f"处理serverCommand请求时出错: {e}")
         finally:
             if client_id in self.client_connections:
                 self.client_connections.remove(client_id)
             logger.info(f"客户端断开serverCommand连接: {client_id}")
+    
+            # 创建一个线程来处理客户端消息
+    
+    def create_task(self):
+        current_time = time.time()
+
+        # 首先创建OperationConfig
+        operation_config = robot_service_pb2.OperationConfig(
+            operation_mode=robot_service_pb2.OperationMode.OPERATION_MODE_CAPTURE,
+            door_ip="192.168.1.100",
+            device_id=123456
+        )
+        
+        # 创建StationConfig
+        station_config = robot_service_pb2.StationConfig(
+            station_id=123456,
+            sort=1,
+            name=f"测试站点{self.command_counter}",
+            agv_marker=f"marker_{self.command_counter}",
+            robot_pos=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            ext_pos=[1.0, 2.0, 3.0, 4.0],
+            operation_config=operation_config
+        )
+        
+        station = robot_service_pb2.Station(
+            station_config=station_config,
+            status=robot_service_pb2.StationTaskStatus.STATION_TASK_STATUS_PENDING,
+            generate_time=int(current_time * 1000),
+            created_at=int(current_time * 1000),
+            retry_count=0,
+            max_retries=3,
+            error_message=""
+        )
+
+        task = robot_service_pb2.Task(
+            task_id=123456,
+            task_name=f"task_{self.command_counter}",
+            station_list=[station],
+            status=robot_service_pb2.TaskStatus.TASK_STATUS_PENDING,
+            robot_mode=robot_service_pb2.RobotMode.INSPECTION,
+            generate_time=int(current_time * 1000),
+            created_at=int(current_time * 1000),
+            error_message=""
+        )
+        
+        request = robot_service_pb2.ServerStreamMessage(
+            command_id=self.command_counter,
+            command_time=int(current_time * 1000),
+            command_type=robot_service_pb2.CmdType.TASK_CMD,
+            robot_id=123456
+        )
+        
+        request.task_cmd.CopyFrom(task)
+        return request
     
     def _handle_cmd_response(self, request, client_id):
         """处理客户端上传的响应
@@ -334,7 +355,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         Args:
             environment_data: 环境数据
         """
-        env_info = environment_data.environment_info
+        env_info = environment_data.sensor_data
         logger.info(f"环境数据: "
                     f"温度={env_info.temperature:.1f}°C, "
                     f"湿度={env_info.humidity:.1f}%, "

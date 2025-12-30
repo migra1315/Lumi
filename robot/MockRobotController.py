@@ -383,7 +383,7 @@ class MockRobotController(RobotControllerBase):
                 device = random.choice(list(self.device_states.keys()))
                 new_state = "offline" if self.device_states[device] == "online" else "online"
                 self.device_states[device] = new_state
-                self.logger.info(f"设备 {device} 状态变为: {new_state}")
+                # self.logger.info(f"设备 {device} 状态变为: {new_state}")
             
             time.sleep(1)
     

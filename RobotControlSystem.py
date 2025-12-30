@@ -1,3 +1,4 @@
+from dataModels.TaskModels import TaskStatus
 from dataModels.TaskModels import Task
 from dataModels.TaskModels import RobotMode, StationTaskStatus
 """
@@ -17,7 +18,7 @@ import grpc
 import gRPC.RobotService_pb2 as robot_pb2
 from gRPC import RobotService_pb2_grpc
 from gRPC.StreamManager import ClientUploadStreamManager, ServerCommandStreamManager
-from utils.dataConverter import convert_server_cmd_to_command_envelope, convert_message_envelope_to_robot_upload_request
+from utils.dataConverter import convert_server_message_to_command_envelope, convert_message_envelope_to_robot_upload_request
 
 from task.TaskManager import TaskManager
 from robot.MockRobotController import MockRobotController
@@ -60,8 +61,8 @@ class RobotControlSystem:
         self.use_mock = use_mock
         
         # 系统状态
-        self.robot_id = self.config.get('robot_id', 'ROBOT_001')
-        self.current_mode = 'inspection'  # 初始为巡检模式
+        self.robot_id = self.config.get('robot_id', 123456)
+        self.current_mode = RobotMode.STAND_BY  # 初始为standby
         self.is_running = False
         
         # 初始化日志
@@ -166,8 +167,7 @@ class RobotControlSystem:
 
             # 启动持久化流
             client_upload_started = self.client_upload_manager.start_stream()
-            # client_upload_started = True
-            server_command_started = self.server_command_manager.start_stream()
+            server_command_started = self.server_command_manager.start_with_heartbeat()
             
             if client_upload_started and server_command_started:
                 self.is_connected = True
@@ -303,7 +303,7 @@ class RobotControlSystem:
             task_name="测试巡检任务",
             robot_mode=RobotMode.INSPECTION,
             generate_time=datetime.now(),
-            station_config_tasks=[
+            station_config_list=[
                station_config1,
                station_config2
             ]
@@ -327,10 +327,8 @@ class RobotControlSystem:
     def _handle_serverCommand_response(self, response):
         """处理从gRPC服务器收到的响应/命令"""
         try:
-            command_envelope = convert_server_cmd_to_command_envelope(response)
-            self._handle_command(command_envelope)
-            self.logger.info(f"处理gRPC响应: {response}")
-            
+            command_envelope = convert_server_message_to_command_envelope(response)
+            self._handle_command(command_envelope)            
         except Exception as e:
             self.logger.error(f"处理gRPC响应失败: {e}")
             
@@ -409,7 +407,7 @@ class RobotControlSystem:
                 task_name=task_name,
                 robot_mode=robot_mode,
                 generate_time=generate_time,
-                station_config_tasks=[]
+                station_config_list=[]
             )
             
             # 处理每个站点任务
@@ -436,12 +434,12 @@ class RobotControlSystem:
                 )
                 
                 # 添加到TaskCmd对象
-                task_cmd_obj.station_config_tasks.append(station_config)
+                task_cmd_obj.station_config_list.append(station_config)
             
             # 添加到任务管理器
             task_id = self.task_manager.receive_task_from_cmd(task_cmd_obj)
             
-            self.logger.info(f"成功添加任务: {task_id}, 包含{len(task_cmd_obj.station_config_tasks)}个站点")
+            self.logger.info(f"成功添加任务: {task_id}, 包含{len(task_cmd_obj.station_config_list)}个站点")
         except Exception as e:
             self.logger.error(f"_handle_task_command 处理任务命令失败: {e}")
             raise
@@ -572,25 +570,39 @@ class RobotControlSystem:
         try:
             # 获取机器人状态
             robot_status = self.robot_controller.get_status()
+                        
+            # 构建位置信息
+            position_info = PositionInfo(
+                agv_position_info=[
+                    robot_status.get('current_position', {}).get('x', 0.0),
+                    robot_status.get('current_position', {}).get('y', 0.0),
+                    robot_status.get('current_position', {}).get('theta', 0.0)
+                ],
+                arm_position_info=robot_status.get('robot_joints', [0.0]*6),
+                ext_position_info=robot_status.get('ext_axis', [0.0]*4),
+            )
+            # 构建任务信息（当前执行的任务）
+            current_task = self.task_manager.scheduler.current_task
+            if current_task:
+                task_info = Task(
+                    task_id=current_task.task_id,
+                    task_name=current_task.task_name,
+                    station_list=[current_task] if current_task else []
+                )
+            else:
+                task_info = Task(
+                    task_id='',
+                    task_name='',
+                    station_list=[],
+                    status=TaskStatus.PENDING
+                )
             
             # 构建电池信息
             battery_info = BatteryInfo(
                 power_percent=robot_status.get('battery_level', 100.0),
                 charge_status='charging' if robot_status.get('status') == 'charging' else 'discharging'
             )
-            
-            # 构建位置信息
-            position_info = PositionInfo(
-                AGVPositionInfo=[
-                    robot_status.get('current_position', {}).get('x', 0.0),
-                    robot_status.get('current_position', {}).get('y', 0.0),
-                    robot_status.get('current_position', {}).get('theta', 0.0)
-                ],
-                ARMPositionInfo=robot_status.get('robot_joints', [0.0]*6),
-                EXTPositionInfo=robot_status.get('ext_axis', [0.0]*4),
-                targetPoint=robot_status.get('current_marker', '')
-            )
-            
+
             # 从MessageModels中导入MoveStatus枚举
             from dataModels.MessageModels import MoveStatus
             
@@ -608,12 +620,6 @@ class RobotControlSystem:
                 soft_estop_status=False,
                 hard_estop_status=False,
                 estop_status=False
-            )
-            
-            # 构建任务信息（当前执行的任务）
-            current_task = self.task_manager.scheduler.current_task
-            task_info = TaskListInfo(
-                inspection_task_list=[current_task] if current_task else []
             )
             
             # 创建消息信封
@@ -639,37 +645,48 @@ class RobotControlSystem:
     def _report_environment_data(self):
         """上报环境数据"""
         try:
+            # 获取机器人状态
+            robot_status = self.robot_controller.get_status()
+                        
+            # 构建位置信息
+            position_info = PositionInfo(
+                agv_position_info=[
+                    robot_status.get('current_position', {}).get('x', 0.0),
+                    robot_status.get('current_position', {}).get('y', 0.0),
+                    robot_status.get('current_position', {}).get('theta', 0.0)
+                ],
+                arm_position_info=robot_status.get('robot_joints', [0.0]*6),
+                ext_position_info=robot_status.get('ext_axis', [0.0]*4),
+            )
+
+
+            # 构建任务信息（当前执行的任务）
+            current_task = self.task_manager.scheduler.current_task
+            if current_task:
+                task_info = Task(
+                    task_id=current_task.task_id,
+                    task_name=current_task.task_name,
+                    station_list=[current_task] if current_task else []
+                )
+            else:
+                task_info = Task(
+                    task_id='',
+                    task_name='',
+                    station_list=[],
+                    status=TaskStatus.PENDING
+                )
+            
+
             # 模拟环境数据
             env_info = EnvironmentInfo(
                 temperature=22.5,
                 humidity=45.0,
                 oxygen=20.9,
-                carbonDioxide=400.0,
+                carbon_dioxide=400.0,
                 pm25=12.5,
                 pm10=25.0,
                 etvoc=0.2,
                 noise=45.0
-            )
-            
-            # 获取机器人状态
-            robot_status = self.robot_controller.get_status()
-            
-            # 构建位置信息
-            position_info = PositionInfo(
-                AGVPositionInfo=[
-                    robot_status.get('current_position', {}).get('x', 0.0),
-                    robot_status.get('current_position', {}).get('y', 0.0),
-                    robot_status.get('current_position', {}).get('theta', 0.0)
-                ],
-                ARMPositionInfo=robot_status.get('robot_joints', [0.0]*6),
-                EXTPositionInfo=robot_status.get('ext_axis', [0.0]*4),
-                targetPoint=robot_status.get('current_marker', '')
-            )
-            
-            # 构建任务信息
-            current_task = self.task_manager.scheduler.current_task
-            task_info = TaskListInfo(
-                inspection_task_list=[current_task] if current_task else []
             )
             
             # 创建消息信封
@@ -695,6 +712,37 @@ class RobotControlSystem:
             task: 完成的任务
         """
         try:
+            # 获取机器人状态
+            robot_status = self.robot_controller.get_status()
+                        
+            # 构建位置信息
+            position_info = PositionInfo(
+                agv_position_info=[
+                    robot_status.get('current_position', {}).get('x', 0.0),
+                    robot_status.get('current_position', {}).get('y', 0.0),
+                    robot_status.get('current_position', {}).get('theta', 0.0)
+                ],
+                arm_position_info=robot_status.get('robot_joints', [0.0]*6),
+                ext_position_info=robot_status.get('ext_axis', [0.0]*4),
+            )
+
+
+            # 构建任务信息（当前执行的任务）
+            current_task = self.task_manager.scheduler.current_task
+            if current_task:
+                task_info = Task(
+                    task_id=current_task.task_id,
+                    task_name=current_task.task_name,
+                    station_list=[current_task] if current_task else []
+                )
+            else:
+                task_info = Task(
+                    task_id='',
+                    task_name='',
+                    station_list=[],
+                    status=TaskStatus.PENDING
+                )
+            
             # 模拟设备数据
             device_info = DeviceInfo(
                 deviceId=task.station_config.operation_config.get('device_id', ''),
@@ -702,26 +750,7 @@ class RobotControlSystem:
                 imageBase64='mock_base64_image_data'
             )
             
-            # 获取机器人状态
-            robot_status = self.robot_controller.get_status()
-            
-            # 构建位置信息
-            position_info = PositionInfo(
-                AGVPositionInfo=[
-                    robot_status.get('current_position', {}).get('x', 0.0),
-                    robot_status.get('current_position', {}).get('y', 0.0),
-                    robot_status.get('current_position', {}).get('theta', 0.0)
-                ],
-                ARMPositionInfo=robot_status.get('robot_joints', [0.0]*6),
-                EXTPositionInfo=robot_status.get('ext_axis', [0.0]*4),
-                targetPoint=task.station_config.agv_marker
-            )
-            
-            # 构建任务信息
-            task_info = TaskListInfo(
-                inspection_task_list=[task]
-            )
-            
+           
             # 创建消息信封
             msg_envelope = create_message_envelope(
                 msg_id=str(uuid.uuid4()),
@@ -745,30 +774,42 @@ class RobotControlSystem:
             task: 当前任务
         """
         try:
+
+                        # 获取机器人状态
+            robot_status = self.robot_controller.get_status()
+                        
+            # 构建位置信息
+            position_info = PositionInfo(
+                agv_position_info=[
+                    robot_status.get('current_position', {}).get('x', 0.0),
+                    robot_status.get('current_position', {}).get('y', 0.0),
+                    robot_status.get('current_position', {}).get('theta', 0.0)
+                ],
+                arm_position_info=robot_status.get('robot_joints', [0.0]*6),
+                ext_position_info=robot_status.get('ext_axis', [0.0]*4),
+            )
+            # 构建任务信息（当前执行的任务）
+            current_task = self.task_manager.scheduler.current_task
+            if current_task:
+                task_info = Task(
+                    task_id=current_task.task_id,
+                    task_name=current_task.task_name,
+                    station_list=[current_task] if current_task else []
+                )
+            else:
+                task_info = Task(
+                    task_id='',
+                    task_name='',
+                    station_list=[],
+                    status=TaskStatus.PENDING
+                )
+            
+
             # 构建到达服务点信息
             arrive_info = ArriveServicePointInfo(
                 isArrive=True
             )
             
-            # 获取机器人状态
-            robot_status = self.robot_controller.get_status()
-            
-            # 构建位置信息
-            position_info = PositionInfo(
-                AGVPositionInfo=[
-                    robot_status.get('current_position', {}).get('x', 0.0),
-                    robot_status.get('current_position', {}).get('y', 0.0),
-                    robot_status.get('current_position', {}).get('theta', 0.0)
-                ],
-                ARMPositionInfo=robot_status.get('robot_joints', [0.0]*6),
-                EXTPositionInfo=robot_status.get('ext_axis', [0.0]*4),
-                targetPoint=task.station_config.agv_marker
-            )
-            
-            # 构建任务信息
-            task_info = TaskListInfo(
-                inspection_task_list=[task]
-            )
             
             # 创建消息信封
             msg_envelope = create_message_envelope(
@@ -801,11 +842,11 @@ class RobotControlSystem:
         try:
             msg_dict = msg_envelope.to_dict()
             self.task_manager.database.save_sent_message(
-                msg_id=msg_dict.get('msgId'),
-                msg_time=msg_dict.get('msgTime'),
-                msg_type=msg_dict.get('msgType'),
-                robot_id=msg_dict.get('robotId'),
-                data_json=json.dumps(msg_dict.get('dataJson', {})),
+                msg_id=msg_dict.get('msg_id'),
+                msg_time=msg_dict.get('msg_time'),
+                msg_type=msg_dict.get('msg_type'),
+                robot_id=msg_dict.get('robot_id'),
+                data_json=json.dumps(msg_dict.get('data_json', {})),
                 status='sent'
             )
         except Exception as e:
@@ -887,7 +928,7 @@ class RobotControlSystem:
             return False
         
         try:
-            # 创建ServerCmdRequest消息
+            # 创建ServerStreamMessage消息
             import uuid
             msg_id = int(uuid.uuid4().hex[:8], 16)
             
@@ -895,7 +936,7 @@ class RobotControlSystem:
             cmd_type = command_data.get('cmd_type', 'unknown')
             
             # 创建gRPC消息
-            grpc_msg = robot_pb2.ServerCmdRequest(
+            grpc_msg = robot_pb2.ServerStreamMessage(
                 msg_id=msg_id,
                 msg_time=int(time.time()),
                 robot_id=self.robot_id,
@@ -957,7 +998,7 @@ if __name__ == "__main__":
     
     # 创建机器人控制系统
     config = {
-        'robot_id': "ROBOT_001",
+        'robot_id': 123456,
         'robot_config': {
             'success_rate': 0.95,
             'latency': 1,

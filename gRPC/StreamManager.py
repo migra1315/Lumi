@@ -13,7 +13,7 @@ from concurrent import futures
 class BaseStreamManager(ABC):
     """持久化流管理器基类"""
 
-    def __init__(self, stub, robot_id: str):
+    def __init__(self, stub, robot_id: int):
         """
         初始化流管理器
         
@@ -49,8 +49,8 @@ class BaseStreamManager(ABC):
 
         try:
             # 创建双向流
-            self.response_iterator = self._create_stream()
             self.is_stream_active = True
+            self.response_iterator = self._create_stream()
             self.shutdown_event.clear()
             self.stats['start_time'] = time.time()
 
@@ -120,10 +120,10 @@ class BaseStreamManager(ABC):
         """记录请求信息"""
         if hasattr(request, 'msg_id'):
             msg_type_str = robot_pb2.MsgType.Name(request.msg_type) if hasattr(robot_pb2.MsgType, 'Name') else request.msg_type
-            self.logger.debug(f"发送消息: msg_id={request.msg_id}, type={msg_type_str}")
+            self.logger.info(f"发送消息: msg_id={request.msg_id}, type={msg_type_str}")
         elif hasattr(request, 'command_id'):
             cmd_type_str = robot_pb2.CmdType.Name(request.command_type) if hasattr(robot_pb2.CmdType, 'Name') else request.command_type
-            self.logger.debug(f"发送命令: command_id={request.command_id}, type={cmd_type_str}")
+            self.logger.info(f"发送命令: command_id={request.command_id}, type={cmd_type_str}")
 
     def _handle_responses(self):
         """处理服务器响应"""
@@ -238,7 +238,7 @@ class BaseStreamManager(ABC):
 
 
 class ClientUploadStreamManager(BaseStreamManager):
-    """客户端上传流管理器，用于处理clientUpload RPC"""
+    """客户端上传流管理器, 用于处理clientUpload RPC"""
 
     def _create_stream(self):
         """创建clientUpload流"""
@@ -332,9 +332,9 @@ class ClientUploadStreamManager(BaseStreamManager):
 
 
 class ServerCommandStreamManager(BaseStreamManager):
-    """服务端命令流管理器，用于处理serverCommand RPC"""
+    """服务端命令流管理器,用于处理serverCommand RPC"""
 
-    def __init__(self, stub, robot_id: str):
+    def __init__(self, stub, robot_id: int):
         super().__init__(stub, robot_id)
         self.last_heartbeat_time = 0
         self.heartbeat_interval = 30  # 心跳间隔30秒
@@ -345,13 +345,14 @@ class ServerCommandStreamManager(BaseStreamManager):
 
     def _get_request_type(self):
         """获取请求消息类型"""
-        return robot_pb2.ServerCmdRequest
+        return robot_pb2.ClientStreamMessage
+        
 
     def _get_response_type(self):
         """获取响应消息类型"""
-        return robot_pb2.ServerCmdResponse
+        return robot_pb2.ServerStreamMessage
 
-    def _send_keepalive(self):
+    def _send_keep_alive(self):
         """发送保持连接的心跳"""
         current_time = time.time()
         if current_time - self.last_heartbeat_time > self.heartbeat_interval:
@@ -363,16 +364,17 @@ class ServerCommandStreamManager(BaseStreamManager):
 
     def send_heartbeat(self) -> bool:
         """发送心跳响应"""
+        heart_beat_message = robot_pb2.ServerResponse(
+            code="0",
+            info="heartbeat"
+        )
         request = self._get_request_type()(
             command_id=int(uuid.uuid4().hex[:8], 16),
             command_time=int(time.time() * 1000),
-            command_type=robot_pb2.CmdType.RESPONSE_CMD,
+            command_type=robot_pb2.CmdType.HEARTBEAT_CMD,
             robot_id=self.robot_id,
-            data_json=robot_pb2.ServerResponse(
-                code="0",
-                info="heartbeat"
             )
-        )
+        request.response_info.CopyFrom(heart_beat_message)    
         return self.send_message(request)
 
     def send_command_response(self, command_id: int, command_type: robot_pb2.CmdType,

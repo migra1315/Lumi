@@ -47,7 +47,7 @@ class OperationConfig:
     """操作任务"""
     operation_mode: OperationMode  # 操作模式
     door_ip: Optional[str]        # 门ID
-    device_id: Optional[str]      # 设备ID
+    device_id: Optional[int]      # 设备ID
     
     def to_dict(self):
         return {
@@ -60,7 +60,7 @@ class OperationConfig:
 @dataclass
 class StationConfig:
     """单个站点任务"""
-    station_id: str  # 如 "station1"
+    station_id: int  # 如 "station1"
     sort: int        # 站点排序
     name: str        # 站点名称
     agv_marker: str  # AGV导航点
@@ -101,7 +101,6 @@ class Station:
         return {
             "station_config": self.station_config.to_dict(),
             "status": self.status.value,
-            "generate_time": self.generate_time.isoformat() if self.generate_time else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
@@ -114,7 +113,7 @@ class Station:
 @dataclass
 class Task:
     """任务信息"""
-    task_id: str    # 任务ID
+    task_id: int    # 任务ID
     task_name: str  # 任务名称
     station_list: List[Station]
     status: TaskStatus = TaskStatus.PENDING # 任务状态

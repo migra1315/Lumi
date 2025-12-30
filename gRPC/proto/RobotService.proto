@@ -1,4 +1,5 @@
 syntax = "proto3";
+
 //生成多个java文件
 option java_multiple_files = true;
 //把生成的文件放到哪个包下
@@ -6,6 +7,7 @@ option java_package = "org.springblade.robot.grpc";
 //输出的类名
 option java_outer_classname = "RobotServiceProto";
 
+import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";  // 用于任意JSON数据
 
 // 服务定义
@@ -14,10 +16,8 @@ service RobotService {
     rpc clientUpload(stream RobotUploadRequest) returns (stream RobotUploadResponse);
 
     // 双向流式通信: 推送任务分配、服务指令
-    rpc serverCommand(stream ServerCmdResponse) returns (stream ServerCmdRequest);
+    rpc serverCommand(stream ClientStreamMessage) returns (stream ServerStreamMessage);
 }
-
-
 
 // 操作模式枚举
 enum OperationMode {
@@ -28,7 +28,7 @@ enum OperationMode {
     OPERATION_MODE_SERVICE = 4; // 服务
 }
 
-// 任务状态枚举
+// 站点状态枚举
 enum StationTaskStatus {
     STATION_TASK_STATUS_UNSPECIFIED = 0;
     STATION_TASK_STATUS_PENDING = 1;      // 待执行
@@ -61,13 +61,21 @@ enum MsgType {
 
 // 命令类型
 enum CmdType {
-    RESPONSE_CMD = 0;
+    RESPONSE_CMD = 0; // 响应信息
     ROBOT_MODE_CMD = 1; // 机器人模式命令
     TASK_CMD = 2; // 任务下发命令
     JOY_CONTROL_CMD = 3; // 鼠标移动命令
-    SET_MARKER_CMD = 4 ;//设置标记点命令
+    SET_MARKER_CMD = 4; // 设置标记点命令
     CHARGE_CMD = 5; // 充电命令
-    POSITION_ADJUST_CMD = 6; //重定位命令
+    POSITION_ADJUST_CMD = 6; // 重定位命令
+    HEARTBEAT_CMD = 7; // 心跳确认
+}
+
+// 客户端信息类型
+enum ClientMessageType {
+    HEARTBEAT = 0; // 心跳
+    COMMAND_RESPONSE = 1; // 普通命令响应
+    SET_MARKER_RESPONSE = 2; // 设置标记点响应
 }
 
 // 机器人移动状态
@@ -77,6 +85,7 @@ enum MoveStatus {
     SUCCEEDED = 2; // 移动任务成功完成
     FAILED = 3; // 移动任务失败
     CANCELED = 4; // 移动任务被取消
+    UNKNOWN = 5; // 未知 ADD
 }
 
 // 机器人模式
@@ -86,11 +95,12 @@ enum RobotMode {
     JOY_CONTROL = 2; // 手动控制模式
     ESTOP = 3; // 紧急停止模式
     CHARGE = 4; // 充电模式
+    STAND_BY = 5; // 待命模式
+    CONFIGURATION = 6; // 配置模式
 }
 
-
 //
-//                  clientUpload流相关
+// 上传相关
 //
 
 // 电池信息
@@ -107,8 +117,8 @@ message PositionInfo {
 }
 
 // 任务信息
-message TaskListInfo {
-    repeated Station inspection_task_list = 1;
+message TaskInfo {
+    Task inspection_task_list = 1;
 }
 
 // 系统状态
@@ -129,7 +139,7 @@ message ErrorInfo {
 
 // 设备信息
 message DeviceInfo {
-    string device_id = 1;        // 设备ID
+    int64 device_id = 1;        // 设备ID
     string data_type = 2;        // 数据类型
     repeated string image_base64 = 3;     // 图片数据Base64
 }
@@ -146,40 +156,43 @@ message EnvironmentInfo {
     double noise = 8;            // 噪音
 }
 
-// 到达服务点位数据上传
-message ArriveServicePointInfo {
-    bool is_arrive = 1;
-}
-
 // 机器人状态上传
 message RobotStatusUpload {
     BatteryInfo battery_info = 1;
-    PositionInfo position_info = 2;
-    TaskListInfo task_list_info = 3;
-    SystemStatus system_status = 4;
-    ErrorInfo error_info = 5;
+    SystemStatus system_status = 2;
+    ErrorInfo error_info = 3;
 }
+
 
 // 设备数据上传
 message DeviceDataUpload {
-    PositionInfo position_info = 1;
-    TaskListInfo task_list_info = 2;
-    DeviceInfo device_info = 3;
+    DeviceInfo device_info = 1;
 }
 
 // 环境数据上传
 message EnvironmentDataUpload {
-    PositionInfo position_info = 1;
-    TaskListInfo task_list_info = 2;
-    EnvironmentInfo environment_info = 3;
+    EnvironmentInfo sensor_data = 1;
 }
-
 
 // 到达服务点位数据上传
 message ArriveServicePointUpload {
-    PositionInfo position_info = 1;
-    TaskListInfo task_list_info = 2;
-    ArriveServicePointInfo arrive_service_point_info = 3;
+    bool is_arrive = 1;
+}
+
+// 请求消息（用于双向流）
+message RobotUploadRequest {
+    int64 msg_id = 1;
+    int64 msg_time = 2;
+    MsgType msg_type = 3;
+    int64 robot_id = 4;
+    PositionInfo position_info = 5;
+    TaskInfo task_info = 6;
+    oneof data_json {
+        RobotStatusUpload robot_status = 7;
+        DeviceDataUpload device_data = 8;
+        EnvironmentDataUpload environment_data = 9;
+        ArriveServicePointUpload arrive_service_point = 10;
+    }
 }
 
 // 响应信息
@@ -188,46 +201,29 @@ message ServerResponse {
     string info = 2;
 }
 
-// 请求消息（用于双向流）
-message RobotUploadRequest {
-    int64 msg_id = 1;
-    int64 msg_time = 2;
-    MsgType msg_type = 3;
-    string robot_id = 4;
-    oneof data_json {
-        RobotStatusUpload robot_status = 5;
-        DeviceDataUpload device_data = 6;
-        EnvironmentDataUpload environment_data = 7;
-        ArriveServicePointUpload arrive_service_point = 8;
-    }
-}
-
-
 // 请求消息响应
 message RobotUploadResponse {
     int64 msg_id = 1;
     int64 msg_time = 2;
     MsgType msg_type = 3;
-    string robot_id = 4;
+    int64 robot_id = 4;
     ServerResponse data_json = 5;
 }
 
-
 //
-//                 任务配置相关
+// 命令相关
 //
-
 
 // 操作配置
 message OperationConfig {
     OperationMode operation_mode = 1;  // 操作模式
     string door_ip = 2;                // 门禁IP地址（可选）
-    string device_id = 3;              // 设备ID（可选）
+    int64 device_id = 3;              // 设备ID（可选）
 }
 
 // 站点配置
 message StationConfig {
-    string station_id = 1;           // 站点ID（如"station1"）
+    int64 station_id = 1;           // 站点ID（如"station1"）
     int32 sort = 2;                  // 站点执行顺序
     string name = 3;                 // 站点名称
     string agv_marker = 4;           // AGV导航点标识
@@ -236,12 +232,10 @@ message StationConfig {
     OperationConfig operation_config = 7; // 操作任务配置
 }
 
-
-
-// 巡检任务
+// 站点信息
 message Station {
-    StationConfig station_config = 1;    // 站点配置 
-    StationTaskStatus status = 2;       // 任务状态，默认值在代码中处理  
+    StationConfig station_config = 1;    // 站点配置
+    StationTaskStatus status = 2;       // 任务状态，默认值在代码中处理
     int64 generate_time = 3;    // 任务生成时间
     int64 created_at = 4;    // 创建时间
     int64 started_at = 5;    // 开始时间（可选）
@@ -252,17 +246,32 @@ message Station {
     map<string, google.protobuf.Value> meta_data = 10;         // 元数据，用于存储任意键值对
 }
 
+// 巡检任务
+message Task {
+    int64 task_id = 1; // 任务唯一标识符
+    string task_name = 2; // 任务名称
+    repeated Station station_list = 3; // 站点信息
+    TaskStatus status = 4; // 任务状态，默认值在代码中处理
+    RobotMode robot_mode = 5; // 执行任务时的机器人模式
+    int64 generate_time = 6;    // 任务生成时间
+    int64 created_at = 7;    // 创建时间
+    int64 started_at = 8;    // 开始时间（可选）
+    int64 completed_at = 9;   // 完成时间（可选）
+    string error_message = 10; // 错误信息（可选）
+    map<string, google.protobuf.Value> meta_data = 11; // 元数据，用于存储任意键值对
+}
 
-
-
-//
-//                  serverCommand流相关
-//
 
 // 机器人模式命令
-message RobotModeCmd {
+message RobotModeCommand {
     RobotMode robot_mode = 1;
 }
+
+// 机器人模式命令
+message SetMarkerCommand {
+    string marker_name = 1;
+}
+
 
 //鼠标控制移动
 message JoyControlCmd {
@@ -271,27 +280,29 @@ message JoyControlCmd {
 }
 
 
-
-// 下发消息响应
-message ServerCmdResponse {
+// 服务端下发消息
+message ServerStreamMessage {
     int64 command_id = 1;
     int64 command_time = 2;
     CmdType command_type = 3;
-    string robot_id = 4;
-    ServerResponse data_json = 5;
-}
-
-// 返回响应指令
-message ServerCmdRequest {
-    int64 command_id = 1;
-    int64 command_time = 2;
-    CmdType command_type = 3;
-    string robot_id = 4;
+    int64 robot_id = 4;
     oneof data_json {
-        RobotModeCmd robot_mode_command = 5;
-        Station task_cmd = 6;
+        RobotModeCommand robot_mode_command = 5;
+        Task task_cmd = 6;
         JoyControlCmd joy_control_cmd = 7;
+        ServerResponse response_info = 8;
+        SetMarkerCommand set_marker_cmd = 9;
     }
 }
 
-
+// 客户端消息
+message ClientStreamMessage {
+    int64 command_id = 1;
+    int64 command_time = 2;
+    ClientMessageType command_type = 3;
+    int64 robot_id = 4;
+    oneof data_json {
+        ServerResponse response_info = 5;
+        PositionInfo position_info = 6;
+    }
+}

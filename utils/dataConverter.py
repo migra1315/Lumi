@@ -1,3 +1,4 @@
+from dataModels.MessageModels import MoveStatus
 from dataModels.TaskModels import TaskStatus, Task, Station, StationTaskStatus, StationConfig, OperationConfig, OperationMode, RobotMode
 from datetime import datetime
 import gRPC.RobotService_pb2 as robot_pb2
@@ -14,8 +15,8 @@ from dataModels.MessageModels import (
 
 # ====================== gRPC -> Python 转换 ======================
 
-def convert_server_cmd_to_command_envelope(server_cmd_request: robot_pb2.ServerCmdRequest) -> CommandEnvelope:
-    """将gRPC ServerCmdRequest转换为CommandEnvelope
+def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.ServerStreamMessage) -> CommandEnvelope:
+    """将gRPC ServerStreamMessage转换为CommandEnvelope
     
     Args:
         server_cmd_request: gRPC服务端命令请求
@@ -38,17 +39,17 @@ def convert_server_cmd_to_command_envelope(server_cmd_request: robot_pb2.ServerC
     
     # 根据命令类型提取数据
     data_json = {}
-    
+    robot_mode_map = {
+        robot_pb2.RobotMode.INSPECTION: RobotMode.INSPECTION,
+        robot_pb2.RobotMode.SERVICE: RobotMode.SERVICE,
+        robot_pb2.RobotMode.JOY_CONTROL: RobotMode.JOY_CONTROL,
+        robot_pb2.RobotMode.ESTOP: RobotMode.ESTOP,
+        robot_pb2.RobotMode.CHARGE: RobotMode.CHARGE,
+    }
     if server_cmd_request.HasField('robot_mode_command'):
         robot_mode_cmd = server_cmd_request.robot_mode_command
         # 转换RobotMode枚举
-        robot_mode_map = {
-            robot_pb2.RobotMode.INSPECTION: RobotMode.INSPECTION,
-            robot_pb2.RobotMode.SERVICE: RobotMode.SERVICE,
-            robot_pb2.RobotMode.JOY_CONTROL: RobotMode.JOY_CONTROL,
-            robot_pb2.RobotMode.ESTOP: RobotMode.ESTOP,
-            robot_pb2.RobotMode.CHARGE: RobotMode.CHARGE,
-        }
+
         
         robot_mode_enum = robot_mode_map.get(robot_mode_cmd.robot_mode, RobotMode.STAND_BY)
         
@@ -59,7 +60,7 @@ def convert_server_cmd_to_command_envelope(server_cmd_request: robot_pb2.ServerC
         }
         
     elif server_cmd_request.HasField('task_cmd'):
-        station_proto = server_cmd_request.task_cmd
+        task_proto = server_cmd_request.task_cmd
         
         # 转换StationTaskStatus枚举
         station_status_map = {
@@ -82,67 +83,66 @@ def convert_server_cmd_to_command_envelope(server_cmd_request: robot_pb2.ServerC
             robot_pb2.OperationMode.OPERATION_MODE_SERVICE: OperationMode.SERVE,
         }
         
-        # 转换StationConfig
-        station_config_proto = station_proto.station_config
-        
-        # 转换OperationConfig
-        operation_config_proto = station_config_proto.operation_config
-        operation_config = OperationConfig(
-            operation_mode=operation_mode_map.get(operation_config_proto.operation_mode, OperationMode.NONE),
-            door_ip=operation_config_proto.door_ip or None,
-            device_id=operation_config_proto.device_id or None
-        )
-        
-        # 创建StationConfig
-        station_config = StationConfig(
-            station_id=station_config_proto.station_id,
-            sort=station_config_proto.sort,
-            name=station_config_proto.name,
-            agv_marker=station_config_proto.agv_marker,
-            robot_pos=list(station_config_proto.robot_pos),
-            ext_pos=list(station_config_proto.ext_pos),
-            operation_config=operation_config
-        )
-        
-        # 转换元数据
-        metadata = {}
-        if station_proto.meta_data:
-            for key, value in station_proto.meta_data.items():
-                metadata[key] = value
-        
-        # 创建Station对象
-        station = Station(
-            station_config=station_config,
-            status=station_status_map.get(station_proto.status, StationTaskStatus.PENDING),
-            created_at=datetime.fromtimestamp(station_proto.created_at / 1000) if station_proto.created_at else None,
-            started_at=datetime.fromtimestamp(station_proto.started_at / 1000) if station_proto.started_at else None,
-            completed_at=datetime.fromtimestamp(station_proto.completed_at / 1000) if station_proto.completed_at else None,
-            retry_count=station_proto.retry_count,
-            max_retries=station_proto.max_retries,
-            error_message=station_proto.error_message or None,
-            metadata=metadata
-        )
-        
         # 创建包含一个站点的任务列表
-        task = Task(
-            task_id=f"task_{station_proto.command_id}",
-            task_name=station_config.name,
-            station_list=[station],
-            status=TaskStatus.PENDING,
-            robot_mode=RobotMode.STAND_BY,  # 从其他字段获取或使用默认值
-            generate_time=datetime.fromtimestamp(station_proto.generate_time / 1000) if station_proto.generate_time else None,
-            created_at=datetime.now(),
-            metadata={"source": "grpc_command"}
+        robot_mode_enum = robot_mode_map.get(task_proto.robot_mode, RobotMode.STAND_BY)
+        
+        task_cmd = TaskCmd(
+            task_id=task_proto.task_id,
+            task_name=task_proto.task_name,
+            robot_mode=robot_mode_enum,  # 从其他字段获取或使用默认值
+            generate_time=datetime.fromtimestamp(task_proto.generate_time / 1000),
+            station_config_list=[],
+            # status=TaskStatus.PENDING,
+            # created_at=datetime.now(),
+            # metadata={"source": "grpc_command"}
         )
+
+        # 转换StationConfig
+        station_proto_list = task_proto.station_list
+        for station_proto in station_proto_list:
+            station_config_proto = station_proto.station_config
+            # 转换OperationConfig
+            operation_config_proto = station_config_proto.operation_config
+
+            operation_config = OperationConfig(
+                operation_mode=operation_mode_map.get(operation_config_proto.operation_mode, OperationMode.NONE),
+                door_ip=operation_config_proto.door_ip or None,
+                device_id=operation_config_proto.device_id or None
+            )
+            
+            # 创建StationConfig
+            station_config = StationConfig(
+                station_id=station_config_proto.station_id,
+                sort=station_config_proto.sort,
+                name=station_config_proto.name,
+                agv_marker=station_config_proto.agv_marker,
+                robot_pos=list(station_config_proto.robot_pos),
+                ext_pos=list(station_config_proto.ext_pos),
+                operation_config=operation_config
+            )
+            
+            # # 转换元数据
+            # metadata = {}
+            # if station_proto.meta_data:
+            #     for key, value in station_proto.meta_data.items():
+            #         metadata[key] = value
+            
+            # # 创建Station对象
+            # station = Station(
+            #     station_config=station_config,
+            #     status=station_status_map.get(station_proto.status, StationTaskStatus.PENDING),
+            #     created_at=datetime.now(),
+            #     started_at=None,
+            #     completed_at=None,
+            #     retry_count=station_proto.retry_count,
+            #     max_retries=station_proto.max_retries,
+            #     error_message=None,
+            #     metadata=metadata
+            # )
+            task_cmd.station_config_list.append(station_config)
         
         data_json = {
-            "task_cmd": {
-                "task_id": task.task_id,
-                "task_name": task.task_name,
-                "robot_mode": task.robot_mode,
-                "generate_time": task.generate_time,
-                "station_config_tasks": [station_config]  # 注意：这里传入的是StationConfig列表
-            }
+            "task_cmd": task_cmd.to_dict()
         }
         
     elif server_cmd_request.HasField('joy_control_cmd'):
@@ -194,11 +194,11 @@ def convert_robot_upload_response_to_message_envelope(grpc_response: robot_pb2.R
     
     # 创建消息信封
     message_envelope = MessageEnvelope(
-        msgId=str(grpc_response.msg_id),
-        msgTime=int(grpc_response.msg_time),
-        msgType=msg_type,
-        robotId=grpc_response.robot_id,
-        dataJson={"response": response.to_dict()}
+        msg_id=str(grpc_response.msg_id),
+        msg_time=int(grpc_response.msg_time),
+        msg_type=msg_type,
+        robot_id=grpc_response.robot_id,
+        data_json={"response": response.to_dict()}
     )
     
     return message_envelope
@@ -223,47 +223,63 @@ def convert_message_envelope_to_robot_upload_request(msg_envelope: MessageEnvelo
         MsgType.ARRIVE_SERVER_POINT: robot_pb2.MsgType.ARRIVE_SERVER_POINT,
     }
     
-    grpc_msg_type = msg_type_map.get(msg_envelope.msgType, robot_pb2.MsgType.ROBOT_STATUS)
+    grpc_msg_type = msg_type_map.get(msg_envelope.msg_type, robot_pb2.MsgType.ROBOT_STATUS)
     
     # 将msgId转换为整数
     try:
-        msg_id = int(msg_envelope.msgId)
+        msg_id = int(msg_envelope.msg_id)
     except ValueError:
         # 如果不是纯数字，使用哈希值
-        msg_id = hash(msg_envelope.msgId) % (2**31)
+        msg_id = hash(msg_envelope.msg_id) % (2**31)
     
+    data_json = msg_envelope.data_json
+    # 创建 PositionInfo
+    position_info = data_json.get('position_info', {})
+    # 创建位置信息
+    position_info_proto = robot_pb2.PositionInfo(
+        AGVPositionInfo=list(position_info.get('agv_position_info', [0.0, 0.0, 0.0])),
+        ARMPositionInfo=list(position_info.get('arm_position_info', [0.0]*6)),
+        EXTPositionInfo=list(position_info.get('ext_position_info', [0.0]*4))
+    )
+
+    # 创建 TaskInfo
+    task_info = data_json.get('task_info', {})
+    # TODO 未实现task转proto结构逻辑
+    task_info_proto = robot_pb2.TaskInfo()
+
     # 创建基础请求
     grpc_msg = robot_pb2.RobotUploadRequest(
         msg_id=abs(msg_id),  # 确保为正数
-        msg_time=msg_envelope.msgTime,
+        msg_time=msg_envelope.msg_time,
         msg_type=grpc_msg_type,
-        robot_id=msg_envelope.robotId,
+        robot_id=msg_envelope.robot_id,
+        position_info=position_info_proto,
+        task_info=task_info_proto,
     )
     
-    data_json = msg_envelope.dataJson
     
     # 根据消息类型填充具体数据
-    if msg_envelope.msgType == MsgType.ROBOT_STATUS:
-        battery_info = data_json.get('batteryInfo', {})
-        position_info = data_json.get('positionInfo', {})
-        task_info = data_json.get('taskListInfo', {})
-        system_status = data_json.get('systemStatus', {})
-        error_info = data_json.get('errorInfo')
+    if msg_envelope.msg_type == MsgType.ROBOT_STATUS:
+        battery_info = data_json.get('battery_info', {})
+        system_status = data_json.get('system_status', {})
+        # TODO 数据信封中没有error message字段
+        error_info = data_json.get('error_info',{})
         
         # 转换MoveStatus枚举
         move_status_map = {
-            'idle': robot_pb2.MoveStatus.IDLE,
-            'running': robot_pb2.MoveStatus.RUNNING,
-            'succeeded': robot_pb2.MoveStatus.SUCCEEDED,
-            'failed': robot_pb2.MoveStatus.FAILED,
-            'canceled': robot_pb2.MoveStatus.CANCELED
+            MoveStatus.IDLE: robot_pb2.MoveStatus.IDLE,
+            MoveStatus.RUNNING: robot_pb2.MoveStatus.RUNNING,
+            MoveStatus.SUCCEEDED: robot_pb2.MoveStatus.SUCCEEDED,
+            MoveStatus.FAILED: robot_pb2.MoveStatus.FAILED,
+            MoveStatus.CANCELED: robot_pb2.MoveStatus.CANCELED,
+            MoveStatus.UNKNOWN: robot_pb2.MoveStatus.UNKNOWN
         }
         
-        move_status_str = system_status.get('move_status', 'idle')
-        if isinstance(move_status_str, str):
-            move_status = move_status_map.get(move_status_str.lower(), robot_pb2.MoveStatus.IDLE)
+        move_status_str = MoveStatus(system_status.get('move_status', 'unknown'))
+        if isinstance(move_status_str, MoveStatus):
+            move_status_proto = move_status_map.get(move_status_str, robot_pb2.MoveStatus.IDLE)
         else:
-            move_status = robot_pb2.MoveStatus.IDLE
+            move_status_proto = robot_pb2.MoveStatus.UNKNOWN
         
         # 创建电池信息
         battery_info_proto = robot_pb2.BatteryInfo(
@@ -271,23 +287,9 @@ def convert_message_envelope_to_robot_upload_request(msg_envelope: MessageEnvelo
             charge_status=battery_info.get('charge_status', 'unknown')
         )
         
-        # 创建位置信息
-        position_info_proto = robot_pb2.PositionInfo(
-            AGVPositionInfo=list(position_info.get('AGVPositionInfo', [0.0, 0.0, 0.0])),
-            ARMPositionInfo=list(position_info.get('ARMPositionInfo', [0.0]*6)),
-            EXTPositionInfo=list(position_info.get('EXTPositionInfo', [0.0]*4))
-        )
-        
-        # 创建任务信息
-        task_list_info_proto = robot_pb2.TaskListInfo()
-        if 'task' in task_info:
-            task_obj = task_info['task']
-            # 这里可以添加将Task对象转换为proto的逻辑
-            # 由于结构复杂，这里先创建空对象
-            
         # 创建系统状态
         system_status_proto = robot_pb2.SystemStatus(
-            move_status=move_status,
+            move_status=move_status_proto,
             is_connected=system_status.get('is_connected', True),
             soft_estop_status=system_status.get('soft_estop_status', False),
             hard_estop_status=system_status.get('hard_estop_status', False),
@@ -306,35 +308,22 @@ def convert_message_envelope_to_robot_upload_request(msg_envelope: MessageEnvelo
         # 设置机器人状态数据
         robot_status = robot_pb2.RobotStatusUpload(
             battery_info=battery_info_proto,
-            position_info=position_info_proto,
-            task_list_info=task_list_info_proto,
             system_status=system_status_proto,
             error_info=error_info_proto
         )
         
         grpc_msg.robot_status.CopyFrom(robot_status)
     
-    elif msg_envelope.msgType == MsgType.ENVIRONMENT_DATA:
-        position_info = data_json.get('positionInfo', {})
-        task_info = data_json.get('taskListInfo', {})
-        environment_info = data_json.get('environmentInfo', {})
-        
-        # 创建位置信息
-        position_info_proto = robot_pb2.PositionInfo(
-            AGVPositionInfo=list(position_info.get('AGVPositionInfo', [0.0, 0.0, 0.0])),
-            ARMPositionInfo=list(position_info.get('ARMPositionInfo', [0.0]*6)),
-            EXTPositionInfo=list(position_info.get('EXTPositionInfo', [0.0]*4))
-        )
-        
-        # 创建任务信息
-        task_list_info_proto = robot_pb2.TaskListInfo()
+    elif msg_envelope.msg_type == MsgType.ENVIRONMENT_DATA:
+
+        environment_info = data_json.get('environment_info', {})
         
         # 创建环境信息
         environment_info_proto = robot_pb2.EnvironmentInfo(
             temperature=environment_info.get('temperature', 0.0),
             humidity=environment_info.get('humidity', 0.0),
             oxygen=environment_info.get('oxygen', 0.0),
-            carbonDioxide=environment_info.get('carbonDioxide', 0.0),
+            carbonDioxide=environment_info.get('carbon_dioxide', 0.0),
             pm25=environment_info.get('pm25', 0.0),
             pm10=environment_info.get('pm10', 0.0),
             etvoc=environment_info.get('etvoc', 0.0),
@@ -342,27 +331,14 @@ def convert_message_envelope_to_robot_upload_request(msg_envelope: MessageEnvelo
         )
         
         environment_data = robot_pb2.EnvironmentDataUpload(
-            position_info=position_info_proto,
-            task_list_info=task_list_info_proto,
-            environment_info=environment_info_proto
+            sensor_data=environment_info_proto
         )
         
         grpc_msg.environment_data.CopyFrom(environment_data)
     
-    elif msg_envelope.msgType == MsgType.DEVICE_DATA:
-        position_info = data_json.get('positionInfo', {})
-        task_info = data_json.get('taskListInfo', {})
-        device_info = data_json.get('deviceInfo', {})
+    elif msg_envelope.msg_type == MsgType.DEVICE_DATA:
+        device_info = data_json.get('device_info', {})
         
-        # 创建位置信息
-        position_info_proto = robot_pb2.PositionInfo(
-            AGVPositionInfo=list(position_info.get('AGVPositionInfo', [0.0, 0.0, 0.0])),
-            ARMPositionInfo=list(position_info.get('ARMPositionInfo', [0.0]*6)),
-            EXTPositionInfo=list(position_info.get('EXTPositionInfo', [0.0]*4))
-        )
-        
-        # 创建任务信息
-        task_list_info_proto = robot_pb2.TaskListInfo()
         
         # 创建设备信息
         device_info_proto = robot_pb2.DeviceInfo(
@@ -372,37 +348,15 @@ def convert_message_envelope_to_robot_upload_request(msg_envelope: MessageEnvelo
         )
         
         device_data = robot_pb2.DeviceDataUpload(
-            position_info=position_info_proto,
-            task_list_info=task_list_info_proto,
             device_info=device_info_proto
         )
         
         grpc_msg.device_data.CopyFrom(device_data)
     
-    elif msg_envelope.msgType == MsgType.ARRIVE_SERVER_POINT:
-        position_info = data_json.get('positionInfo', {})
-        task_info = data_json.get('taskListInfo', {})
-        arrive_info = data_json.get('arriveServePointInfo', {})
-        
-        # 创建位置信息
-        position_info_proto = robot_pb2.PositionInfo(
-            AGVPositionInfo=list(position_info.get('AGVPositionInfo', [0.0, 0.0, 0.0])),
-            ARMPositionInfo=list(position_info.get('ARMPositionInfo', [0.0]*6)),
-            EXTPositionInfo=list(position_info.get('EXTPositionInfo', [0.0]*4))
-        )
-        
-        # 创建任务信息
-        task_list_info_proto = robot_pb2.TaskListInfo()
-        
-        # 创建到达信息
-        arrive_info_proto = robot_pb2.ArriveServicePointInfo(
-            is_arrive=arrive_info.get('isArrive', False)
-        )
-        
+    elif msg_envelope.msg_type == MsgType.ARRIVE_SERVER_POINT:
+        arrive_info = data_json.get('arrive_service_point_info', {})        
         arrive_data = robot_pb2.ArriveServicePointUpload(
-            position_info=position_info_proto,
-            task_list_info=task_list_info_proto,
-            arrive_service_point_info=arrive_info_proto
+            is_arrive = arrive_info.get('isArrive', False)
         )
         
         grpc_msg.arrive_service_point.CopyFrom(arrive_data)
@@ -410,14 +364,14 @@ def convert_message_envelope_to_robot_upload_request(msg_envelope: MessageEnvelo
     return grpc_msg
 
 
-def convert_command_envelope_to_server_cmd_response(cmd_envelope: CommandEnvelope) -> robot_pb2.ServerCmdResponse:
-    """将CommandEnvelope转换为gRPC ServerCmdResponse
+def convert_command_envelope_to_client_message(cmd_envelope: CommandEnvelope) -> robot_pb2.ClientStreamMessage:
+    """将CommandEnvelope转换为gRPC ClientStreamMessage
     
     Args:
         cmd_envelope: 命令信封对象
         
     Returns:
-        robot_pb2.ServerCmdResponse: gRPC响应消息
+        robot_pb2.ClientStreamMessage: gRPC响应消息
     """
     # 转换CmdType枚举
     cmd_type_map = {
@@ -452,7 +406,7 @@ def convert_command_envelope_to_server_cmd_response(cmd_envelope: CommandEnvelop
     )
     
     # 创建gRPC响应
-    grpc_response = robot_pb2.ServerCmdResponse(
+    grpc_response = robot_pb2.ClientStreamMessage(
         command_id=abs(cmd_id),  # 确保为正数
         command_time=cmd_envelope.cmd_time,
         command_type=grpc_cmd_type,
@@ -477,7 +431,7 @@ def convert_task_cmd_to_task(task_cmd: TaskCmd) -> Task:
     # 创建站点列表
     station_list = []
     
-    for station_config in task_cmd.station_config_tasks:
+    for station_config in task_cmd.station_config_list:
         # 创建操作配置
         operation_config = OperationConfig(
             operation_mode=station_config.operation_config.operation_mode,

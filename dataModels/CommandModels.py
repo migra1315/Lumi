@@ -42,18 +42,21 @@ class RobotModeCmd:
 @dataclass
 class TaskCmd:
     """任务下发"""
-    task_id: str  # 任务ID
+    task_id: int  # 任务ID
     task_name: str  # 任务名称
     robot_mode: RobotMode  # 机器人模式
     generate_time: datetime  # 任务生成时间
-    station_config_tasks: List[StationConfig]  # 站点配置任务列表
+    station_config_list: List[StationConfig]  # 站点配置任务列表
+    
+    # TODO 增加函数from_dict()，用于从字典创建TaskCmd对象
+    
     def to_dict(self) -> Dict[str, Any]:
         return {
             "task_id": self.task_id,
             "task_name": self.task_name,
             "robot_mode": self.robot_mode.value,
             "generate_time": self.generate_time.isoformat(),
-            "station_config_tasks": [station.to_dict() for station in self.station_config_tasks]
+            "station_config_tasks": [station.to_dict() for station in self.station_config_list]
         }
     
 
