@@ -40,12 +40,17 @@ class AGVController:
         # AGV控制相关配置
         self.agv_ip = system_config.get("agv_ip")      # AGV IP地址
         self.agv_port = system_config.get("agv_port")  # AGV端口
-        
+
         # AGV持续数据接收相关
         self.agv_data_thread = None          # 数据接收线程
         self.agv_data_running = False        # 数据接收运行标志
         self.agv_data_callback = None        # 数据接收回调函数
         self.agv_data_topics = []            # 订阅的数据源列表
+
+        # AGV状态缓存相关
+        self._status_lock = threading.Lock()  # 线程锁，保护状态数据
+        self._cached_status = None            # 缓存的AGV状态数据
+        self._monitoring_active = False       # 监控线程是否激活
 
     # ===========================
     # AGV控制功能
@@ -98,9 +103,16 @@ class AGVController:
     def agv_get_status(self):
         """
         获取AGV状态
-        
+        优先从缓存中读取（如果监控已启动），否则发送网络请求
+
         :return: AGV状态信息，失败返回None
         """
+        # 如果监控线程已激活，从缓存中读取
+        if self._monitoring_active:
+            with self._status_lock:
+                return self._cached_status
+
+        # 否则发送网络请求获取
         response = self._send_command_to_agv("/api/robot_status")
         return response
 
@@ -326,33 +338,31 @@ class AGVController:
             self.logger.error("AGV重定位时发生错误: %s", e)
             return False
 
-    def agv_request_data(self, callback):
+    def agv_request_data(self, callback=None):
         """
         请求AGV服务器以一定频率发送指定topic类型的数据
-        
-        :param callback: 数据接收回调函数，接收一个参数：data（JSON格式的AGV数据）
+        数据会自动更新到内部缓存中，并可选择性调用用户提供的回调函数
+
+        :param callback: 可选的用户回调函数，接收一个参数：data（JSON格式的AGV数据）
         :return: 成功返回True，失败返回False
         """
         if not self.agv_ip or not self.agv_port:
             self.logger.error("AGV连接信息未配置")
             return False
-        
-        if not callback or not callable(callback):
-            print("无效的callback参数，必须是可调用函数")
-            return False
-        
+
         # 如果已经在接收数据，先停止
         if self.agv_data_running:
-            print("AGV数据接收已经在运行，先停止")
+            self.logger.warning("AGV数据接收已经在运行，先停止")
             self.agv_stop_data()
-        
+
         self.agv_data_callback = callback
         self.agv_data_running = True
-        
+        self._monitoring_active = True
+
         # 创建并启动接收数据的线程
         self.agv_data_thread = threading.Thread(target=self._receive_agv_data, daemon=True)
         self.agv_data_thread.start()
-        
+
         return True
    
     def _receive_agv_data(self):
@@ -390,21 +400,26 @@ class AGVController:
                         if not response:
                             self.logger.debug("AGV数据为空，跳过")
                             continue
-                        
+
                         # 解析JSON响应
                         response_json = json.loads(response)
-                        if response_json.get('type') != 'callback': 
+                        if response_json.get('type') != 'callback':
                             continue
-                        
-                        # 调用回调函数处理数据
+
+                        # 更新缓存数据（使用线程锁保护）
+                        with self._status_lock:
+                            self._cached_status = response_json
+
+                        # 如果用户提供了自定义callback，也调用它
                         if self.agv_data_callback and callable(self.agv_data_callback):
                             self.agv_data_callback(response_json)
+
                     except socket.timeout:
                         # 超时只是为了检查是否需要停止，不是错误
                         self.logger.debug("AGV数据接收超时，继续等待")
                         continue
                     except json.JSONDecodeError as e:
-                        self.logger.error("解析AGV数据时发生JSON错误: %s, 返回json内容：%s", e, response_json)
+                        self.logger.error("解析AGV数据时发生JSON错误: %s", e)
                     except Exception as e:
                         self.logger.error("接收AGV数据时发生错误: %s", e)
                         break
@@ -416,28 +431,34 @@ class AGVController:
     def agv_stop_data(self):
         """
         停止接收AGV数据
-        
+
         :return: 成功返回True，失败返回False
         """
         if not self.agv_data_running:
             self.logger.info("AGV数据接收未在运行")
             return True
-        
+
         # 设置标志位停止线程
         self.agv_data_running = False
-        
+
         # 等待线程结束
         if self.agv_data_thread and self.agv_data_thread.is_alive():
             self.agv_data_thread.join(timeout=3)
-        
+
         if self.agv_data_thread and self.agv_data_thread.is_alive():
             self.logger.warning("AGV数据接收线程未能正常结束")
             return False
-        
+
         # 重置状态
         self.agv_data_thread = None
         self.agv_data_topics = []
         self.agv_data_callback = None
         self.agv_data_running = False
+        self._monitoring_active = False
+
+        # 可选：清空缓存数据
+        with self._status_lock:
+            self._cached_status = None
+
         self.logger.info("AGV数据接收已停止")
         return True

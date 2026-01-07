@@ -9,6 +9,7 @@ import logging
 import threading
 from typing import Dict, List, Any, Optional, Callable
 from enum import Enum
+from dataModels.MessageModels import MoveStatus
 from robot.AGVController import AGVController
 from robot.ArmController import ArmController
 
@@ -20,13 +21,13 @@ try:
     env_monitor_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'envsMonitor')
     if env_monitor_path not in sys.path:
         sys.path.insert(0, env_monitor_path)
-    from demo import AirQualitySensor
+    from envsMonitor.AirQualitySensor import AirQualitySensor
     ENV_SENSOR_AVAILABLE = True
 except ImportError as e:
     ENV_SENSOR_AVAILABLE = False
     AirQualitySensor = None
 
-class RobotStatus(Enum):
+class SystemStatus(Enum):
     """机器人状态枚举"""
     IDLE = "idle"
     MOVING = "moving"  # AGV移动中
@@ -36,13 +37,6 @@ class RobotStatus(Enum):
     ERROR = "error"
     CHARGING = "charging"
     SETUP = "setup"  # 系统初始化中
-
-class BatteryStatus(Enum):
-    """电池状态枚举"""
-    HIGH = "high"      # > 80%
-    MEDIUM = "medium"  # 30-80%
-    LOW = "low"       # 10-30%
-    CRITICAL = "critical"  # < 10%
 
 class RobotController():
     """机器人主控制器，整合AGV、机械臂和外部轴的控制"""
@@ -59,9 +53,7 @@ class RobotController():
         self.debug = debug
         
         # 控制器状态
-        self.status = RobotStatus.IDLE
-        self.battery_level = 100.0  # 初始电量100%
-        self.battery_status = BatteryStatus.HIGH
+        self.system_status = SystemStatus.IDLE
         self.current_marker = None
         self.last_error = None
         
@@ -126,23 +118,26 @@ class RobotController():
     def _init_sub_controllers(self):
         """初始化子控制器"""
         try:
+            # 从完整配置中提取robot_config部分传递给子控制器
+            robot_config = self.system_config.get('robot_config', {})
+
             self.logger.info("正在初始化AGV控制器...")
-            self.agv_controller = AGVController(self.system_config, debug=self.debug)
-            
+            self.agv_controller = AGVController(robot_config, debug=self.debug)
+
             self.logger.info("正在初始化机械臂控制器...")
             # 注意：ArmController同时包含机械臂和外部轴控制
             self.arm_controller = ArmController(
-                system_config=self.system_config,
-                ext_axis_limits=self.system_config.get("ext_axis_limits"),
+                system_config=robot_config,
+                ext_axis_limits=robot_config.get("ext_axis_limits"),
                 debug=self.debug
             )
-            
+
             # 为了与Mock接口保持一致，创建别名
             self.jaka_controller = self.arm_controller
             self.ext_controller = self.arm_controller
-            
+
             self.logger.info("子控制器初始化成功")
-            
+
         except Exception as e:
             self.logger.error(f"初始化子控制器失败: {e}")
             raise
@@ -156,7 +151,7 @@ class RobotController():
         """
         try:
             self.logger.info("开始初始化机器人系统...")
-            self.status = RobotStatus.SETUP
+            self.system_status = SystemStatus.SETUP
 
             # 初始化AGV控制器
             agv_ok = True  # AGV控制器在初始化时不立即连接
@@ -173,14 +168,14 @@ class RobotController():
                 self.logger.warning("环境传感器初始化失败，将使用默认值")
 
             self._system_initialized = True
-            self.status = RobotStatus.IDLE
+            self.system_status = SystemStatus.IDLE
             self.logger.info("机器人系统初始化完成")
 
             return agv_ok and arm_ok
 
         except Exception as e:
             self.logger.error(f"系统初始化失败: {e}")
-            self.status = RobotStatus.ERROR
+            self.system_status = SystemStatus.ERROR
             self.last_error = str(e)
             return False
     
@@ -192,16 +187,15 @@ class RobotController():
             # 停止环境传感器监控
             self._shutdown_environment_sensor()
 
-            # 停止AGV数据接收
-            if hasattr(self.agv_controller, 'agv_stop_data'):
-                self.agv_controller.agv_stop_data()
+            # 停止AGV数据监控
+            self.stop_agv_data_monitoring()
 
             # 关闭机械臂和外部轴系统
             if hasattr(self.arm_controller, 'shutdown_system'):
                 self.arm_controller.shutdown_system()
 
             self._system_initialized = False
-            self.status = RobotStatus.IDLE
+            self.system_status = SystemStatus.IDLE
             self.logger.info("机器人系统已关闭")
 
         except Exception as e:
@@ -210,42 +204,50 @@ class RobotController():
     def get_status(self) -> Dict[str, Any]:
         """
         获取机器人完整状态
-        
+
         Returns:
             Dict: 包含机器人各种状态信息的字典
         """
         try:
-            # 获取AGV状态
+            # 获取AGV状态（从AGVController内部缓存或网络请求）
             agv_status = None
-            if hasattr(self.agv_controller, 'agv_get_status'):
-                agv_status_response = self.agv_controller.agv_get_status()
-                if agv_status_response and agv_status_response.get('status') == 'OK':
-                    agv_status = agv_status_response.get('results', {})
-            
-            # 获取外部轴状态
-            ext_status = None
-            if hasattr(self.arm_controller, 'ext_get_state'):
-                ext_status = self.arm_controller.ext_get_state()
-            
+            agv_status_response = self.agv_controller.agv_get_status()
+            if agv_status_response and agv_status_response.get('status') == 'OK':
+                agv_status = agv_status_response.get('results', {})
 
+            # 获取外部轴状态
+
+            ext_status_response = self.arm_controller.ext_get_state()
+            ext_status = [ext_status_response[0].get('pos', 0.0),
+                          ext_status_response[1].get('pos', 0.0),
+                          ext_status_response[2].get('pos', 0.0),
+                          ext_status_response[3].get('pos', 0.0),
+                        ]
+
+            arm_status = self.arm_controller.arm_get_state()
+            
             # 构建状态字典
             status_dict = {
-                "status": self.status.value,
-                "battery_level": self.battery_level,
-                "battery_status": self.battery_status.value,
-                "current_marker": self.current_marker,
-                "last_error": self.last_error,
                 "system_initialized": self._system_initialized,
-                "agv_status": agv_status,
-                "external_axis_status": ext_status
+                "agv_status_x": agv_status.get('current_pose', {}).get('x', 0.0),
+                "agv_status_y": agv_status.get('current_pose', {}).get('y', 0.0),
+                "agv_status_theta": agv_status.get('current_pose', {}).get('theta', 0.0),
+                "ext_axis": ext_status,
+                "robot_joints": arm_status,
+                "power_percent": agv_status.get('power_percent', 0.0),
+                "move_status": MoveStatus(agv_status.get('move_status', 'unknown')),
+                "charge_state": agv_status.get('charge_state', False),
+                "soft_estop_state": agv_status.get('soft_estop_state', False),
+                "hard_estop_state": agv_status.get('hard_estop_state', False),
+                "estop_state": agv_status.get('estop_state', False),
             }
-            
+
             return status_dict
-            
+
         except Exception as e:
             self.logger.error(f"获取状态失败: {e}")
             return {
-                "status": self.status.value,
+                "status": self.system_status.value,
                 "error": str(e),
                 "system_initialized": self._system_initialized
             }
@@ -271,7 +273,7 @@ class RobotController():
             
             # 更新状态
             if agv_stopped and arm_stopped:
-                self.status = RobotStatus.IDLE
+                self.system_status = SystemStatus.IDLE
                 self.logger.info("紧急停止成功")
                 return True
             else:
@@ -306,7 +308,7 @@ class RobotController():
                 ext_reset = self.arm_controller.ext_reset()
             
             if agv_reset and arm_reset and ext_reset:
-                self.status = RobotStatus.IDLE
+                self.system_status = SystemStatus.IDLE
                 self.last_error = None
                 self.logger.info("错误状态重置成功")
                 return True
@@ -334,18 +336,18 @@ class RobotController():
         
         try:
             self.logger.info(f"移动AGV到标记点: {marker_id}")
-            self.status = RobotStatus.MOVING
+            self.system_status = SystemStatus.MOVING
             
             # 调用AGV控制器的移动方法
             success = self.agv_controller.agv_moveto(marker_id)
             
             if success:
                 self.current_marker = marker_id
-                self.status = RobotStatus.IDLE
+                self.system_status = SystemStatus.IDLE
                 self.logger.info(f"AGV已成功移动到标记点: {marker_id}")
                 self._trigger_callback("on_task_complete", "move_agv", marker_id)
             else:
-                self.status = RobotStatus.ERROR
+                self.system_status = SystemStatus.ERROR
                 self.last_error = f"移动AGV到{marker_id}失败"
                 self.logger.error(self.last_error)
             
@@ -353,7 +355,7 @@ class RobotController():
             
         except Exception as e:
             self.logger.error(f"移动AGV时发生错误: {e}")
-            self.status = RobotStatus.ERROR
+            self.system_status = SystemStatus.ERROR
             self.last_error = str(e)
             return False
     
@@ -374,7 +376,7 @@ class RobotController():
         
         try:
             self.logger.info(f"移动机械臂到位置: {position}")
-            self.status = RobotStatus.ARM_OPERATING
+            self.system_status = SystemStatus.ARM_OPERATING
             
             # 调用机械臂控制器的移动方法
             if hasattr(self.arm_controller, 'rob_moveto'):
@@ -386,11 +388,11 @@ class RobotController():
                 return False
             
             if success:
-                self.status = RobotStatus.IDLE
+                self.system_status = SystemStatus.IDLE
                 self.logger.info("机械臂移动完成")
                 self._trigger_callback("on_task_complete", "move_robot", position)
             else:
-                self.status = RobotStatus.ERROR
+                self.system_status = SystemStatus.ERROR
                 self.last_error = "机械臂移动失败"
                 self.logger.error(self.last_error)
             
@@ -398,7 +400,7 @@ class RobotController():
             
         except Exception as e:
             self.logger.error(f"移动机械臂时发生错误: {e}")
-            self.status = RobotStatus.ERROR
+            self.system_status = SystemStatus.ERROR
             self.last_error = str(e)
             return False
     
@@ -421,7 +423,7 @@ class RobotController():
         
         try:
             self.logger.info(f"移动外部轴到位置: {position}")
-            self.status = RobotStatus.EXT_OPERATING
+            self.system_status = SystemStatus.EXT_OPERATING
             
             # 调用外部轴控制器的移动方法
             if hasattr(self.arm_controller, 'ext_moveto'):
@@ -431,11 +433,11 @@ class RobotController():
                 return False
             
             if success:
-                self.status = RobotStatus.IDLE
+                self.system_status = SystemStatus.IDLE
                 self.logger.info("外部轴移动完成")
                 self._trigger_callback("on_task_complete", "move_ext", position)
             else:
-                self.status = RobotStatus.ERROR
+                self.system_status = SystemStatus.ERROR
                 self.last_error = "外部轴移动失败"
                 self.logger.error(self.last_error)
             
@@ -443,7 +445,7 @@ class RobotController():
             
         except Exception as e:
             self.logger.error(f"移动外部轴时发生错误: {e}")
-            self.status = RobotStatus.ERROR
+            self.system_status = SystemStatus.ERROR
             self.last_error = str(e)
             return False
     
@@ -461,7 +463,7 @@ class RobotController():
         # 可能是通过机械臂操作门把手，或者发送信号给门禁系统
         
         self.logger.info(f"执行开门操作: {door_id}")
-        self.status = RobotStatus.DOOR_OPERATING
+        self.system_status = SystemStatus.DOOR_OPERATING
         
         try:
             # TODO: 实现具体的开门逻辑
@@ -474,11 +476,11 @@ class RobotController():
                 success = False
             
             if success:
-                self.status = RobotStatus.IDLE
+                self.system_status = SystemStatus.IDLE
                 self.logger.info(f"开门操作完成: {door_id}")
                 self._trigger_callback("on_task_complete", "open_door", door_id)
             else:
-                self.status = RobotStatus.ERROR
+                self.system_status = SystemStatus.ERROR
                 self.last_error = f"开门操作失败: {door_id}"
                 self.logger.error(self.last_error)
             
@@ -486,7 +488,7 @@ class RobotController():
             
         except Exception as e:
             self.logger.error(f"开门操作时发生错误: {e}")
-            self.status = RobotStatus.ERROR
+            self.system_status = SystemStatus.ERROR
             self.last_error = str(e)
             return False
     
@@ -501,7 +503,7 @@ class RobotController():
             bool: 操作是否成功
         """
         self.logger.info(f"执行关门操作: {door_id}")
-        self.status = RobotStatus.DOOR_OPERATING
+        self.system_status = SystemStatus.DOOR_OPERATING
         
         try:
             # TODO: 实现具体的关门逻辑
@@ -514,11 +516,11 @@ class RobotController():
                 success = False
             
             if success:
-                self.status = RobotStatus.IDLE
+                self.system_status = SystemStatus.IDLE
                 self.logger.info(f"关门操作完成: {door_id}")
                 self._trigger_callback("on_task_complete", "close_door", door_id)
             else:
-                self.status = RobotStatus.ERROR
+                self.system_status = SystemStatus.ERROR
                 self.last_error = f"关门操作失败: {door_id}"
                 self.logger.error(self.last_error)
             
@@ -526,7 +528,7 @@ class RobotController():
             
         except Exception as e:
             self.logger.error(f"关门操作时发生错误: {e}")
-            self.status = RobotStatus.ERROR
+            self.system_status = SystemStatus.ERROR
             self.last_error = str(e)
             return False
     
@@ -577,7 +579,7 @@ class RobotController():
             bool: 操作是否成功
         """
         self.logger.info(f"开始充电")
-        self.status = RobotStatus.CHARGING
+        self.system_status = SystemStatus.CHARGING
 
         try:
             # 移动到充电桩（如果还没在充电位置）
@@ -591,7 +593,7 @@ class RobotController():
 
         except Exception as e:
             self.logger.error(f"充电时发生错误: {e}")
-            self.status = RobotStatus.ERROR
+            self.system_status = SystemStatus.ERROR
             self.last_error = str(e)
             return False
 
@@ -770,28 +772,24 @@ class RobotController():
     def start_agv_data_monitoring(self, callback: Callable = None) -> bool:
         """
         启动AGV数据监控
-        
+        数据由AGVController内部管理，可通过 agv_get_status() 获取
+
         Args:
-            callback: 数据接收回调函数
-            
+            callback: 可选的用户自定义回调函数
+
         Returns:
             bool: 启动是否成功
         """
         try:
-            if hasattr(self.agv_controller, 'agv_request_data'):
-                if callback:
-                    return self.agv_controller.agv_request_data(callback)
-                else:
-                    # 使用默认回调函数
-                    def default_callback(data):
-                        self.logger.debug(f"收到AGV数据: {data}")
-                        # 这里可以解析数据并更新状态
-                    
-                    return self.agv_controller.agv_request_data(default_callback)
+            success = self.agv_controller.agv_request_data(callback)
+
+            if success:
+                self.logger.info("AGV数据监控已启动")
             else:
-                self.logger.warning("AGV控制器不支持数据监控")
-                return False
-                
+                self.logger.error("AGV数据监控启动失败")
+
+            return success
+
         except Exception as e:
             self.logger.error(f"启动AGV数据监控失败: {e}")
             return False
@@ -799,17 +797,24 @@ class RobotController():
     def stop_agv_data_monitoring(self) -> bool:
         """
         停止AGV数据监控
-        
+
         Returns:
             bool: 停止是否成功
         """
         try:
             if hasattr(self.agv_controller, 'agv_stop_data'):
-                return self.agv_controller.agv_stop_data()
+                success = self.agv_controller.agv_stop_data()
+
+                if success:
+                    self.logger.info("AGV数据监控已停止")
+                else:
+                    self.logger.warning("AGV数据监控停止失败")
+
+                return success
             else:
                 self.logger.warning("AGV控制器不支持停止数据监控")
                 return False
-                
+
         except Exception as e:
             self.logger.error(f"停止AGV数据监控失败: {e}")
             return False

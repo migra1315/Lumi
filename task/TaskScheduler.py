@@ -148,7 +148,7 @@ class TaskScheduler:
             
             # 1. 移动AGV到指定标记点
             self.logger.info(f"移动AGV到 {station.station_config.agv_marker}")
-            success = self.robot_controller.agv_controller.move_to_marker(
+            success = self.robot_controller.move_to_marker(
                 station.station_config.agv_marker
             )
             if not success:
@@ -157,7 +157,7 @@ class TaskScheduler:
             
             # 2. 机械臂移动到归位位置
             self.logger.info("移动机械臂到归位位置")
-            success = self.robot_controller.jaka_controller.move_to_position(
+            success = self.robot_controller.move_robot_to_position(
                 station.station_config.robot_pos
             )
             if not success:
@@ -166,7 +166,7 @@ class TaskScheduler:
             
             # 3. 外部轴移动到归位位置
             self.logger.info("移动外部轴到归位位置")
-            success = self.robot_controller.ext_controller.move_to_position(
+            success = self.robot_controller.move_ext_to_position(
                 station.station_config.ext_pos
             )
             if not success:

@@ -21,7 +21,7 @@ from gRPC.StreamManager import ClientUploadStreamManager, ServerCommandStreamMan
 from utils.dataConverter import convert_server_message_to_command_envelope, convert_message_envelope_to_robot_upload_request
 
 from task.TaskManager import TaskManager
-from robot.MockRobotController import MockRobotController
+
 
 from dataModels.MessageModels import ArriveServicePointInfo, BatteryInfo, DeviceInfo, EnvironmentInfo, MessageEnvelope, MsgType, PositionInfo, SystemStatus, TaskListInfo,create_message_envelope
 from dataModels.CommandModels import CmdType, CommandEnvelope, TaskCmd,create_cmd_envelope
@@ -29,8 +29,7 @@ from dataModels.TaskModels import OperationConfig, OperationMode, StationConfig,
 
 # 只在不使用mock时导入真实控制器
 RobotController = None
-if False:  # 这个值会在运行时根据use_mock参数决定
-    from robot.RobotController import RobotController
+
 DBG = True
 
 class RobotControlSystem:
@@ -74,11 +73,11 @@ class RobotControlSystem:
 
         # gRPC相关配置（从config读取，如果没有则使用默认值）
         grpc_config = self.config.get('grpc_config', {})
-        self.server_host = grpc_config.get('server_host', ClientConfig.SERVER_HOST)
-        self.server_port = grpc_config.get('server_port', ClientConfig.SERVER_PORT)
+        self.server_host = grpc_config.get('server_host', 'localhost')
+        self.server_port = grpc_config.get('server_port', '50051')
         self.server_address = grpc_config.get('server_address', f"{self.server_host}:{self.server_port}")
-        self.connection_timeout = grpc_config.get('connection_timeout', ClientConfig.CONNECTION_TIMEOUT)
-        self.stream_keepalive_check = grpc_config.get('stream_keepalive_check', ClientConfig.STREAM_KEEPALIVE_CHECK)
+        self.connection_timeout = grpc_config.get('connection_timeout', 10.0)
+        self.stream_keep_alive_check = grpc_config.get('stream_keep_alive_check', 30.0)
 
         # 连接状态
         self.channel = None
@@ -114,12 +113,13 @@ class RobotControlSystem:
         try:
             if self.use_mock:
                 self.logger.info("使用Mock机器人控制器")
-                self.robot_controller = MockRobotController(self.config.get('robot_config', {}))
+                from robot.MockRobotController import MockRobotController
+                self.robot_controller = MockRobotController(self.config)
             else:
                 self.logger.info("使用真实机器人控制器")
                 # 动态导入真实机器人控制器，避免启动时的导入错误
                 from robot.RobotController import RobotController as RealRobotController
-                self.robot_controller = RealRobotController(self.config.get('robot_config', {}))
+                self.robot_controller = RealRobotController(self.config)
             
             # 初始化机器人系统
             if not self.robot_controller.setup_system():
@@ -469,7 +469,6 @@ class RobotControlSystem:
         self.logger.info(f"处理摇杆控制命令: {json.dumps(data_json, ensure_ascii=False)}")
         self.robot_controller.joy_control(data_json)
 
-
     def _handle_set_marker_command(self, data_json: Dict[str, Any]):
         """处理设置标记命令
         
@@ -584,9 +583,9 @@ class RobotControlSystem:
             # 构建位置信息
             position_info = PositionInfo(
                 agv_position_info=[
-                    robot_status.get('current_position', {}).get('x', 0.0),
-                    robot_status.get('current_position', {}).get('y', 0.0),
-                    robot_status.get('current_position', {}).get('theta', 0.0)
+                    robot_status.get('agv_status_x', 0.0),
+                    robot_status.get('agv_status_y', 0.0),
+                    robot_status.get('agv_status_theta', 0.0)
                 ],
                 arm_position_info=robot_status.get('robot_joints', [0.0]*6),
                 ext_position_info=robot_status.get('ext_axis', [0.0]*4),
@@ -609,27 +608,27 @@ class RobotControlSystem:
             
             # 构建电池信息
             battery_info = BatteryInfo(
-                power_percent=robot_status.get('battery_level', 100.0),
-                charge_status='charging' if robot_status.get('status') == 'charging' else 'discharging'
+                power_percent=robot_status.get('power_percent', 100.0),
+                charge_status='charging' if robot_status.get('charge_state', False) else 'discharging'
             )
 
             # 从MessageModels中导入MoveStatus枚举
             from dataModels.MessageModels import MoveStatus
             
             # 构建系统状态
-            move_status_str = robot_status.get('status', 'idle')
+            move_status_str = robot_status.get('move_status', 'idle')
             try:
                 move_status = MoveStatus(move_status_str)
             except ValueError:
                 # 默认为idle
-                move_status = MoveStatus.IDLE
+                move_status = MoveStatus.UNKNOWN
             
             system_status = SystemStatus(
                 move_status=move_status,
                 is_connected=True,
-                soft_estop_status=False,
-                hard_estop_status=False,
-                estop_status=False
+                soft_estop_status=robot_status.get('soft_estop_state', False),
+                hard_estop_status=robot_status.get('hard_estop_state', False),
+                estop_status=robot_status.get('estop_state', False)
             )
             
             # 创建消息信封
@@ -661,15 +660,13 @@ class RobotControlSystem:
             # 构建位置信息
             position_info = PositionInfo(
                 agv_position_info=[
-                    robot_status.get('current_position', {}).get('x', 0.0),
-                    robot_status.get('current_position', {}).get('y', 0.0),
-                    robot_status.get('current_position', {}).get('theta', 0.0)
+                    robot_status.get('agv_status_x', 0.0),
+                    robot_status.get('agv_status_y', 0.0),
+                    robot_status.get('agv_status_theta', 0.0)
                 ],
                 arm_position_info=robot_status.get('robot_joints', [0.0]*6),
                 ext_position_info=robot_status.get('ext_axis', [0.0]*4),
             )
-
-
             # 构建任务信息（当前执行的任务）
             current_task = self.task_manager.scheduler.current_task
             if current_task:
@@ -685,18 +682,18 @@ class RobotControlSystem:
                     station_list=[],
                     status=TaskStatus.PENDING
                 )
-            
-
-            # 模拟环境数据
+        
+            # 从机器人控制器获取真实环境数据
+            env_data = self.robot_controller.get_environment_data()
             env_info = EnvironmentInfo(
-                temperature=22.5,
-                humidity=45.0,
-                oxygen=20.9,
-                carbon_dioxide=400.0,
-                pm25=12.5,
-                pm10=25.0,
-                etvoc=0.2,
-                noise=45.0
+                temperature=env_data.get('temperature', 0.0),
+                humidity=env_data.get('humidity', 0.0),
+                oxygen=env_data.get('oxygen', 0.0),
+                carbon_dioxide=env_data.get('carbon_dioxide', 0.0),
+                pm25=env_data.get('pm25', 0.0),
+                pm10=env_data.get('pm10', 0.0),
+                etvoc=env_data.get('etvoc', 0.0),
+                noise=env_data.get('noise', 0.0)
             )
             
             # 创建消息信封
@@ -1012,13 +1009,12 @@ if __name__ == "__main__":
         'robot_config': {
             'success_rate': 0.95,
             'latency': 1,
-            'max_error_rate': 0.001
+            'max_error_rate': 0.001,
+            "robot_ip": "192.168.10.90",
+            "ext_base_url": "http://192.168.10.90:5000/api/extaxis",
+            "agv_ip": "192.168.10.10",
+            "agv_port": 31001,
         },
-
-        "robot_ip": "192.168.10.90",
-        "ext_base_url": "http://192.168.10.90:5000/api/extaxis",
-        "agv_ip": "192.168.10.10",
-        "agv_port": 31001,
 
         # gRPC 配置
         'grpc_config': {
@@ -1026,11 +1022,11 @@ if __name__ == "__main__":
             'server_port': 50051,            # gRPC 服务器端口
             # 'server_address': 'localhost:50051',  # 可选：直接指定完整地址
             'connection_timeout': 10,        # 连接超时时间（秒）
-            'stream_keepalive_check': 30     # 流保持活跃检查间隔（秒）
+            'stream_keep_alive_check': 30     # 流保持活跃检查间隔（秒）
         },
 
         # 环境传感器配置
-        "env_sensor_enabled": False,  # 设置为 False，避免没有传感器时报错
+        "env_sensor_enabled": True,  # 设置为 False，避免没有传感器时报错
         "env_sensor_config": {
             "port": "COM4",          # 串口
             "baudrate": 4800,        # 波特率
@@ -1040,7 +1036,7 @@ if __name__ == "__main__":
 
     }
     
-    robot_system = RobotControlSystem(config, use_mock=True)
+    robot_system = RobotControlSystem(config, use_mock=False)
     try:
         # 启动系统
         robot_system.start()

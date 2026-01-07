@@ -261,12 +261,45 @@ class MockRobotController(RobotControllerBase):
         return success
     
     def get_status(self) -> Dict[str, Any]:
-        """获取Mock状态"""
+        """获取Mock状态 - 与真实机器人控制器返回结构一致"""
         base_status = super().get_status()
+
+        # 将移动状态映射到AGV move_status字符串
+        move_status_map = {
+            RobotStatus.IDLE: "idle",
+            RobotStatus.MOVING: "moving",
+            RobotStatus.ARM_OPERATING: "idle",  # 机械臂操作时AGV是idle
+            RobotStatus.EXT_OPERATING: "idle",
+            RobotStatus.DOOR_OPERATING: "idle",
+            RobotStatus.ERROR: "error",
+            RobotStatus.CHARGING: "idle",
+            RobotStatus.SETUP: "idle"
+        }
+
+        # 构建与真实控制器一致的状态字典
         base_status.update({
-            "current_position": self.current_position,
+            # AGV位置信息 - 扁平化结构（与RobotControlSystem期望的一致）
+            "agv_status_x": self.current_position.get("x", 0.0),
+            "agv_status_y": self.current_position.get("y", 0.0),
+            "agv_status_theta": self.current_position.get("theta", 0.0),
+
+            # 机械臂和外部轴位置
             "robot_joints": self.robot_joints,
             "ext_axis": self.ext_axis,
+
+            # 电池和充电状态
+            "power_percent": self.battery_level,
+            "charge_state": (self.status == RobotStatus.CHARGING),
+
+            # 移动状态（字符串格式，用于AGV状态）
+            "move_status": move_status_map.get(self.status, "idle"),
+
+            # 急停状态
+            "soft_estop_state": self.error_scenarios.get("agv_stuck", False),
+            "hard_estop_state": False,  # Mock环境默认无硬急停
+            "estop_state": self.error_scenarios.get("agv_stuck", False) or self.error_scenarios.get("arm_collision", False),
+
+            # Mock特有数据（可选，用于调试）
             "error_scenarios": self.error_scenarios,
             "environment_data": self.environment_data,
             "device_states": self.device_states,
