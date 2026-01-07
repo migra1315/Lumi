@@ -19,7 +19,7 @@ try:
     import os
     
     # 将JAKA_SDK_LINUX目录添加到系统路径
-    sdk_path = os.path.join(compose_dir, 'JAKA_SDK_WINDOWS')
+    sdk_path = os.path.join(compose_dir, './utils/JAKA_SDK_WINDOWS')
     sys.path.append(sdk_path)
     
     # 尝试直接导入jkrc.so
@@ -28,7 +28,7 @@ try:
 except Exception as e1:
     try:
         # 方法2：作为模块导入
-        from JAKA_SDK_WINDOWS import jkrc
+        from utils.JAKA_SDK_WINDOWS import jkrc
         print("[INFO] 成功从JAKA_SDK_WINDOWS模块导入jkrc")
     except Exception as e2:
         raise NameError(f"JAKA SDK path error! 无法导入jkrc模块: {str(e1)} / {str(e2)}")

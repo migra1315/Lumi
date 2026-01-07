@@ -1,8 +1,8 @@
 __pycache__/*
 *.pyc
-JAKA_SDK_LINUX_ARM/*
-JAKA_SDK_LINUX_X86/*
-JAKA_SDK_WINDOWS/*
+utils/JAKA_SDK_LINUX_ARM/*
+utils/JAKA_SDK_LINUX_X86/*
+utils/JAKA_SDK_WINDOWS/*
 *.db
 .DS_Store
 docs/~$流式通信接口.docx

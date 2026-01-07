@@ -161,16 +161,67 @@ class RobotControllerBase(ABC):
         """充电操作（有默认实现，子类可重写）"""
         self.logger.info(f"开始充电: {duration}秒（基类模拟实现）")
         self.status = RobotStatus.CHARGING
-        
+
         # 模拟充电
         import time
         start_time = time.time()
         while time.time() - start_time < min(duration, 5.0):
             self.battery_level = min(100.0, self.battery_level + 20.0)
             time.sleep(0.5)
-        
+
         self.status = RobotStatus.IDLE
         return True
+
+    def joy_control(self, data_json: Dict[str, Any]) -> bool:
+        """
+        摇杆控制操作（有默认实现，子类可重写）
+
+        Args:
+            data_json: 摇杆控制数据，包含 joy_control_cmd 字段
+                      - angular_velocity: 角速度
+                      - linear_velocity: 线速度
+
+        Returns:
+            bool: 操作是否成功
+        """
+        self.logger.info(f"摇杆控制（基类默认实现）: {data_json}")
+        # 基类默认实现，不执行实际操作
+        return True
+
+    def capture_image(self, device_id: str = None) -> str:
+        """
+        拍照功能（有默认实现，子类可重写）
+
+        Args:
+            device_id: 设备ID（可选）
+
+        Returns:
+            str: Base64编码的图像数据
+        """
+        self.logger.info(f"拍照（基类默认实现） - 设备ID: {device_id}")
+        # 基类默认返回空字符串
+        return ""
+
+    def get_environment_data(self) -> Dict[str, float]:
+        """
+        获取环境数据（有默认实现，子类可重写）
+
+        Returns:
+            Dict[str, float]: 环境数据字典，包含温度、湿度等信息
+        """
+        self.logger.debug("获取环境数据（基类默认实现）")
+        # 基类默认返回空字典或默认值
+        return {
+            "temperature": 0.0,
+            "humidity": 0.0,
+            "oxygen": 0.0,
+            "carbon_dioxide": 0.0,
+            "pm25": 0.0,
+            "pm10": 0.0,
+            "etvoc": 0.0,
+            "noise": 0.0
+        }
+
     
     # ==================== 公共方法（不需要重写） ====================
     def register_callback(self, event: str, callback: Callable):

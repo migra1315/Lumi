@@ -27,19 +27,6 @@ from dataModels.MessageModels import ArriveServicePointInfo, BatteryInfo, Device
 from dataModels.CommandModels import CmdType, CommandEnvelope, TaskCmd,create_cmd_envelope
 from dataModels.TaskModels import OperationConfig, OperationMode, StationConfig, Station
 
-
-class ClientConfig:
-    """客户端配置"""
-    SERVER_HOST = "localhost"
-    SERVER_PORT = 50051
-    SERVER_ADDRESS = f"{SERVER_HOST}:{SERVER_PORT}"
-    LOG_LEVEL = "INFO"
-    # 连接超时设置
-    CONNECTION_TIMEOUT = 10
-    # 流保持活跃检查间隔
-    STREAM_KEEPALIVE_CHECK = 30
-
-
 # 只在不使用mock时导入真实控制器
 RobotController = None
 if False:  # 这个值会在运行时根据use_mock参数决定
@@ -84,9 +71,15 @@ class RobotControlSystem:
         # 注册任务回调
         self.task_manager.scheduler.register_callback("on_task_complete", self._on_task_complete)
         self.task_manager.scheduler.register_callback("on_task_failed", self._on_task_failed)
-        
-        # gRPC相关配置
-        self.gRPC_config = ClientConfig()
+
+        # gRPC相关配置（从config读取，如果没有则使用默认值）
+        grpc_config = self.config.get('grpc_config', {})
+        self.server_host = grpc_config.get('server_host', ClientConfig.SERVER_HOST)
+        self.server_port = grpc_config.get('server_port', ClientConfig.SERVER_PORT)
+        self.server_address = grpc_config.get('server_address', f"{self.server_host}:{self.server_port}")
+        self.connection_timeout = grpc_config.get('connection_timeout', ClientConfig.CONNECTION_TIMEOUT)
+        self.stream_keepalive_check = grpc_config.get('stream_keepalive_check', ClientConfig.STREAM_KEEPALIVE_CHECK)
+
         # 连接状态
         self.channel = None
         self.stub = None
@@ -143,7 +136,7 @@ class RobotControlSystem:
         try:
             # 创建gRPC通道
             self.channel = grpc.insecure_channel(
-                self.gRPC_config.SERVER_ADDRESS,
+                self.server_address,
                 options=[
                     ('grpc.keepalive_time_ms', 10000),
                     ('grpc.keepalive_timeout_ms', 5000),
@@ -156,7 +149,7 @@ class RobotControlSystem:
             # 测试连接
             try:
                grpc.channel_ready_future(self.channel).result(
-                    timeout=self.gRPC_config.CONNECTION_TIMEOUT
+                    timeout=self.connection_timeout
                 )
             except Exception as e:
                 self.logger.warning(f"连接测试警告: {e}")
@@ -260,6 +253,7 @@ class RobotControlSystem:
         
         self.logger.info("机器人控制系统已停止")
     
+
     def _simulate_receive_command(self):
         """模拟接收后台指令（仅用于测试）"""
         # 从CommandModels中导入RobotMode枚举
@@ -325,7 +319,7 @@ class RobotControlSystem:
     #
 
     def _handle_serverCommand_response(self, response):
-        """处理从gRPC服务器收到的响应/命令"""
+        """处理从gRPC服务器收到的 serverCommand 响应/命令"""
         try:
             command_envelope = convert_server_message_to_command_envelope(response)
             self._handle_command(command_envelope)            
@@ -369,6 +363,10 @@ class RobotControlSystem:
                 self._handle_joy_command(command_envelope.data_json)
             elif cmd_type == CmdType.CHARGE_CMD:
                 self._handle_charge_command(command_envelope.data_json)
+            elif cmd_type == CmdType.POSITION_ADJUST_CMD:
+                self._handle_position_adjust_command(command_envelope.data_json)
+            elif cmd_type == CmdType.SET_MARKER_CMD:
+                self._handle_set_marker_command(command_envelope.data_json)
             else:
                 self.logger.warning(f"未知命令类型: {cmd_type}")
             
@@ -469,8 +467,9 @@ class RobotControlSystem:
             data_json: 摇杆控制命令数据
         """
         self.logger.info(f"处理摇杆控制命令: {json.dumps(data_json, ensure_ascii=False)}")
-        # TODO: 实现摇杆控制逻辑
-    
+        self.robot_controller.joy_control(data_json)
+
+
     def _handle_set_marker_command(self, data_json: Dict[str, Any]):
         """处理设置标记命令
         
@@ -484,7 +483,7 @@ class RobotControlSystem:
             
             if marker_id:
                 self.logger.info(f"设置标记为: {marker_id}")
-                # TODO: 实现设置标记逻辑
+                self.robot_controller.set_marker(marker_id)
             else:
                 self.logger.warning("未指定标记ID")
         except Exception as e:
@@ -497,7 +496,18 @@ class RobotControlSystem:
             data_json: 位置调整命令数据
         """
         self.logger.info(f"处理位置调整命令: {json.dumps(data_json, ensure_ascii=False)}")
-        # TODO: 实现位置调整逻辑
+        
+        try:
+            position_adjust_cmd = data_json.get('position_adjust_cmd', {})
+            marker_id = position_adjust_cmd.get('marker_id', '')
+            
+            if marker_id:
+                self.logger.info(f"位置调整到标记点: {marker_id}")
+                self.robot_controller.position_adjust(marker_id)
+            else:
+                self.logger.warning("未指定目标标记点")
+        except Exception as e:
+            self.logger.error(f"处理位置调整命令失败: {e}")
 
     def _handle_charge_command(self, data_json: Dict[str, Any]):
         """处理充电命令
@@ -1003,14 +1013,37 @@ if __name__ == "__main__":
             'success_rate': 0.95,
             'latency': 1,
             'max_error_rate': 0.001
+        },
+
+        "robot_ip": "192.168.10.90",
+        "ext_base_url": "http://192.168.10.90:5000/api/extaxis",
+        "agv_ip": "192.168.10.10",
+        "agv_port": 31001,
+
+        # gRPC 配置
+        'grpc_config': {
+            'server_host': 'localhost',      # gRPC 服务器地址
+            'server_port': 50051,            # gRPC 服务器端口
+            # 'server_address': 'localhost:50051',  # 可选：直接指定完整地址
+            'connection_timeout': 10,        # 连接超时时间（秒）
+            'stream_keepalive_check': 30     # 流保持活跃检查间隔（秒）
+        },
+
+        # 环境传感器配置
+        "env_sensor_enabled": False,  # 设置为 False，避免没有传感器时报错
+        "env_sensor_config": {
+            "port": "COM4",          # 串口
+            "baudrate": 4800,        # 波特率
+            "address": 0x01,         # 设备地址
+            "read_interval": 5       # 读取间隔（秒）
         }
+
     }
     
     robot_system = RobotControlSystem(config, use_mock=True)
     try:
         # 启动系统
         robot_system.start()
-        # robot_system._simulate_receive_command()
         # 运行一段时间
         time.sleep(6000)
         

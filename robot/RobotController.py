@@ -6,10 +6,25 @@ RobotController.py
 
 import time
 import logging
+import threading
 from typing import Dict, List, Any, Optional, Callable
 from enum import Enum
 from robot.AGVController import AGVController
 from robot.ArmController import ArmController
+
+# 导入环境传感器
+try:
+    import sys
+    import os
+    # 添加 envsMonitor 目录到路径
+    env_monitor_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'envsMonitor')
+    if env_monitor_path not in sys.path:
+        sys.path.insert(0, env_monitor_path)
+    from demo import AirQualitySensor
+    ENV_SENSOR_AVAILABLE = True
+except ImportError as e:
+    ENV_SENSOR_AVAILABLE = False
+    AirQualitySensor = None
 
 class RobotStatus(Enum):
     """机器人状态枚举"""
@@ -67,7 +82,25 @@ class RobotController():
         
         # 系统初始化标志
         self._system_initialized = False
-        
+
+        # 环境传感器相关
+        self.env_sensor = None
+        self.env_sensor_enabled = system_config.get('env_sensor_enabled', False)
+        self.env_sensor_config = system_config.get('env_sensor_config', {})
+        self._env_data_lock = threading.Lock()
+        self._env_data = {
+            "temperature": 0.0,
+            "humidity": 0.0,
+            "oxygen": 0.0,
+            "carbon_dioxide": 0.0,
+            "pm25": 0.0,
+            "pm10": 0.0,
+            "etvoc": 0.0,
+            "noise": 0.0
+        }
+        self._env_monitor_thread = None
+        self._stop_env_monitor = False
+
         self.logger.info("机器人控制器初始化完成")
     
     def _setup_logger(self, debug: bool) -> logging.Logger:
@@ -117,29 +150,34 @@ class RobotController():
     def setup_system(self) -> bool:
         """
         初始化整个机器人系统
-        
+
         Returns:
             bool: 初始化是否成功
         """
         try:
             self.logger.info("开始初始化机器人系统...")
             self.status = RobotStatus.SETUP
-            
+
             # 初始化AGV控制器
             agv_ok = True  # AGV控制器在初始化时不立即连接
-            
+
             # 初始化机械臂和外部轴系统
             arm_ok = self.arm_controller.setup_system()
             if not arm_ok:
                 self.logger.error("机械臂系统初始化失败")
                 return False
-        
+
+            # 初始化环境传感器
+            env_sensor_ok = self._setup_environment_sensor()
+            if not env_sensor_ok:
+                self.logger.warning("环境传感器初始化失败，将使用默认值")
+
             self._system_initialized = True
             self.status = RobotStatus.IDLE
             self.logger.info("机器人系统初始化完成")
-            
+
             return agv_ok and arm_ok
-            
+
         except Exception as e:
             self.logger.error(f"系统初始化失败: {e}")
             self.status = RobotStatus.ERROR
@@ -150,19 +188,22 @@ class RobotController():
         """关闭机器人系统"""
         try:
             self.logger.info("正在关闭机器人系统...")
-            
+
+            # 停止环境传感器监控
+            self._shutdown_environment_sensor()
+
             # 停止AGV数据接收
             if hasattr(self.agv_controller, 'agv_stop_data'):
                 self.agv_controller.agv_stop_data()
-            
+
             # 关闭机械臂和外部轴系统
             if hasattr(self.arm_controller, 'shutdown_system'):
                 self.arm_controller.shutdown_system()
-            
+
             self._system_initialized = False
             self.status = RobotStatus.IDLE
             self.logger.info("机器人系统已关闭")
-            
+
         except Exception as e:
             self.logger.error(f"关闭系统时发生错误: {e}")
     
@@ -531,13 +572,13 @@ class RobotController():
     def charge(self) -> bool:
         """
         充电操作
-        
+
         Returns:
             bool: 操作是否成功
         """
         self.logger.info(f"开始充电")
         self.status = RobotStatus.CHARGING
-        
+
         try:
             # 移动到充电桩（如果还没在充电位置）
             if self.current_marker != "charge_point_1F_6010":
@@ -547,13 +588,156 @@ class RobotController():
                     return False
 
             return True
-            
+
         except Exception as e:
             self.logger.error(f"充电时发生错误: {e}")
             self.status = RobotStatus.ERROR
             self.last_error = str(e)
             return False
-    
+
+    def joy_control(self, data_json: Dict[str, Any]) -> bool:
+        """
+        摇杆控制 - 通过AGV控制器发送速度命令
+
+        Args:
+            data_json: 摇杆控制数据，包含 joy_control_cmd 字段
+                      - angular_velocity: 角速度
+                      - linear_velocity: 线速度
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            joy_cmd = data_json.get('joy_control_cmd', {})
+            angular_velocity = joy_cmd.get('angular_velocity', '0')
+            linear_velocity = joy_cmd.get('linear_velocity', '0')
+
+            self.logger.info(f"摇杆控制 - 线速度: {linear_velocity}, 角速度: {angular_velocity}")
+
+            success = self.agv_controller.agv_joy_control(
+                linear_velocity,
+                angular_velocity
+            )
+            if success:
+                self.logger.info("摇杆控制命令发送成功")
+                return True
+            else:
+                self.logger.warning("摇杆控制命令发送失败")
+                return False
+
+
+        except Exception as e:
+            self.logger.error(f"摇杆控制失败: {e}")
+            return False
+
+    def set_marker(self, marker_id: str) -> bool:
+        """
+        设置当前标记点
+
+        Args:
+            marker_id: 标记点ID
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            self.logger.info(f"设置当前标记点为: {marker_id}")
+            if self.agv_controller.agv_set_point_as_marker(marker_id):
+                return True
+            else:
+                self.logger.warning(f"设置标记点失败: {marker_id}")
+                return False    
+        except Exception as e:
+            self.logger.error(f"设置标记点失败: {e}")
+            return False
+        
+    def position_adjust(self,marker_id: str) -> bool:
+        """
+        位置调整 - 移动到指定标记点
+
+        Args:
+            marker_id: 目标标记点ID
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            self.logger.info(f"开始位置调整 - 目标标记点: {marker_id}")
+            if self.agv_controller.agv_position_adjust(marker_id):
+                return True
+            else:
+                self.logger.warning(f"位置调整失败: {marker_id}")
+                return False    
+        except Exception as e:
+            self.logger.error(f"位置调整失败: {e}")
+            return False
+
+    def capture_image(self, device_id: str = None) -> str:
+        """
+        拍照功能 - 通过相机设备采集图像
+
+        Args:
+            device_id: 设备ID（可选）
+
+        Returns:
+            str: Base64编码的图像数据，失败返回空字符串
+        """
+        try:
+            self.logger.info(f"开始拍照 - 设备ID: {device_id}")
+
+            # TODO: 实现实际的相机采集逻辑
+            # 这里需要根据实际的相机设备接口来实现
+            # 可能的实现方式：
+            # 1. 通过USB相机采集
+            # 2. 通过网络相机采集
+            # 3. 调用机械臂上的相机
+
+            # 示例代码（需要根据实际情况修改）:
+            # import cv2
+            # import base64
+            # cap = cv2.VideoCapture(0)  # 或根据device_id选择相机
+            # ret, frame = cap.read()
+            # if ret:
+            #     _, buffer = cv2.imencode('.jpg', frame)
+            #     img_base64 = base64.b64encode(buffer).decode('utf-8')
+            #     cap.release()
+            #     return img_base64
+            # cap.release()
+
+            self.logger.warning("拍照功能未实现，返回空数据")
+            return ""
+
+        except Exception as e:
+            self.logger.error(f"拍照失败: {e}")
+            return ""
+
+    def get_environment_data(self) -> Dict[str, float]:
+        """
+        获取环境数据（温度、湿度等）
+        从独立线程缓存中读取最新的传感器数据
+
+        Returns:
+            Dict[str, float]: 环境数据字典
+        """
+        try:
+            # 使用线程锁保护数据读取
+            with self._env_data_lock:
+                # 返回数据的副本，避免外部修改
+                return self._env_data.copy()
+
+        except Exception as e:
+            self.logger.error(f"获取环境数据失败: {e}")
+            return {
+                "temperature": 0.0,
+                "humidity": 0.0,
+                "oxygen": 0.0,
+                "carbon_dioxide": 0.0,
+                "pm25": 0.0,
+                "pm10": 0.0,
+                "etvoc": 0.0,
+                "noise": 0.0
+            }
+
     def register_callback(self, event: str, callback: Callable):
         """
         注册回调函数
@@ -629,7 +813,160 @@ class RobotController():
         except Exception as e:
             self.logger.error(f"停止AGV数据监控失败: {e}")
             return False
-    
+
+    # ==================== 环境传感器相关方法 ====================
+    def _setup_environment_sensor(self) -> bool:
+        """
+        初始化环境传感器
+
+        Returns:
+            bool: 初始化是否成功
+        """
+        if not self.env_sensor_enabled:
+            self.logger.info("环境传感器未启用")
+            return True
+
+        if not ENV_SENSOR_AVAILABLE:
+            self.logger.warning("环境传感器模块不可用，请检查 envsMonitor/demo.py 是否存在")
+            return False
+
+        try:
+            # 获取传感器配置
+            port = self.env_sensor_config.get('port', 'COM4')
+            baudrate = self.env_sensor_config.get('baudrate', 4800)
+            address = self.env_sensor_config.get('address', 0x01)
+            read_interval = self.env_sensor_config.get('read_interval', 5)  # 默认5秒读取一次
+
+            self.logger.info(f"初始化环境传感器 - 端口: {port}, 波特率: {baudrate}, 地址: {address:#x}")
+
+            # 创建传感器实例
+            self.env_sensor = AirQualitySensor(
+                port=port,
+                baudrate=baudrate,
+                address=address
+            )
+
+            # 连接传感器
+            if not self.env_sensor.connect():
+                self.logger.error("环境传感器连接失败")
+                self.env_sensor = None
+                return False
+
+            # 启动监控线程
+            self._stop_env_monitor = False
+            self._env_monitor_thread = threading.Thread(
+                target=self._environment_monitor_loop,
+                args=(read_interval,),
+                daemon=True,
+                name="EnvSensorMonitor"
+            )
+            self._env_monitor_thread.start()
+
+            self.logger.info("环境传感器初始化成功")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"初始化环境传感器失败: {e}")
+            if self.env_sensor:
+                try:
+                    self.env_sensor.disconnect()
+                except:
+                    pass
+                self.env_sensor = None
+            return False
+
+    def _shutdown_environment_sensor(self):
+        """关闭环境传感器"""
+        try:
+            # 停止监控线程
+            if self._env_monitor_thread and self._env_monitor_thread.is_alive():
+                self.logger.info("正在停止环境传感器监控线程...")
+                self._stop_env_monitor = True
+                self._env_monitor_thread.join(timeout=3.0)
+
+                if self._env_monitor_thread.is_alive():
+                    self.logger.warning("环境传感器监控线程未能正常停止")
+                else:
+                    self.logger.info("环境传感器监控线程已停止")
+
+            # 断开传感器连接
+            if self.env_sensor:
+                self.logger.info("正在断开环境传感器连接...")
+                self.env_sensor.disconnect()
+                self.env_sensor = None
+                self.logger.info("环境传感器已断开")
+
+        except Exception as e:
+            self.logger.error(f"关闭环境传感器时发生错误: {e}")
+
+    def _environment_monitor_loop(self, read_interval: float):
+        """
+        环境传感器监控循环（独立线程）
+
+        Args:
+            read_interval: 读取间隔（秒）
+        """
+        self.logger.info(f"环境传感器监控线程已启动，读取间隔: {read_interval}秒")
+
+        consecutive_failures = 0
+        max_consecutive_failures = 5
+
+        while not self._stop_env_monitor:
+            try:
+                if not self.env_sensor:
+                    self.logger.warning("环境传感器未初始化，监控线程退出")
+                    break
+
+                # 读取所有传感器数据
+                raw_data = self.env_sensor.read_all_parameters()
+
+                # 检查是否有有效数据
+                valid_data_count = sum(1 for v in raw_data.values() if v is not None)
+
+                if valid_data_count > 0:
+                    # 重置失败计数
+                    consecutive_failures = 0
+
+                    # 更新缓存数据（使用线程锁）
+                    with self._env_data_lock:
+                        # 映射字段名（传感器使用的名称 -> 系统使用的名称）
+                        self._env_data['temperature'] = raw_data.get('temperature') or self._env_data['temperature']
+                        self._env_data['humidity'] = raw_data.get('humidity') or self._env_data['humidity']
+                        self._env_data['oxygen'] = raw_data.get('oxygen') or self._env_data['oxygen']
+                        self._env_data['carbon_dioxide'] = raw_data.get('co2') or self._env_data['carbon_dioxide']
+                        self._env_data['pm25'] = raw_data.get('pm25') or self._env_data['pm25']
+                        self._env_data['pm10'] = raw_data.get('pm10') or self._env_data['pm10']
+                        self._env_data['etvoc'] = raw_data.get('tvoc') or self._env_data['etvoc']
+                        self._env_data['noise'] = raw_data.get('noise') or self._env_data['noise']
+
+                    self.logger.debug(
+                        f"环境数据更新 - 温度: {self._env_data['temperature']:.1f}°C, "
+                        f"湿度: {self._env_data['humidity']:.1f}%, "
+                        f"PM2.5: {self._env_data['pm25']}, "
+                        f"CO2: {self._env_data['carbon_dioxide']}"
+                    )
+                else:
+                    consecutive_failures += 1
+                    self.logger.warning(
+                        f"环境传感器读取失败 (连续失败: {consecutive_failures}/{max_consecutive_failures})"
+                    )
+
+                    # 连续失败太多次，记录错误
+                    if consecutive_failures >= max_consecutive_failures:
+                        self.logger.error(
+                            f"环境传感器连续失败{max_consecutive_failures}次，可能存在连接问题"
+                        )
+                        # 可以选择在这里尝试重连或发送告警
+
+                # 等待下次读取
+                time.sleep(read_interval)
+
+            except Exception as e:
+                self.logger.error(f"环境传感器监控循环异常: {e}")
+                consecutive_failures += 1
+                time.sleep(read_interval)
+
+        self.logger.info("环境传感器监控线程已退出")
 
     def __del__(self):
         """析构函数，确保资源被正确释放"""

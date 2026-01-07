@@ -322,10 +322,95 @@ class MockRobotController(RobotControllerBase):
             self.battery_level += random.uniform(0.5, 1.0)
             self.battery_level = min(100.0, self.battery_level)
             time.sleep(2)  # 每2秒增加一次电量
-        
+
         if self.status == RobotStatus.CHARGING:
             self.logger.info("充电完成")
             self.status = RobotStatus.IDLE
+
+    def joy_control(self, data_json: Dict[str, Any]) -> bool:
+        """摇杆控制模拟
+
+        Args:
+            data_json: 摇杆控制数据，包含 joy_control_cmd 字段
+                      - angular_velocity: 角速度
+                      - linear_velocity: 线速度
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            joy_cmd = data_json.get('joy_control_cmd', {})
+            angular_velocity = joy_cmd.get('angular_velocity', '0')
+            linear_velocity = joy_cmd.get('linear_velocity', '0')
+
+            self.logger.info(f"摇杆控制 - 线速度: {linear_velocity}, 角速度: {angular_velocity}")
+
+            # 模拟摇杆控制，更新位置
+            if self.status != RobotStatus.ERROR:
+                self.status = RobotStatus.MOVING
+
+                # 简单模拟位置变化
+                try:
+                    linear_vel = float(linear_velocity)
+                    angular_vel = float(angular_velocity)
+
+                    # 模拟位置更新（简化版）
+                    self.current_position['x'] += linear_vel * 0.1
+                    self.current_position['y'] += linear_vel * 0.1 * 0.5
+                    self.current_position['theta'] += angular_vel * 0.1
+
+                    time.sleep(0.1)  # 模拟控制延迟
+
+                    self.status = RobotStatus.IDLE
+                    return True
+                except ValueError:
+                    self.logger.error(f"无效的速度值: linear={linear_velocity}, angular={angular_velocity}")
+                    return False
+            else:
+                self.logger.warning("机器人处于错误状态，无法执行摇杆控制")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"摇杆控制失败: {e}")
+            return False
+    
+    def set_marker(self, marker_id: str) -> bool:
+        """
+        设置当前标记点
+
+        Args:
+            marker_id: 标记点ID
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            self.logger.info(f"设置当前标记点为: {marker_id}")
+            marker = {"marker_id": marker_id, **self.current_position}
+            self._marker_positions.append(marker)
+            return True
+
+        except Exception as e:
+            self.logger.error(f"设置标记点失败: {e}")
+            return False
+    
+    
+    def position_adjust(self, marker_id: str) -> bool:
+        """
+        位置调整 - 移动到指定标记点
+
+        Args:
+            marker_id: 目标标记点ID
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            self.logger.info(f"开始位置调整 - 目标标记点: {marker_id}")
+        
+        except Exception as e:
+            self.logger.error(f"位置调整失败: {e}")
+            return False
     
     # ==================== Mock特有方法 ====================
     def start_monitoring(self):

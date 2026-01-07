@@ -152,6 +152,50 @@ class AGVController:
                 
         return True
 
+    def agv_joy_control(self,angular_velocity,linear_velocity):
+        """
+        控制AGV通过摇杆指令移动
+        
+        :param angular_velocity: 角速度指令
+        :param linear_velocity: 线速度指令
+        :return: 成功返回True,失败返回False
+        """
+        # 检查参数是否为浮点数
+        try:
+            angular_velocity = float(angular_velocity)
+            linear_velocity = float(linear_velocity)
+            angular_velocity = 1.0 if angular_velocity>1.0 else angular_velocity
+            linear_velocity = 0.5 if linear_velocity>0.5 else linear_velocity
+            angular_velocity = -1.0 if angular_velocity<-1.0 else angular_velocity
+            linear_velocity = -0.5 if linear_velocity<-0.5 else linear_velocity
+
+        except ValueError:
+            self.logger.error("角速度和线速度指令必须为浮点数")
+            return False
+
+        command = f"/api/joy_control?angular_velocity={angular_velocity}&linear_velocity={linear_velocity}"
+        response = self._send_command_to_agv(command)
+        if not response:
+            self.logger.error("发送AGV摇杆控制指令失败")
+            return False
+        self.logger.debug(json.dumps(response, indent=4))
+        '''
+        成功设置时返回
+            {
+            "type": "response",
+            "command": "/api/joy_control",
+            "uuid": "",
+            "status": "OK",
+            "error_message": ""
+            }
+        '''
+        if response and response['status']=='OK':
+            self.logger.info(f"AGV已成功通过摇杆控制指令移动")
+            return True
+        else:
+            self.logger.error(f"AGV通过摇杆控制指令移动失败")
+            return False
+
     def agv_set_point_as_marker(self, point_name, type=0, num=1):
         """
         在机器人的当前位置和楼层标记锚点
