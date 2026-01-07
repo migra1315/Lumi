@@ -154,6 +154,33 @@ def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.Ser
                 "linear_velocity": float(joy_cmd.linear_velocity) if joy_cmd.linear_velocity else 0.0
             }
         }
+        
+    elif server_cmd_request.HasField('charge_cmd'):
+        charge_cmd = server_cmd_request.charge_cmd
+        
+        data_json = {
+            "charge_cmd": {
+                "charge": charge_cmd.charge
+            }
+        }
+        
+    elif server_cmd_request.HasField('set_marker_cmd'):
+        set_marker_cmd = server_cmd_request.set_marker_cmd
+        
+        data_json = {
+            "set_marker_cmd": {
+                "marker_name": set_marker_cmd.marker_name
+            }
+        }
+        
+    elif server_cmd_request.HasField('position_adjust_cmd'):
+        position_adjust_cmd = server_cmd_request.position_adjust_cmd
+        
+        data_json = {
+            "position_adjust_cmd": {
+                "adjust": position_adjust_cmd.adjust
+            }
+        }
     
     # 创建命令信封
     command_envelope = CommandEnvelope(

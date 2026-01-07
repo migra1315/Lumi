@@ -13,3 +13,5 @@ docs/通信协议.md
 .vscode/settings.json
 proto/RobotService_pb2.pyi
 gRPC/proto/RobotService_bp.proto
+CLAUDE.md
+cl.bat

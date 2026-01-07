@@ -279,6 +279,11 @@ message JoyControlCmd {
     string linear_velocity = 2; // 线速度
 }
 
+//充电
+message ChargeCmd {
+    bool charge = 1; // 充电
+}
+
 
 // 服务端下发消息
 message ServerStreamMessage {
@@ -292,6 +297,7 @@ message ServerStreamMessage {
         JoyControlCmd joy_control_cmd = 7;
         ServerResponse response_info = 8;
         SetMarkerCommand set_marker_cmd = 9;
+        ChargeCmd charge_cmd = 10;
     }
 }
 

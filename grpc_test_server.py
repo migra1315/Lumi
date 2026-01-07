@@ -122,13 +122,29 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                 current_time = time.time()
                 
                 # 检查是否需要发送命令（每5秒发送一次）
-                if current_time - last_send_time >= 5:
+                if current_time - last_send_time >= 20:
                     self.command_counter += 1
                     
                     # 根据计数器决定发送哪种类型的命令
                     command_type = command_type_counter % 4  # 0-3: robot_mode, task, joy_control, charge
                     
                     if command_type == 0:
+                        charge_cmd = robot_service_pb2.ChargeCmd(
+                            charge=True
+                        )
+                        # 创建RobotModeCommand - 充电模式
+                        request = robot_service_pb2.ServerStreamMessage(
+                            command_id=self.command_counter,
+                            command_time=int(current_time * 1000),
+                            command_type=robot_service_pb2.CmdType.CHARGE_CMD,
+                            robot_id=123456
+                        )
+                    
+                        # 设置oneof字段
+                        request.charge_cmd.CopyFrom(charge_cmd)
+                        logger.info(f"向客户端发送充电命令: {self.command_counter}")
+                    
+                    elif command_type == 1:
                         # 创建RobotModeCommand
                         request = robot_service_pb2.ServerStreamMessage(
                             command_id=self.command_counter,
@@ -149,12 +165,12 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                         else:
                             logger.info(f"向客户端发送RobotModeCommand: {self.command_counter}, mode={robot_service_pb2.RobotMode.Name(robot_mode_cmd.robot_mode)}")
                         
-                    elif command_type == 1:
+                    elif command_type == 2:
                         # 创建Task命令
                         request = self.create_task()
                         logger.info(f"向客户端发送Task命令: {self.command_counter}, task_id={request.task_cmd.task_id}")
                         
-                    elif command_type == 2:
+                    else:
                         # 创建JoyControlCmd
                         joy_control_cmd = robot_service_pb2.JoyControlCmd(
                             angular_velocity="0.5",
@@ -172,23 +188,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                         request.joy_control_cmd.CopyFrom(joy_control_cmd)
                         logger.info(f"向客户端发送JoyControlCmd: {self.command_counter}")
                         
-                    else:  # command_type == 3
-                        # 创建RobotModeCommand - 充电模式
-                        request = robot_service_pb2.ServerStreamMessage(
-                            command_id=self.command_counter,
-                            command_time=int(current_time * 1000),
-                            command_type=robot_service_pb2.CmdType.ROBOT_MODE_CMD,
-                            robot_id=123456
-                        )
-                        
-                        # 创建RobotModeCommand对象 - 充电模式
-                        robot_mode_cmd = robot_service_pb2.RobotModeCommand()
-                        robot_mode_cmd.robot_mode = robot_service_pb2.RobotMode.CHARGE
-                        
-                        # 设置oneof字段
-                        request.robot_mode_command.CopyFrom(robot_mode_cmd)
-                        logger.info(f"向客户端发送充电命令: {self.command_counter}")
-                    
+
                     # 打印调试信息
                     logger.debug(f"准备发送命令: {request}")
                     
@@ -241,9 +241,9 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             station_id=123456,
             sort=1,
             name=f"测试站点{self.command_counter}",
-            agv_marker=f"marker_{self.command_counter}",
-            robot_pos=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            ext_pos=[1.0, 2.0, 3.0, 4.0],
+            agv_marker=f"marker_2",
+            robot_pos=[0, 30, 100, 0, 60, -90],
+            ext_pos=[10, 0, 0, 0],
             operation_config=operation_config
         )
         
