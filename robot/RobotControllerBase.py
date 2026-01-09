@@ -44,19 +44,10 @@ class RobotControllerBase(ABC):
         self.battery_status = BatteryStatus.HIGH
         self.current_marker = None
         self.last_error = None
-        
+
         # 初始化日志
         self.logger = self._setup_logger(debug)
-        
-        # 回调函数
-        self.callbacks = {
-            "on_status_change": [],
-            "on_battery_change": [],
-            "on_error": [],
-            "on_task_start": [],
-            "on_task_complete": []
-        }
-        
+
         # 系统初始化标志
         self._system_initialized = False
     
@@ -222,24 +213,8 @@ class RobotControllerBase(ABC):
             "noise": 0.0
         }
 
-    
+
     # ==================== 公共方法（不需要重写） ====================
-    def register_callback(self, event: str, callback: Callable):
-        """注册回调函数"""
-        if event in self.callbacks:
-            self.callbacks[event].append(callback)
-            self.logger.debug(f"已注册回调函数到事件: {event}")
-        else:
-            self.logger.warning(f"未知事件类型: {event}")
-    
-    def _trigger_callback(self, event: str, *args, **kwargs):
-        """触发回调函数"""
-        for callback in self.callbacks.get(event, []):
-            try:
-                callback(*args, **kwargs)
-            except Exception as e:
-                self.logger.error(f"回调函数执行异常: {e}")
-    
     def __del__(self):
         """析构函数"""
         try:

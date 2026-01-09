@@ -7,24 +7,28 @@ from typing import Callable, Optional, List, Dict, Any
 import logging
 from task.TaskDatabase import TaskDatabase
 from dataModels.TaskModels import (
-    Task, Station, StationConfig, OperationMode, 
-    TaskStatus, StationTaskStatus, OperationConfig
+    Task, Station, StationConfig, OperationMode,
+    TaskStatus, StationTaskStatus, OperationConfig, RobotMode
 )
+from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus, CommandCategory
+from dataModels.CommandModels import CmdType
 
 class TaskScheduler:
-    """任务调度器 - 负责任务的调度和执行"""
-    
+    """任务调度器 - 负责任务的调度和执行（支持统一命令队列）"""
+
     def __init__(self, robot_controller, database: TaskDatabase):
         self.robot_controller = robot_controller
         self.database = database
-        self.task_queue = queue.Queue()  # 先入先出队列，保证先下发先执行
+        # 使用优先级队列，支持UnifiedCommand
+        self.command_queue = queue.PriorityQueue()
+        self.current_command: Optional[UnifiedCommand] = None
         self.current_task: Optional[Task] = None
         self.current_station: Optional[Station] = None
         self.is_running = False
         self.scheduler_thread: Optional[threading.Thread] = None
         self.executor = ThreadPoolExecutor(max_workers=1)  # 单任务执行
         self.logger = logging.getLogger(__name__)
-        
+
         # 回调函数注册
         self.task_callbacks = {
             "on_task_start": [],
@@ -32,8 +36,9 @@ class TaskScheduler:
             "on_task_failed": [],
             "on_station_start": [],
             "on_station_complete": [],
-            "on_station_failed": [],
-            "on_station_retry": []
+            "on_station_retry": [],
+            "on_command_complete": [],   # 新增：命令完成回调
+            "on_command_failed": []       # 新增：命令失败回调
         }
     
     def start(self):
@@ -53,61 +58,179 @@ class TaskScheduler:
         self.executor.shutdown(wait=False)
         self.logger.info("任务调度器已停止")
     
+    def add_command(self, command: UnifiedCommand):
+        """添加命令到队列（新接口，支持所有命令类型）"""
+        self.command_queue.put(command)
+        # 保存命令到数据库
+        self.database.save_command(command)
+        self.logger.info(f"命令 {command.command_id} (类型: {command.cmd_type.value}) 已添加到队列，优先级: {command.priority}")
+
     def add_task(self, task: Task):
-        """添加任务到队列"""
-        self.task_queue.put(task)
-        # 保存任务到数据库
+        """添加任务到队列（兼容旧接口）"""
+        # 将Task转换为UnifiedCommand
+        from dataModels.UnifiedCommand import create_unified_command
+        command = create_unified_command(
+            command_id=task.task_id,
+            cmd_type=CmdType.TASK_CMD,
+            data=task,
+            metadata={"source": "add_task"}
+        )
+        self.add_command(command)
+        # 同时保存任务到tasks表
         self.database.save_task(task)
         self.logger.info(f"任务 {task.task_id} 已添加到队列")
     
     def _scheduler_loop(self):
-        """调度器主循环"""
+        """调度器主循环（支持统一命令队列）"""
         while self.is_running:
             try:
-                if self.current_task is None:
-                    # 获取下一个任务（非阻塞）
+                if self.current_command is None:
+                    # 获取下一个命令（非阻塞）
                     try:
-                        task = self.task_queue.get_nowait()
-                        self._execute_task(task)
+                        command = self.command_queue.get_nowait()
+                        self._execute_command(command)
                     except queue.Empty:
                         time.sleep(0.1)  # 队列为空时短暂休眠
                         continue
                 else:
-                    # 检查当前任务状态
-                    if self.current_task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED]:
+                    # 检查当前命令状态
+                    if self.current_command.status in [CommandStatus.COMPLETED, CommandStatus.FAILED, CommandStatus.CANCELLED]:
+                        self.current_command = None
                         self.current_task = None
                         self.current_station = None
                     else:
                         time.sleep(0.1)
-                        
+
             except Exception as e:
                 self.logger.error(f"调度器循环异常: {e}")
                 time.sleep(1)
-    
+
+    def _execute_command(self, command: UnifiedCommand):
+        """执行命令（统一入口）"""
+        self.current_command = command
+
+        # 更新命令状态为运行中
+        command.status = CommandStatus.RUNNING
+        command.started_at = datetime.now()
+        self.database.update_command_status(command.command_id, CommandStatus.RUNNING)
+
+        self.logger.info(f"开始执行命令: {command.command_id}, 类型: {command.cmd_type.value}")
+
+        # 根据命令类型路由到不同的执行方法
+        if command.cmd_type == CmdType.TASK_CMD:
+            # 提交到线程池执行
+            task = command.data
+            self.current_task = task
+            future = self.executor.submit(self._execute_task_command, command)
+            future.add_done_callback(lambda f: self._command_execution_done(f, command))
+
+        elif command.cmd_type == CmdType.ROBOT_MODE_CMD:
+            future = self.executor.submit(self._execute_mode_command, command)
+            future.add_done_callback(lambda f: self._command_execution_done(f, command))
+
+        elif command.cmd_type == CmdType.JOY_CONTROL_CMD:
+            future = self.executor.submit(self._execute_joy_command, command)
+            future.add_done_callback(lambda f: self._command_execution_done(f, command))
+
+        elif command.cmd_type == CmdType.CHARGE_CMD:
+            future = self.executor.submit(self._execute_charge_command, command)
+            future.add_done_callback(lambda f: self._command_execution_done(f, command))
+
+        elif command.cmd_type == CmdType.SET_MARKER_CMD:
+            future = self.executor.submit(self._execute_set_marker_command, command)
+            future.add_done_callback(lambda f: self._command_execution_done(f, command))
+
+        elif command.cmd_type == CmdType.POSITION_ADJUST_CMD:
+            future = self.executor.submit(self._execute_position_adjust_command, command)
+            future.add_done_callback(lambda f: self._command_execution_done(f, command))
+
+        else:
+            self.logger.warning(f"未知命令类型: {command.cmd_type}")
+            command.status = CommandStatus.FAILED
+            command.error_message = f"未知命令类型: {command.cmd_type}"
+            self.database.update_command_status(command.command_id, CommandStatus.FAILED, command.error_message)
+
+    def _command_execution_done(self, future, command: UnifiedCommand):
+        """命令执行完成回调"""
+        try:
+            success = future.result()
+
+            if success:
+                command.status = CommandStatus.COMPLETED
+                command.completed_at = datetime.now()
+                self.database.update_command_status(command.command_id, CommandStatus.COMPLETED)
+                self._trigger_callback("on_command_complete", command)
+                self.logger.info(f"命令 {command.command_id} 执行完成")
+            else:
+                # 检查是否需要重试
+                if command.retry_count < command.max_retries:
+                    command.retry_count += 1
+                    command.status = CommandStatus.RETRYING
+                    self.database.add_command_retry_count(command.command_id)
+                    self.database.update_command_status(command.command_id, CommandStatus.RETRYING)
+                    self.logger.info(f"命令 {command.command_id} 将进行第 {command.retry_count} 次重试")
+                    time.sleep(1)
+                    # 重新加入队列
+                    self.command_queue.put(command)
+                    self.current_command = None
+                else:
+                    command.status = CommandStatus.FAILED
+                    command.completed_at = datetime.now()
+                    command.error_message = command.error_message or "命令执行失败"
+                    self.database.update_command_status(
+                        command.command_id,
+                        CommandStatus.FAILED,
+                        command.error_message
+                    )
+                    self._trigger_callback("on_command_failed", command)
+                    self.logger.error(f"命令 {command.command_id} 执行失败")
+
+        except Exception as e:
+            self.logger.error(f"命令执行回调异常: {e}")
+            command.status = CommandStatus.FAILED
+            command.completed_at = datetime.now()
+            command.error_message = f"回调异常: {str(e)}"
+            self.database.update_command_status(
+                command.command_id,
+                CommandStatus.FAILED,
+                command.error_message
+            )
+
     def _execute_task(self, task: Task):
-        """执行任务"""
+        """执行任务（兼容旧接口，已废弃，请使用add_command）"""
         self.current_task = task
-        
+
         # 更新任务状态为运行中
         task.status = TaskStatus.RUNNING
         task.started_at = datetime.now()
         self.database.update_task_status(task.task_id, TaskStatus.RUNNING)
-        
+
         # 触发任务开始回调
         self._trigger_callback("on_task_start", task)
-        
+
         # 按照sort顺序排序站点
         sorted_stations = sorted(task.station_list, key=lambda s: s.station_config.sort)
-        
+
         # 提交到线程池执行
-        future = self.executor.submit(self._execute_task_internal, task, sorted_stations)
+        future = self.executor.submit(self._execute_task_internal, task)
         future.add_done_callback(lambda f: self._task_execution_done(f, task))
     
-    def _execute_task_internal(self, task: Task, sorted_stations: List[Station]) -> bool:
+    def _execute_task_command(self, command: UnifiedCommand) -> bool:
+        """执行Task类型命令"""
+        task = command.data
+        if not isinstance(task, Task):
+            self.logger.error(f"命令数据类型错误，期望Task，实际: {type(task)}")
+            return False
+
+        return self._execute_task_internal(task)
+
+    def _execute_task_internal(self, task: Task) -> bool:
         """执行任务内部逻辑"""
+        # 按照sort顺序排序站点
+        sorted_stations = sorted(task.station_list, key=lambda s: s.station_config.sort)
         try:
             self.logger.info(f"开始执行任务 {task.task_id}")
-            
+
             # 执行所有站点任务
             for station in sorted_stations:
                 if not self._execute_station_task(station):
@@ -372,4 +495,107 @@ class TaskScheduler:
         except Exception as e:
             self.logger.error(f"服务操作失败: {e}")
             return False
-    
+
+    # ==================== 新增：其他命令类型的执行方法 ====================
+    def _execute_mode_command(self, command: UnifiedCommand) -> bool:
+        """执行模式切换命令"""
+        try:
+            data_json = command.data
+            robot_mode_cmd = data_json.get('robot_mode_cmd', {})
+            new_mode = RobotMode(robot_mode_cmd.get('robot_mode'))
+
+            self.logger.info(f"执行模式切换命令: {new_mode.value}")
+
+            # 调用机器人控制器切换模式（如果有相应方法）
+            # 这里简单记录日志，实际可能需要调用机器人控制器的方法
+            # success = self.robot_controller.set_mode(new_mode)
+
+            # 目前仅记录日志
+            self.logger.info(f"机器人模式已切换为: {new_mode.value}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"执行模式切换命令失败: {e}")
+            command.error_message = str(e)
+            return False
+
+    def _execute_joy_command(self, command: UnifiedCommand) -> bool:
+        """执行摇杆控制命令"""
+        try:
+            data_json = command.data
+            joy_control_cmd = data_json.get('joy_control_cmd', {})
+
+            self.logger.info(f"执行摇杆控制命令: {joy_control_cmd}")
+
+            # 调用机器人控制器的摇杆控制方法
+            success = self.robot_controller.joy_control(data_json)
+            return success
+
+        except Exception as e:
+            self.logger.error(f"执行摇杆控制命令失败: {e}")
+            command.error_message = str(e)
+            return False
+
+    def _execute_charge_command(self, command: UnifiedCommand) -> bool:
+        """执行充电命令"""
+        try:
+            data_json = command.data
+            charge_cmd = data_json.get('charge_cmd', {})
+            charge = charge_cmd.get('charge', False)
+
+            if charge:
+                self.logger.info("执行开始充电命令")
+                success = self.robot_controller.charge()
+            else:
+                self.logger.info("执行停止充电命令")
+                # TODO: 实现停止充电逻辑
+                success = True
+
+            return success
+
+        except Exception as e:
+            self.logger.error(f"执行充电命令失败: {e}")
+            command.error_message = str(e)
+            return False
+
+    def _execute_set_marker_command(self, command: UnifiedCommand) -> bool:
+        """执行设置标记命令"""
+        try:
+            data_json = command.data
+            set_marker_cmd = data_json.get('set_marker_cmd', {})
+            marker_id = set_marker_cmd.get('marker_id', '')
+
+            if marker_id:
+                self.logger.info(f"执行设置标记命令: {marker_id}")
+                success = self.robot_controller.set_marker(marker_id)
+                return success
+            else:
+                self.logger.warning("未指定标记ID")
+                command.error_message = "未指定标记ID"
+                return False
+
+        except Exception as e:
+            self.logger.error(f"执行设置标记命令失败: {e}")
+            command.error_message = str(e)
+            return False
+
+    def _execute_position_adjust_command(self, command: UnifiedCommand) -> bool:
+        """执行位置调整命令"""
+        try:
+            data_json = command.data
+            position_adjust_cmd = data_json.get('position_adjust_cmd', {})
+            marker_id = position_adjust_cmd.get('marker_id', '')
+
+            if marker_id:
+                self.logger.info(f"执行位置调整命令: {marker_id}")
+                success = self.robot_controller.position_adjust(marker_id)
+                return success
+            else:
+                self.logger.warning("未指定目标标记点")
+                command.error_message = "未指定目标标记点"
+                return False
+
+        except Exception as e:
+            self.logger.error(f"执行位置调整命令失败: {e}")
+            command.error_message = str(e)
+            return False

@@ -50,7 +50,7 @@ class RobotControlSystem:
         self.robot_id = self.config.get('robot_id', 123456)
         self.current_mode = RobotMode.STAND_BY  # 初始为standby
         self.is_running = False
-        
+
         # 初始化日志
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO if not DBG else logging.DEBUG)
@@ -60,16 +60,13 @@ class RobotControlSystem:
             formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
-        
-        # 初始化机器人控制器
-        self._init_robot_controller()
-        
-        # 初始化任务管理器
-        self.task_manager = TaskManager(self.robot_controller)
-        
-        # 注册任务回调
-        self.task_manager.scheduler.register_callback("on_task_complete", self._on_task_complete)
-        self.task_manager.scheduler.register_callback("on_task_failed", self._on_task_failed)
+
+        # 初始化任务管理器（TaskManager完全管理robot_controller）
+        self.task_manager = TaskManager(self.config, use_mock=use_mock)
+
+        # 注册TaskManager系统回调（统一回调路径：TaskScheduler → TaskManager → RobotControlSystem）
+        self.task_manager.register_system_callback("on_data_ready", self._handle_data_ready_callback)
+        self.task_manager.register_system_callback("on_arrive_station", self._handle_arrive_station_callback)
 
         # gRPC相关配置（从config读取，如果没有则使用默认值）
         grpc_config = self.config.get('grpc_config', {})
@@ -101,36 +98,11 @@ class RobotControlSystem:
         # 回调函数
         self.callbacks = {
             "on_command_received": [],
-            "on_status_reported": [],
-            "on_task_executed": [],
-            "on_communication_error": []
+            "on_status_reported": []
         }
-        
+
         self.logger.info("机器人控制系统初始化完成")
-    
-    def _init_robot_controller(self):
-        """初始化机器人控制器"""
-        try:
-            if self.use_mock:
-                self.logger.info("使用Mock机器人控制器")
-                from robot.MockRobotController import MockRobotController
-                self.robot_controller = MockRobotController(self.config)
-            else:
-                self.logger.info("使用真实机器人控制器")
-                # 动态导入真实机器人控制器，避免启动时的导入错误
-                from robot.RobotController import RobotController as RealRobotController
-                self.robot_controller = RealRobotController(self.config)
-            
-            # 初始化机器人系统
-            if not self.robot_controller.setup_system():
-                raise Exception("机器人系统初始化失败")
-            
-            self.logger.info("机器人控制器初始化成功")
-            
-        except Exception as e:
-            self.logger.error(f"初始化机器人控制器失败: {e}")
-            raise
-    
+
     def _init_grpc_client(self):
         """初始化gRPC客户端"""
         try:
@@ -245,12 +217,9 @@ class RobotControlSystem:
         self.is_connected = False
         self.logger.info(f"客户端已关闭 - 发送: {self.sent_count} 条消息, 接收: {self.received_count} 条响应")
 
-        '''停止任务管理器'''
+        '''停止任务管理器（会自动关闭机器人系统）'''
         self.task_manager.shutdown()
-        
-        '''关闭机器人系统'''
-        self.robot_controller.shutdown_system()
-        
+
         self.logger.info("机器人控制系统已停止")
     
 
@@ -327,13 +296,13 @@ class RobotControlSystem:
             self.logger.error(f"处理gRPC响应失败: {e}")
             
     def _handle_command(self, command_envelope: CommandEnvelope):
-        """处理接收到的命令
-        
+        """处理接收到的命令（统一入口，简化版）
+
         Args:
             command_envelope: 命令信封对象
         """
         self.logger.debug(f"收到命令: {command_envelope.to_json()}")
-        
+
         try:
             # 保存接收到的消息到数据库
             msg_id = command_envelope.cmd_id
@@ -341,7 +310,7 @@ class RobotControlSystem:
             cmd_type = command_envelope.cmd_type
             robot_id = command_envelope.robot_id
             data_json = json.dumps(command_envelope.data_json)
-            
+
             # 保存到数据库
             self.task_manager.database.save_received_message(
                 msg_id=msg_id,
@@ -350,186 +319,28 @@ class RobotControlSystem:
                 robot_id=robot_id,
                 data_json=data_json
             )
-            
+
             # 触发命令接收回调
             self._trigger_callback("on_command_received", command_envelope.to_dict())
-            
-            # 根据命令类型处理
-            if cmd_type == CmdType.TASK_CMD:
-                self._handle_task_command(command_envelope.data_json)
-            elif cmd_type == CmdType.ROBOT_MODE_CMD:
-                self._handle_mode_command(command_envelope.data_json)
-            elif cmd_type == CmdType.JOY_CONTROL_CMD:
-                self._handle_joy_command(command_envelope.data_json)
-            elif cmd_type == CmdType.CHARGE_CMD:
-                self._handle_charge_command(command_envelope.data_json)
-            elif cmd_type == CmdType.POSITION_ADJUST_CMD:
-                self._handle_position_adjust_command(command_envelope.data_json)
-            elif cmd_type == CmdType.SET_MARKER_CMD:
-                self._handle_set_marker_command(command_envelope.data_json)
-            else:
-                self.logger.warning(f"未知命令类型: {cmd_type}")
-            
+
+            # 特殊处理：模式命令直接更新系统状态
+            if cmd_type == CmdType.ROBOT_MODE_CMD:
+                mode_cmd = command_envelope.data_json.get('robot_mode_cmd', {})
+                new_mode = RobotMode(mode_cmd.get('robot_mode'))
+                self.current_mode = new_mode
+                self.logger.info(f"机器人工作模式已更新为: {new_mode}")
+                return
+            # 统一通过TaskManager处理所有命令
+            command_id = self.task_manager.receive_command(command_envelope)
+            self.logger.info(f"命令已提交给TaskManager: {command_id}, 类型: {cmd_type.value}")
+
             # 标记消息为已处理
             self.task_manager.database.mark_message_processed(msg_id)
-                
+
         except Exception as e:
             self.logger.error(f"_handle_command 处理命令失败: {e}")
             # 可以在这里发送错误响应
-    
-    def _handle_task_command(self, data_json: Dict[str, Any]):
-        """处理任务命令
-        
-        Args:
-            data_json: 任务命令数据
-        """
-        self.logger.info(f"处理任务命令: {json.dumps(data_json, ensure_ascii=False)}")
-        
-        try:
-            # 从TaskCmd转换为内部任务格式
-            task_cmd = data_json.get('task_cmd', {})
-            
-            # 提取任务信息
-            task_id = task_cmd.get('task_id')
-            task_name = task_cmd.get('task_name')
-            robot_mode = RobotMode(task_cmd.get('robot_mode'))
-            generate_time = datetime.fromisoformat(task_cmd.get('generate_time'))
-            station_config_tasks = task_cmd.get('station_config_tasks', [])
-            
-            # 更新机器人工作模式
-            self.current_mode = robot_mode
-            
-            # 创建TaskCmd对象
-            task_cmd_obj = TaskCmd(
-                task_id=task_id,
-                task_name=task_name,
-                robot_mode=robot_mode,
-                generate_time=generate_time,
-                station_config_list=[]
-            )
-            
-            # 处理每个站点任务
-            for station_config_dict in station_config_tasks:
-                # 提取操作配置数据
-                operation_config_data = station_config_dict.get('operation_config', {})
-                
-                # 创建操作配置对象
-                operation_config = OperationConfig(
-                    operation_mode=OperationMode(operation_config_data.get('operation_mode', 'None')),
-                    door_ip=operation_config_data.get('door_ip'),
-                    device_id=operation_config_data.get('device_id')
-                )
-                
-                # 创建站点配置
-                station_config = StationConfig(
-                    station_id=station_config_dict.get('station_id'),
-                    sort=station_config_dict.get('sort', 0),
-                    name=station_config_dict.get('name', ''),
-                    agv_marker=station_config_dict.get('agv_marker', ''),
-                    robot_pos=station_config_dict.get('robot_pos', []),
-                    ext_pos=station_config_dict.get('ext_pos', []),
-                    operation_config=operation_config
-                )
-                
-                # 添加到TaskCmd对象
-                task_cmd_obj.station_config_list.append(station_config)
-            
-            # 添加到任务管理器
-            task_id = self.task_manager.receive_task_from_cmd(task_cmd_obj)
-            
-            self.logger.info(f"成功添加任务: {task_id}, 包含{len(task_cmd_obj.station_config_list)}个站点")
-        except Exception as e:
-            self.logger.error(f"_handle_task_command 处理任务命令失败: {e}")
-            raise
-    
-    def _handle_mode_command(self, data_json: Dict[str, Any]):
-        """处理模式命令
-        
-        Args:
-            data_json: 模式命令数据
-        """
-        self.logger.info(f"处理模式命令: {json.dumps(data_json, ensure_ascii=False)}")
-        
-        try:
-            mode_cmd = data_json.get('robot_mode_cmd', {})
-            new_mode = RobotMode(mode_cmd.get('robot_mode'))
-            
-            self.current_mode = new_mode
-            self.logger.info(f"机器人工作模式已更新为: {new_mode}")
-            
-        except Exception as e:
-            self.logger.error(f"处理模式命令失败: {e}")
-    
-    def _handle_joy_command(self, data_json: Dict[str, Any]):
-        """处理摇杆控制命令
-        
-        Args:
-            data_json: 摇杆控制命令数据
-        """
-        self.logger.info(f"处理摇杆控制命令: {json.dumps(data_json, ensure_ascii=False)}")
-        self.robot_controller.joy_control(data_json)
 
-    def _handle_set_marker_command(self, data_json: Dict[str, Any]):
-        """处理设置标记命令
-        
-        Args:
-            data_json: 设置标记命令数据
-        """
-        self.logger.info(f"处理设置标记命令: {json.dumps(data_json, ensure_ascii=False)}")
-        try:
-            set_marker_cmd = data_json.get('set_marker_cmd', {})
-            marker_id = set_marker_cmd.get('marker_id', '')
-            
-            if marker_id:
-                self.logger.info(f"设置标记为: {marker_id}")
-                self.robot_controller.set_marker(marker_id)
-            else:
-                self.logger.warning("未指定标记ID")
-        except Exception as e:
-            self.logger.error(f"处理设置标记命令失败: {e}")
-
-    def _handle_position_adjust_command(self, data_json: Dict[str, Any]):
-        """处理位置调整命令
-        
-        Args:
-            data_json: 位置调整命令数据
-        """
-        self.logger.info(f"处理位置调整命令: {json.dumps(data_json, ensure_ascii=False)}")
-        
-        try:
-            position_adjust_cmd = data_json.get('position_adjust_cmd', {})
-            marker_id = position_adjust_cmd.get('marker_id', '')
-            
-            if marker_id:
-                self.logger.info(f"位置调整到标记点: {marker_id}")
-                self.robot_controller.position_adjust(marker_id)
-            else:
-                self.logger.warning("未指定目标标记点")
-        except Exception as e:
-            self.logger.error(f"处理位置调整命令失败: {e}")
-
-    def _handle_charge_command(self, data_json: Dict[str, Any]):
-        """处理充电命令
-        
-        Args:
-            data_json: 充电命令数据
-        """
-        self.logger.info(f"处理充电命令: {json.dumps(data_json, ensure_ascii=False)}")
-        
-        try:
-            charge_cmd = data_json.get('charge_cmd', {})
-            charge = charge_cmd.get('charge', False)
-            
-            if charge:
-                self.logger.info("开始充电")
-                self.robot_controller.charge()
-            else:
-                self.logger.info("停止充电")
-                # TODO: 实现停止充电逻辑
-                
-        except Exception as e:
-            self.logger.error(f"处理充电命令失败: {e}")
-    
     #
     #                               处理clientUpload数据方法
     #
@@ -577,8 +388,8 @@ class RobotControlSystem:
     def _report_robot_status(self):
         """上报机器人状态"""
         try:
-            # 获取机器人状态
-            robot_status = self.robot_controller.get_status()
+            # 通过TaskManager获取机器人状态
+            robot_status = self.task_manager.get_robot_status()
                         
             # 构建位置信息
             position_info = PositionInfo(
@@ -654,8 +465,8 @@ class RobotControlSystem:
     def _report_environment_data(self):
         """上报环境数据"""
         try:
-            # 获取机器人状态
-            robot_status = self.robot_controller.get_status()
+            # 通过TaskManager获取机器人状态
+            robot_status = self.task_manager.get_robot_status()
                         
             # 构建位置信息
             position_info = PositionInfo(
@@ -683,8 +494,8 @@ class RobotControlSystem:
                     status=TaskStatus.PENDING
                 )
         
-            # 从机器人控制器获取真实环境数据
-            env_data = self.robot_controller.get_environment_data()
+            # 通过TaskManager获取真实环境数据
+            env_data = self.task_manager.get_environment_data()
             env_info = EnvironmentInfo(
                 temperature=env_data.get('temperature', 0.0),
                 humidity=env_data.get('humidity', 0.0),
@@ -714,13 +525,13 @@ class RobotControlSystem:
     
     def _report_device_data(self, task: Station):
         """任务完成后上报设备数据
-        
+
         Args:
             task: 完成的任务
         """
         try:
-            # 获取机器人状态
-            robot_status = self.robot_controller.get_status()
+            # 通过TaskManager获取机器人状态
+            robot_status = self.task_manager.get_robot_status()
                         
             # 构建位置信息
             position_info = PositionInfo(
@@ -776,14 +587,13 @@ class RobotControlSystem:
     
     def _report_arrive_service_point(self, task: Station):
         """到达服务点后上报
-        
+
         Args:
             task: 当前任务
         """
         try:
-
-                        # 获取机器人状态
-            robot_status = self.robot_controller.get_status()
+            # 通过TaskManager获取机器人状态
+            robot_status = self.task_manager.get_robot_status()
                         
             # 构建位置信息
             position_info = PositionInfo(
@@ -873,26 +683,47 @@ class RobotControlSystem:
     #                               回调函数
     #
 
-    def _on_task_complete(self, task: Task):
-        """任务完成回调
-        
+    def _handle_data_ready_callback(self, data_type: str, **kwargs):
+        """处理TaskManager的数据准备就绪回调（新增：双向回调机制）
+
         Args:
-            task: 完成的任务
+            data_type: 数据类型（device_data, task_complete等）
+            **kwargs: 其他参数
         """
-        self.logger.info(f"任务完成回调: {task.task_id}")
-        
-        # 触发任务执行回调
-        self._trigger_callback("on_task_executed", task, "completed")
-    
-    def _on_task_failed(self, task: Task):
-        """任务失败回调
-        
+        self.logger.info(f"收到数据就绪回调: {data_type}")
+
+        try:
+            if data_type == "device_data":
+                # 站点完成后上报设备数据
+                station = kwargs.get("station")
+                if station:
+                    self._report_device_data(station)
+
+            elif data_type == "task_complete":
+                # 任务完成后可以上报任务统计数据
+                task = kwargs.get("task")
+                if task:
+                    self.logger.info(f"任务 {task.task_id} 完成，可以上报统计数据")
+                    # TODO: 实现任务统计数据上报
+
+        except Exception as e:
+            self.logger.error(f"处理数据就绪回调失败: {e}")
+
+    def _handle_arrive_station_callback(self, **kwargs):
+        """处理到达站点回调（新增：双向回调机制）
+
         Args:
-            task: 失败的任务
+            **kwargs: 其他参数
         """
-        self.logger.error(f"任务失败回调: {task.task_id}")
-        # 触发任务执行回调
-        self._trigger_callback("on_task_executed", task, "failed")
+        self.logger.info("收到到达站点回调")
+
+        try:
+            station = kwargs.get("station")
+            if station:
+                self._report_arrive_service_point(station)
+
+        except Exception as e:
+            self.logger.error(f"处理到达站点回调失败: {e}")
     
     def register_callback(self, event: str, callback: Callable):
         """注册回调函数
@@ -1036,7 +867,7 @@ if __name__ == "__main__":
 
     }
     
-    robot_system = RobotControlSystem(config, use_mock=False)
+    robot_system = RobotControlSystem(config, use_mock=True)
     try:
         # 启动系统
         robot_system.start()
