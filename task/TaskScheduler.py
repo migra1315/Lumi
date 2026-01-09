@@ -65,20 +65,20 @@ class TaskScheduler:
         self.database.save_command(command)
         self.logger.info(f"命令 {command.command_id} (类型: {command.cmd_type.value}) 已添加到队列，优先级: {command.priority}")
 
-    def add_task(self, task: Task):
-        """添加任务到队列（兼容旧接口）"""
-        # 将Task转换为UnifiedCommand
-        from dataModels.UnifiedCommand import create_unified_command
-        command = create_unified_command(
-            command_id=task.task_id,
-            cmd_type=CmdType.TASK_CMD,
-            data=task,
-            metadata={"source": "add_task"}
-        )
-        self.add_command(command)
-        # 同时保存任务到tasks表
-        self.database.save_task(task)
-        self.logger.info(f"任务 {task.task_id} 已添加到队列")
+    # def add_task(self, task: Task):
+    #     """添加任务到队列（兼容旧接口）"""
+    #     # 将Task转换为UnifiedCommand
+    #     from dataModels.UnifiedCommand import create_unified_command
+    #     command = create_unified_command(
+    #         command_id=task.task_id,
+    #         cmd_type=CmdType.TASK_CMD,
+    #         data=task,
+    #         metadata={"source": "add_task"}
+    #     )
+    #     self.add_command(command)
+    #     # 同时保存任务到tasks表
+    #     self.database.save_task(task)
+    #     self.logger.info(f"任务 {task.task_id} 已添加到队列")
     
     def _scheduler_loop(self):
         """调度器主循环（支持统一命令队列）"""
@@ -159,6 +159,19 @@ class TaskScheduler:
                 command.status = CommandStatus.COMPLETED
                 command.completed_at = datetime.now()
                 self.database.update_command_status(command.command_id, CommandStatus.COMPLETED)
+
+                # 保存元数据（如果有）
+                if command.metadata:
+                    self.database.update_command_metadata(command.command_id, command.metadata)
+
+                # 保存错误信息（如果有，用于 PARTIAL_COMPLETED 情况）
+                if command.error_message:
+                    self.database.update_command_status(
+                        command.command_id,
+                        CommandStatus.COMPLETED,
+                        command.error_message
+                    )
+
                 self._trigger_callback("on_command_complete", command)
                 self.logger.info(f"命令 {command.command_id} 执行完成")
             else:
@@ -182,6 +195,11 @@ class TaskScheduler:
                         CommandStatus.FAILED,
                         command.error_message
                     )
+
+                    # 保存元数据（如果有）
+                    if command.metadata:
+                        self.database.update_command_metadata(command.command_id, command.metadata)
+
                     self._trigger_callback("on_command_failed", command)
                     self.logger.error(f"命令 {command.command_id} 执行失败")
 
@@ -196,56 +214,234 @@ class TaskScheduler:
                 command.error_message
             )
 
-    def _execute_task(self, task: Task):
-        """执行任务（兼容旧接口，已废弃，请使用add_command）"""
-        self.current_task = task
+            # 保存元数据（如果有）
+            if command.metadata:
+                self.database.update_command_metadata(command.command_id, command.metadata)
 
-        # 更新任务状态为运行中
-        task.status = TaskStatus.RUNNING
-        task.started_at = datetime.now()
-        self.database.update_task_status(task.task_id, TaskStatus.RUNNING)
+    # def _execute_task(self, task: Task):
+    #     """执行任务（兼容旧接口，已废弃，请使用add_command）"""
+    #     self.current_task = task
 
-        # 触发任务开始回调
-        self._trigger_callback("on_task_start", task)
+    #     # 更新任务状态为运行中
+    #     task.status = TaskStatus.RUNNING
+    #     task.started_at = datetime.now()
+    #     self.database.update_task_status(task.task_id, TaskStatus.RUNNING)
 
-        # 按照sort顺序排序站点
-        sorted_stations = sorted(task.station_list, key=lambda s: s.station_config.sort)
+    #     # 触发任务开始回调
+    #     self._trigger_callback("on_task_start", task)
 
-        # 提交到线程池执行
-        future = self.executor.submit(self._execute_task_internal, task)
-        future.add_done_callback(lambda f: self._task_execution_done(f, task))
+    #     # 按照sort顺序排序站点
+    #     sorted_stations = sorted(task.station_list, key=lambda s: s.station_config.sort)
+
+    #     # 提交到线程池执行
+    #     future = self.executor.submit(self._execute_task_internal, task)
+    #     future.add_done_callback(lambda f: self._task_execution_done(f, task))
     
+    # ==================== 命令类型的执行方法 ====================
+   
     def _execute_task_command(self, command: UnifiedCommand) -> bool:
-        """执行Task类型命令"""
+        """执行Task类型命令（更新版）
+
+        Args:
+            command: 统一命令对象
+
+        Returns:
+            bool: True=至少一个站点成功, False=所有站点失败
+        """
         task = command.data
         if not isinstance(task, Task):
             self.logger.error(f"命令数据类型错误，期望Task，实际: {type(task)}")
+            command.error_message = f"数据类型错误: {type(task)}"
             return False
 
-        return self._execute_task_internal(task)
+        # 执行任务
+        success = self._execute_task_internal(task)
+
+        # 判断任务状态
+        task_status = self._determine_task_status(task)
+        task.status = task_status
+
+        # 统计站点结果
+        total = len(task.station_list)
+        success_count = sum(1 for s in task.station_list if s.status == StationTaskStatus.COMPLETED)
+        failed_count = sum(1 for s in task.station_list if s.status == StationTaskStatus.FAILED)
+
+        # 更新 command metadata
+        if not command.metadata:
+            command.metadata = {}
+
+        command.metadata.update({
+            "total_stations": total,
+            "success_stations": success_count,
+            "failed_stations": failed_count,
+            "failed_station_ids": [
+                s.station_config.station_id
+                for s in task.station_list
+                if s.status == StationTaskStatus.FAILED
+            ]
+        })
+
+        # 设置错误信息
+        if failed_count > 0:
+            if failed_count == total:
+                command.error_message = f"任务失败: 所有 {total} 个站点均执行失败"
+            else:
+                command.error_message = f"任务部分失败: {success_count}/{total} 个站点成功"
+
+        # 更新数据库中的任务状态
+        self.database.update_task_status(task.task_id, task_status)
+
+        # 触发任务完成或失败回调
+        if task_status in [TaskStatus.COMPLETED, TaskStatus.PARTIAL_COMPLETED]:
+            self._trigger_callback("on_task_complete", task)
+        else:
+            self._trigger_callback("on_task_failed", task)
+
+        return success
 
     def _execute_task_internal(self, task: Task) -> bool:
-        """执行任务内部逻辑"""
-        # 按照sort顺序排序站点
-        sorted_stations = sorted(task.station_list, key=lambda s: s.station_config.sort)
-        try:
-            self.logger.info(f"开始执行任务 {task.task_id}")
+        """执行任务内部逻辑（重构版）
 
-            # 执行所有站点任务
-            for station in sorted_stations:
-                if not self._execute_station_task(station):
-                    self.logger.info(f"站点 {station.station_config.station_id} 执行失败")
-                    station.status = StationTaskStatus.TO_RETRY
-                    while not self._retry_station_task(station):
-                        self.logger.info(f"站点 {station.station_config.station_id} 重试失败")
-                        time.sleep(1)
- 
-            return True
-            
+        改进：
+        1. 清晰的循环逻辑（for 循环代替 while 循环）
+        2. 统计站点成功/失败数量
+        3. 返回值语义明确：True=至少一个站点成功, False=所有站点失败或异常
+
+        Args:
+            task: 任务对象
+
+        Returns:
+            bool: True=至少有一个站点成功, False=所有站点失败或异常
+        """
+        # 按照 sort 顺序排序站点
+        sorted_stations = sorted(task.station_list, key=lambda s: s.station_config.sort)
+        total_stations = len(sorted_stations)
+
+        # 统计变量
+        success_count = 0
+        failed_count = 0
+
+        try:
+            self.logger.info(f"开始执行任务 {task.task_id}，共 {total_stations} 个站点")
+
+            # 顺序执行所有站点任务（失败后继续）
+            for i, station in enumerate(sorted_stations, 1):
+                station_id = station.station_config.station_id
+                self.logger.info(f"执行站点 {i}/{total_stations}: {station_id}")
+
+                # 执行站点（包含重试逻辑）
+                if self._execute_station_task_with_retry(station):
+                    success_count += 1
+                    self.logger.info(f"✓ 站点 {station_id} 执行成功")
+                else:
+                    failed_count += 1
+                    self.logger.warning(f"✗ 站点 {station_id} 执行失败，继续执行后续站点")
+
+            # 输出汇总日志
+            self.logger.info(
+                f"任务 {task.task_id} 执行完成: "
+                f"成功 {success_count}/{total_stations}, "
+                f"失败 {failed_count}/{total_stations}"
+            )
+
+            # 返回值：至少有一个站点成功则返回 True
+            return success_count > 0
+
         except Exception as e:
             self.logger.error(f"任务执行异常: {e}")
             return False
-    
+
+    def _execute_station_task_with_retry(self, station: Station) -> bool:
+        """执行站点任务（包含自动重试逻辑）
+
+        功能：
+        1. 首次执行站点任务
+        2. 如果失败，自动重试（最多 max_retries 次）
+        3. 达到最大重试次数后，标记为失败
+
+        Args:
+            station: 站点对象
+
+        Returns:
+            bool: True=站点最终成功, False=站点最终失败
+        """
+        station_id = station.station_config.station_id
+        max_attempts = station.max_retries + 1  # 首次执行 + 重试次数
+
+        for attempt in range(max_attempts):
+            # 判断是否为重试
+            if attempt > 0:
+                station.retry_count = attempt
+                station.status = StationTaskStatus.RETRYING
+                self.database.add_station_retry_count(station_id)
+                self.database.update_station_task_status(station_id, StationTaskStatus.RETRYING)
+
+                # 记录重试日志
+                self.database.log_task_action(
+                    self.current_task.task_id,
+                    station_id,
+                    "retry",
+                    "retrying",
+                    f"站点执行重试, 第 {attempt}/{station.max_retries} 次重试"
+                )
+
+                # 触发站点重试回调
+                self._trigger_callback("on_station_retry", station)
+
+                self.logger.info(f"站点 {station_id} 第 {attempt} 次重试")
+                time.sleep(1)  # 重试间隔
+
+            # 执行站点任务
+            if self._execute_station_task(station):
+                # 成功
+                if attempt > 0:
+                    self.logger.info(f"站点 {station_id} 重试成功（第 {attempt} 次重试）")
+                return True
+
+        # 达到最大重试次数，仍然失败
+        return self._mark_station_failed(
+            station,
+            f"达到最大重试次数 ({station.max_retries})"
+        )
+
+    def _mark_station_failed(self, station: Station, reason: str) -> bool:
+        """将站点标记为失败，并更新数据库
+
+        Args:
+            station: 站点对象
+            reason: 失败原因描述
+
+        Returns:
+            bool: 始终返回 False，表示站点失败
+        """
+        station_id = station.station_config.station_id
+
+        # 更新站点状态
+        station.status = StationTaskStatus.FAILED
+        station.completed_at = datetime.now()
+        station.error_message = reason
+
+        # 更新数据库状态
+        self.database.update_station_task_status(
+            station_id,
+            StationTaskStatus.FAILED,
+            reason
+        )
+
+        # 记录失败日志
+        self.database.log_task_action(
+            self.current_task.task_id,
+            station_id,
+            "error",
+            "failed",
+            f"站点执行失败: {reason}"
+        )
+
+        self.logger.error(f"站点 {station_id} 最终失败: {reason}")
+
+        # 返回 False 表示站点失败
+        return False
+
     def _execute_station_task(self, station: Station) -> bool:
         """执行单个站点任务"""
         try:
@@ -256,7 +452,7 @@ class TaskScheduler:
             station.started_at = datetime.now()
             station_id = station.station_config.station_id
             self.database.update_station_task_status(station_id, StationTaskStatus.RUNNING)
-            
+    
             # 记录执行日志
             self.database.log_task_action(
                 self.current_task.task_id, 
@@ -326,105 +522,188 @@ class TaskScheduler:
             
         except Exception as e:
             self.logger.error(f"站点任务执行异常: {e}")
-   
-    def _retry_station_task(self, station: Station):
-
-        station_id = station.station_config.station_id
-                 
-        # 检查是否需要重试
-        if station.retry_count < station.max_retries:
-            # 增加重试次数
-            station.retry_count += 1
-            station.status = StationTaskStatus.RETRYING
-            self.database.add_station_retry_count(station_id)
-            self.database.update_station_task_status(station_id, StationTaskStatus.RETRYING)
-            
-            # 记录重试日志
-            self.database.log_task_action(
-                self.current_task.task_id, 
-                station_id, 
-                "retry", 
-                "retrying", 
-                f"站点执行重试, 重试次数: {station.retry_count}"
-            )
-            
-            # 触发站点重试回调
-            self._trigger_callback("on_station_retry", station)
-            
-            # 重新执行该站点
-            self.logger.info(f"站点 {station.station_config.station_id} 将进行第 {station.retry_count} 次重试")
-            time.sleep(1)  # 重试间隔
-            return self._execute_station_task(station)
-        else:
-            # 达到最大重试次数，标记为失败
-            station.status = StationTaskStatus.FAILED
-            station.completed_at = datetime.now()
-            return True
-            # station.error_message = str(e)
-            # self.database.update_station_task_status(
-            #     station_id, 
-            #     StationTaskStatus.FAILED, 
-            #     str(e)
-            # )
-            
-            # # 记录失败日志
-            # self.database.log_task_action(
-            #     self.current_task.task_id, 
-            #     station_id, 
-            #     "error", 
-            #     "failed", 
-            #     f"执行异常: {str(e)}"
-            # )
-            
-            # 触发站点失败回调
-            # self._trigger_callback("on_station_failed", station)
-            
             return False
 
-    def _task_execution_done(self, future, task: Task):
-        """任务执行完成回调"""
-        try:
-            success = future.result()
+    def _determine_task_status(self, task: Task) -> TaskStatus:
+        """根据站点执行结果判断任务状态
 
-            if success:
-                # 检查是否所有站点都已完成
-                all_completed = all(s.status == StationTaskStatus.COMPLETED for s in task.station_list)
-                if all_completed:
-                    task.status = TaskStatus.COMPLETED
-                    task.completed_at = datetime.now()
-                    self.database.update_task_status(task.task_id, TaskStatus.COMPLETED)
-                    self._trigger_callback("on_task_complete", task)
-                    self.logger.info(f"任务 {task.task_id} 执行完成")
-                else:
-                    # 部分站点失败，但任务继续完成
-                    task.status = TaskStatus.COMPLETED
-                    task.completed_at = datetime.now()
-                    self.database.update_task_status(task.task_id, TaskStatus.COMPLETED)
-                    self._trigger_callback("on_task_complete", task)
-                    self.logger.info(f"任务 {task.task_id} 执行完成，但部分站点执行失败")
-            else:
-                # 任务执行失败
-                task.status = TaskStatus.FAILED
-                task.completed_at = datetime.now()
-                task.error_message = f"任务执行失败，当前站点: {self.current_station.station_config.station_id if self.current_station else '未知'}"
-                self.database.update_task_status(
-                    task.task_id, 
-                    TaskStatus.FAILED, 
-                    task.error_message
-                )
-                self._trigger_callback("on_task_failed", task)
-                self.logger.error(f"任务 {task.task_id} 执行失败")
-                
+        判断规则：
+        - 所有站点成功 → COMPLETED
+        - 部分站点成功 → PARTIAL_COMPLETED
+        - 所有站点失败 → FAILED
+
+        Args:
+            task: 任务对象
+
+        Returns:
+            TaskStatus: 任务最终状态
+        """
+        total = len(task.station_list)
+        completed = sum(1 for s in task.station_list if s.status == StationTaskStatus.COMPLETED)
+        failed = sum(1 for s in task.station_list if s.status == StationTaskStatus.FAILED)
+
+        if completed == total:
+            # 所有站点成功
+            return TaskStatus.COMPLETED
+        elif failed == total:
+            # 所有站点失败
+            return TaskStatus.FAILED
+        else:
+            # 部分成功
+            return TaskStatus.PARTIAL_COMPLETED
+
+    def _execute_mode_command(self, command: UnifiedCommand) -> bool:
+        """执行模式切换命令"""
+        try:
+            data_json = command.data
+            robot_mode_cmd = data_json.get('robot_mode_cmd', {})
+            new_mode = RobotMode(robot_mode_cmd.get('robot_mode'))
+
+            self.logger.info(f"执行模式切换命令: {new_mode.value}")
+
+            # 调用机器人控制器切换模式（如果有相应方法）
+            # 这里简单记录日志，实际可能需要调用机器人控制器的方法
+            # success = self.robot_controller.set_mode(new_mode)
+
+            # 目前仅记录日志
+            self.logger.info(f"机器人模式已切换为: {new_mode.value}")
+            return True
+
         except Exception as e:
-            self.logger.error(f"任务执行回调异常: {e}")
-            task.status = TaskStatus.FAILED
-            task.completed_at = datetime.now()
-            self.database.update_task_status(
-                task.task_id, 
-                TaskStatus.FAILED, 
-                f"回调异常: {str(e)}"
-            )
+            self.logger.error(f"执行模式切换命令失败: {e}")
+            command.error_message = str(e)
+            return False
+
+    def _execute_joy_command(self, command: UnifiedCommand) -> bool:
+        """执行摇杆控制命令"""
+        try:
+            data_json = command.data
+            joy_control_cmd = data_json.get('joy_control_cmd', {})
+
+            self.logger.info(f"执行摇杆控制命令: {joy_control_cmd}")
+
+            # 调用机器人控制器的摇杆控制方法
+            success = self.robot_controller.joy_control(data_json)
+            return success
+            #TODO：如果返回False，command.error_message 中也应做相应的记录
+
+        except Exception as e:
+            self.logger.error(f"执行摇杆控制命令失败: {e}")
+            command.error_message = str(e)
+            return False
+
+    def _execute_charge_command(self, command: UnifiedCommand) -> bool:
+        """执行充电命令"""
+        try:
+            data_json = command.data
+            charge_cmd = data_json.get('charge_cmd', {})
+            charge = charge_cmd.get('charge', False)
+
+            if charge:
+                self.logger.info("执行开始充电命令")
+                success = self.robot_controller.charge()
+            else:
+                self.logger.info("执行停止充电命令")
+                # TODO: 实现停止充电逻辑
+                success = True
+            #TODO：如果返回False，command.error_message 中也应做相应的记录
+            return success
+
+        except Exception as e:
+            self.logger.error(f"执行充电命令失败: {e}")
+            command.error_message = str(e)
+            return False
+
+    def _execute_set_marker_command(self, command: UnifiedCommand) -> bool:
+        """执行设置标记命令"""
+        try:
+            data_json = command.data
+            set_marker_cmd = data_json.get('set_marker_cmd', {})
+            marker_id = set_marker_cmd.get('marker_id', '')
+
+            if marker_id:
+                self.logger.info(f"执行设置标记命令: {marker_id}")
+                #TODO：如果返回False，command.error_message 中也应做相应的记录
+                success = self.robot_controller.set_marker(marker_id)
+                return success
+            else:
+                self.logger.warning("未指定标记ID")
+                command.error_message = "未指定标记ID"
+                return False
+
+        except Exception as e:
+            self.logger.error(f"执行设置标记命令失败: {e}")
+            command.error_message = str(e)
+            return False
+
+    def _execute_position_adjust_command(self, command: UnifiedCommand) -> bool:
+        """执行位置调整命令"""
+        try:
+            data_json = command.data
+            position_adjust_cmd = data_json.get('position_adjust_cmd', {})
+            marker_id = position_adjust_cmd.get('marker_id', '')
+
+            if marker_id:
+                self.logger.info(f"执行位置调整命令: {marker_id}")
+                success = self.robot_controller.position_adjust(marker_id)
+                #TODO：如果返回False，command.error_message 中也应做相应的记录
+                return success
+            else:
+                self.logger.warning("未指定目标标记点")
+                command.error_message = "未指定目标标记点"
+                return False
+
+        except Exception as e:
+            self.logger.error(f"执行位置调整命令失败: {e}")
+            command.error_message = str(e)
+            return False
+
+    # def _task_execution_done(self, future, task: Task):
+    #     """任务执行完成回调"""
+    #     try:
+    #         success = future.result()
+
+    #         if success:
+    #             # 检查是否所有站点都已完成
+    #             all_completed = all(s.status == StationTaskStatus.COMPLETED for s in task.station_list)
+    #             if all_completed:
+    #                 task.status = TaskStatus.COMPLETED
+    #                 task.completed_at = datetime.now()
+    #                 self.database.update_task_status(task.task_id, TaskStatus.COMPLETED)
+    #                 self._trigger_callback("on_task_complete", task)
+    #                 self.logger.info(f"任务 {task.task_id} 执行完成")
+    #             else:
+    #                 # 部分站点失败，但任务继续完成
+    #                 task.status = TaskStatus.COMPLETED
+    #                 task.completed_at = datetime.now()
+    #                 self.database.update_task_status(task.task_id, TaskStatus.COMPLETED)
+    #                 self._trigger_callback("on_task_complete", task)
+    #                 self.logger.info(f"任务 {task.task_id} 执行完成，但部分站点执行失败")
+    #         else:
+    #             # 任务执行失败
+    #             task.status = TaskStatus.FAILED
+    #             task.completed_at = datetime.now()
+    #             task.error_message = f"任务执行失败，当前站点: {self.current_station.station_config.station_id if self.current_station else '未知'}"
+    #             self.database.update_task_status(
+    #                 task.task_id, 
+    #                 TaskStatus.FAILED, 
+    #                 task.error_message
+    #             )
+    #             self._trigger_callback("on_task_failed", task)
+    #             self.logger.error(f"任务 {task.task_id} 执行失败")
+                
+    #     except Exception as e:
+    #         self.logger.error(f"任务执行回调异常: {e}")
+    #         task.status = TaskStatus.FAILED
+    #         task.completed_at = datetime.now()
+    #         self.database.update_task_status(
+    #             task.task_id, 
+    #             TaskStatus.FAILED, 
+    #             f"回调异常: {str(e)}"
+    #         )
     
+    # ==================== 回调函数 ====================
+
     def register_callback(self, event: str, callback: Callable):
         """注册回调函数"""
         if event in self.task_callbacks:
@@ -496,106 +775,3 @@ class TaskScheduler:
             self.logger.error(f"服务操作失败: {e}")
             return False
 
-    # ==================== 新增：其他命令类型的执行方法 ====================
-    def _execute_mode_command(self, command: UnifiedCommand) -> bool:
-        """执行模式切换命令"""
-        try:
-            data_json = command.data
-            robot_mode_cmd = data_json.get('robot_mode_cmd', {})
-            new_mode = RobotMode(robot_mode_cmd.get('robot_mode'))
-
-            self.logger.info(f"执行模式切换命令: {new_mode.value}")
-
-            # 调用机器人控制器切换模式（如果有相应方法）
-            # 这里简单记录日志，实际可能需要调用机器人控制器的方法
-            # success = self.robot_controller.set_mode(new_mode)
-
-            # 目前仅记录日志
-            self.logger.info(f"机器人模式已切换为: {new_mode.value}")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"执行模式切换命令失败: {e}")
-            command.error_message = str(e)
-            return False
-
-    def _execute_joy_command(self, command: UnifiedCommand) -> bool:
-        """执行摇杆控制命令"""
-        try:
-            data_json = command.data
-            joy_control_cmd = data_json.get('joy_control_cmd', {})
-
-            self.logger.info(f"执行摇杆控制命令: {joy_control_cmd}")
-
-            # 调用机器人控制器的摇杆控制方法
-            success = self.robot_controller.joy_control(data_json)
-            return success
-
-        except Exception as e:
-            self.logger.error(f"执行摇杆控制命令失败: {e}")
-            command.error_message = str(e)
-            return False
-
-    def _execute_charge_command(self, command: UnifiedCommand) -> bool:
-        """执行充电命令"""
-        try:
-            data_json = command.data
-            charge_cmd = data_json.get('charge_cmd', {})
-            charge = charge_cmd.get('charge', False)
-
-            if charge:
-                self.logger.info("执行开始充电命令")
-                success = self.robot_controller.charge()
-            else:
-                self.logger.info("执行停止充电命令")
-                # TODO: 实现停止充电逻辑
-                success = True
-
-            return success
-
-        except Exception as e:
-            self.logger.error(f"执行充电命令失败: {e}")
-            command.error_message = str(e)
-            return False
-
-    def _execute_set_marker_command(self, command: UnifiedCommand) -> bool:
-        """执行设置标记命令"""
-        try:
-            data_json = command.data
-            set_marker_cmd = data_json.get('set_marker_cmd', {})
-            marker_id = set_marker_cmd.get('marker_id', '')
-
-            if marker_id:
-                self.logger.info(f"执行设置标记命令: {marker_id}")
-                success = self.robot_controller.set_marker(marker_id)
-                return success
-            else:
-                self.logger.warning("未指定标记ID")
-                command.error_message = "未指定标记ID"
-                return False
-
-        except Exception as e:
-            self.logger.error(f"执行设置标记命令失败: {e}")
-            command.error_message = str(e)
-            return False
-
-    def _execute_position_adjust_command(self, command: UnifiedCommand) -> bool:
-        """执行位置调整命令"""
-        try:
-            data_json = command.data
-            position_adjust_cmd = data_json.get('position_adjust_cmd', {})
-            marker_id = position_adjust_cmd.get('marker_id', '')
-
-            if marker_id:
-                self.logger.info(f"执行位置调整命令: {marker_id}")
-                success = self.robot_controller.position_adjust(marker_id)
-                return success
-            else:
-                self.logger.warning("未指定目标标记点")
-                command.error_message = "未指定目标标记点"
-                return False
-
-        except Exception as e:
-            self.logger.error(f"执行位置调整命令失败: {e}")
-            command.error_message = str(e)
-            return False

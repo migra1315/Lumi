@@ -181,7 +181,7 @@ class RobotControlSystem:
             return
         
         self.set_client_upload_response_handler(self._handle_clientUpload_response)
-        self.set_server_command_response_handler(self._handle_serverCommand_response)
+        self.set_server_command_response_handler(self._handle_serverCommand)
         
         # 启动定时上报
         self._start_reporting()
@@ -222,85 +222,17 @@ class RobotControlSystem:
 
         self.logger.info("机器人控制系统已停止")
     
-
-    def _simulate_receive_command(self):
-        """模拟接收后台指令（仅用于测试）"""
-        # 从CommandModels中导入RobotMode枚举
-        from dataModels.CommandModels import RobotMode
-        from dataModels.TaskModels import OperationMode, OperationConfig
-        
-        # 创建操作配置
-        operation_config1 = OperationConfig(
-            operation_mode=OperationMode.CAPTURE,
-            door_ip=None,
-            device_id="device_1"
-        )
-        
-        operation_config2 = OperationConfig(
-            operation_mode=OperationMode.CAPTURE,
-            door_ip=None,
-            device_id="device_2"
-        )
-        
-        station_config1 = StationConfig(
-            station_id="station_id_1",
-            sort=1,
-            name="站点1",
-            agv_marker="marker_1",
-            robot_pos=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            ext_pos=[0.0, 0.0, 0.0, 0.0],
-            operation_config=operation_config1
-        )
-        station_config2 = StationConfig(
-            station_id="station_id_2",
-            sort=2,
-            name="站点2",
-            agv_marker="marker_2",
-            robot_pos=[10.0, 10.0, 0.0, 0.0, 0.0, 0.0],
-            ext_pos=[1.0, 0.0, 0.0, 0.0],
-            operation_config=operation_config2
-        )
-        # 创建一个模拟的TaskCmd
-        task_cmd = TaskCmd(
-            task_id=f"TASK_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]}",
-            task_name="测试巡检任务",
-            robot_mode=RobotMode.INSPECTION,
-            generate_time=datetime.now(),
-            station_config_list=[
-               station_config1,
-               station_config2
-            ]
-        )
-        
-        # 创建命令信封
-        cmd_envelope = create_cmd_envelope(
-            cmd_id=str(uuid.uuid4()),
-            robot_id=self.robot_id,
-            cmd_type=CmdType.TASK_CMD,
-            cmd_data=task_cmd
-        )
-        
-        # 处理命令
-        self._handle_command(cmd_envelope)
-    
     #
     #                               处理serverCommand数据方法
     #
-
-    def _handle_serverCommand_response(self, response):
-        """处理从gRPC服务器收到的 serverCommand 响应/命令"""
-        try:
-            command_envelope = convert_server_message_to_command_envelope(response)
-            self._handle_command(command_envelope)            
-        except Exception as e:
-            self.logger.error(f"处理gRPC响应失败: {e}")
-            
-    def _handle_command(self, command_envelope: CommandEnvelope):
-        """处理接收到的命令（统一入口，简化版）
+   
+    def _handle_serverCommand(self, response: robot_pb2.ServerStreamMessage):
+        """处理接收到的命令
 
         Args:
-            command_envelope: 命令信封对象
+            response: ServerStreamMessage
         """
+        command_envelope = convert_server_message_to_command_envelope(response)
         self.logger.debug(f"收到命令: {command_envelope.to_json()}")
 
         try:
@@ -329,7 +261,7 @@ class RobotControlSystem:
                 new_mode = RobotMode(mode_cmd.get('robot_mode'))
                 self.current_mode = new_mode
                 self.logger.info(f"机器人工作模式已更新为: {new_mode}")
-                return
+
             # 统一通过TaskManager处理所有命令
             command_id = self.task_manager.receive_command(command_envelope)
             self.logger.info(f"命令已提交给TaskManager: {command_id}, 类型: {cmd_type.value}")

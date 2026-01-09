@@ -558,6 +558,26 @@ class TaskDatabase:
             self.logger.error(f"增加命令重试次数失败: {e}")
             raise
 
+    def update_command_metadata(self, command_id: str, metadata: Dict[str, Any]):
+        """更新命令元数据
+
+        Args:
+            command_id: 命令ID
+            metadata: 元数据字典
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                metadata_json = json.dumps(metadata, ensure_ascii=False)
+                cursor.execute('''
+                    UPDATE unified_commands
+                    SET metadata_json = ?
+                    WHERE command_id = ?
+                ''', (metadata_json, command_id))
+        except Exception as e:
+            self.logger.error(f"更新命令元数据失败: {e}")
+            raise
+
     def get_command_by_id(self, command_id: str) -> Optional[Dict[str, Any]]:
         """根据ID查询命令"""
         try:

@@ -15,12 +15,13 @@ class StationTaskStatus(Enum):
 
 
 class TaskStatus(Enum):
-    PENDING = "pending"      # 待执行
-    RUNNING = "running"      # 执行中
-    COMPLETED = "completed"  # 已完成
-    FAILED = "failed"        # 执行失败
-    SKIPPED = "skipped"      # 已跳过
-    RETRYING = "retrying"    # 重试中
+    PENDING = "pending"                # 待执行
+    RUNNING = "running"                # 执行中
+    COMPLETED = "completed"            # 已完成（所有站点成功）
+    PARTIAL_COMPLETED = "partial_completed"  # 部分完成（部分站点失败）
+    FAILED = "failed"                  # 执行失败（所有站点失败）
+    SKIPPED = "skipped"                # 已跳过
+    RETRYING = "retrying"              # 重试中
 
 
 class OperationMode(Enum):

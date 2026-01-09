@@ -1,3 +1,4 @@
+from typing import Any, Dict
 from dataModels.MessageModels import MoveStatus
 from dataModels.TaskModels import TaskStatus, Task, Station, StationTaskStatus, StationConfig, OperationConfig, OperationMode, RobotMode
 from datetime import datetime
@@ -508,6 +509,58 @@ def convert_task_cmd_to_task(task_cmd: TaskCmd) -> Task:
     )
     
     return task
+
+
+def convert_data_json_to_task_cmd(data_json: Dict[str, Any]) -> TaskCmd:
+        """从data_json解析TaskCmd对象
+
+        Args:
+            data_json: 命令数据JSON
+
+        Returns:
+            TaskCmd: 任务命令对象
+        """
+        task_cmd_dict = data_json.get('task_cmd', {})
+
+        # 提取任务信息
+        task_id = task_cmd_dict.get('task_id')
+        task_name = task_cmd_dict.get('task_name')
+        robot_mode = RobotMode(task_cmd_dict.get('robot_mode'))
+        generate_time = datetime.fromisoformat(task_cmd_dict.get('generate_time'))
+        station_config_tasks = task_cmd_dict.get('station_config_tasks', [])
+
+        # 解析站点配置列表
+        station_config_list = []
+        for station_config_dict in station_config_tasks:
+            # 解析操作配置
+            operation_config_data = station_config_dict.get('operation_config', {})
+            operation_config = OperationConfig(
+                operation_mode=OperationMode(operation_config_data.get('operation_mode', 'None')),
+                door_ip=operation_config_data.get('door_ip'),
+                device_id=operation_config_data.get('device_id')
+            )
+
+            # 创建站点配置
+            station_config = StationConfig(
+                station_id=station_config_dict.get('station_id'),
+                sort=station_config_dict.get('sort', 0),
+                name=station_config_dict.get('name', ''),
+                agv_marker=station_config_dict.get('agv_marker', ''),
+                robot_pos=station_config_dict.get('robot_pos', []),
+                ext_pos=station_config_dict.get('ext_pos', []),
+                operation_config=operation_config
+            )
+
+            station_config_list.append(station_config)
+
+        # 创建TaskCmd对象
+        return TaskCmd(
+            task_id=task_id,
+            task_name=task_name,
+            robot_mode=robot_mode,
+            generate_time=generate_time,
+            station_config_list=station_config_list
+        )
 
 
 def convert_station_to_proto_station(station: Station) -> robot_pb2.Station:
