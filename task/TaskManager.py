@@ -42,10 +42,18 @@ class TaskManager:
         self.scheduler.register_callback("on_station_complete", self._on_station_complete)
         self.scheduler.register_callback("on_station_retry", self._on_station_retry)
 
+        # 注册命令级回调
+        self.scheduler.register_callback("on_command_complete", self._on_command_complete)
+        self.scheduler.register_callback("on_command_failed", self._on_command_failed)
+        self.scheduler.register_callback("on_command_status_change", self._on_command_status_change)
+
         # 新增：系统级回调（用于TaskManager -> RobotControlSystem通信）
         self.system_callbacks = {
-            "on_data_ready": None,            # 数据准备就绪回调（用于上报）
-            "on_arrive_station": None,        # 到达站点回调
+            "on_data_ready": None,              # 数据准备就绪回调（用于上报）
+            "on_arrive_service_station": None,          # 到达站点回调
+            "on_command_status_change": None,   # 命令状态变化回调
+            "on_task_progress": None,           # 任务进度回调
+            "on_operation_result": None,        # 操作结果回调
         }
 
     def _init_robot_controller(self):
@@ -54,7 +62,7 @@ class TaskManager:
             if self.use_mock:
                 self.logger.info("TaskManager: 使用Mock机器人控制器")
                 from robot.MockRobotController import MockRobotController
-                self.robot_controller = MockRobotController(self.config)
+                self.robot_controller = MockRobotController(self.config['robot_config'])
             else:
                 self.logger.info("TaskManager: 使用真实机器人控制器")
                 from robot.RobotController import RobotController as RealRobotController
@@ -361,27 +369,79 @@ class TaskManager:
         """站点开始回调"""
         self.logger.info(f"站点开始: {station.station_config.station_id}")
 
-        # 触发系统回调：通知RobotControlSystem到达站点
-        self._trigger_system_callback(
-            "on_arrive_station",
-            station=station
-        )
+        # 触发任务进度回调
+        task = self.scheduler.current_task
+        if task:
+            self._trigger_system_callback(
+                "on_task_progress",
+                task=task,
+                station=station
+            )
 
     def _on_station_complete(self, station: Station):
         """站点完成回调"""
         self.logger.info(f"站点完成: {station.station_config.station_id}")
 
-        # 触发系统回调：通知RobotControlSystem上报设备数据
-        self._trigger_system_callback(
-            "on_data_ready",
-            data_type="device_data",
-            station=station
-        )
+        # 检查是否有操作结果，触发操作结果回调
+        operation_result = station.metadata.get('operation_result') if station.metadata else None
+        if operation_result:
+            task = self.scheduler.current_task
+            operation_data = {
+                'task_id': task.task_id if task else '',
+                'station_id': station.station_config.station_id,
+                'operation_mode': station.station_config.operation_config.operation_mode,
+                'result': operation_result
+            }
+            self._trigger_system_callback(
+                "on_operation_result",
+                operation_data=operation_data
+            )
+
+        # 触发任务进度回调
+        task = self.scheduler.current_task
+        if task:
+            self._trigger_system_callback(
+                "on_task_progress",
+                task=task,
+                station=station
+            )
 
     def _on_station_retry(self, station: Station):
         """站点重试回调"""
         self.logger.warning(f"站点重试: {station.station_config.station_id}, 重试次数: {station.retry_count}")
         # 可以在这里发送通知或更新UI
+
+    # ==================== 命令级回调处理 ====================
+
+    def _on_command_complete(self, command):
+        """命令完成回调"""
+        self.logger.info(f"命令完成: {command.command_id}")
+
+        # 触发系统回调：通知RobotControlSystem命令状态变化
+        self._trigger_system_callback(
+            "on_command_status_change",
+            command=command
+        )
+
+    def _on_command_failed(self, command):
+        """命令失败回调"""
+        self.logger.error(f"命令失败: {command.command_id}")
+
+        # 触发系统回调：通知RobotControlSystem命令状态变化
+        self._trigger_system_callback(
+            "on_command_status_change",
+            command=command
+        )
+
+    def _on_command_status_change(self, command):
+        """命令状态变化回调（任何状态变化都触发）"""
+        self.logger.info(f"命令状态变化: {command.command_id} -> {command.status.value}")
+
+        # 触发系统回调：通知RobotControlSystem命令状态变化
+        self._trigger_system_callback(
+            "on_command_status_change",
+            command=command
+        )
     
     def shutdown(self):
         """关闭管理器"""

@@ -27,7 +27,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
     def __init__(self):
         self.client_connections = []
         self.command_counter = 0
-        logger.info("RobotServiceServicer初始化")
+        logger.info("【system】RobotServiceServicer初始化")
     
     def clientUpload(self, request_iterator, context):
         """双向流式通信: 接收机器人上传的状态、设备数据等
@@ -40,7 +40,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             响应迭代器
         """
         client_id = context.peer()
-        logger.info(f"新客户端连接到 clientUpload: {client_id}")
+        logger.info(f"【clientUpload】新客户端连接: {client_id}")
         self.client_connections.append(client_id)
         
         try:
@@ -59,13 +59,13 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                     )
                 )
                 yield response
-        
+
         except Exception as e:
-            logger.error(f"处理 clientUpload 请求时出错: {e}")
+            logger.error(f"【clientUpload】处理请求时出错: {e}")
         finally:
             if client_id in self.client_connections:
                 self.client_connections.remove(client_id)
-            logger.info(f"客户端断开 clientUpload 连接: {client_id}")
+            logger.info(f"【clientUpload】客户端断开连接: {client_id}")
     
     def serverCommand(self, request_iterator, context):
         """双向流式通信: 向机器人推送任务分配、服务指令
@@ -78,7 +78,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             响应迭代器
         """
         client_id = context.peer()
-        logger.info(f"新客户端连接到 serverCommand: {client_id}")
+        logger.info(f"【serverCommand】新客户端连接: {client_id}")
         self.client_connections.append(client_id)
         
         # 用于存储客户端消息的队列
@@ -86,22 +86,22 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         
         def process_client_messages():
             """在单独的线程中处理客户端消息"""
-            logger.info(f"开始处理客户端消息: {client_id}")
+            logger.info(f"【serverCommand】开始处理客户端消息: {client_id}")
             try:
-                logger.info(f"准备开始迭代请求: {client_id}")
+                logger.info(f"【serverCommand】准备开始迭代请求: {client_id}")
                 for request in request_iterator:
                     # 将消息放入队列供主线程处理
-                    logger.info(f"收到客户端消息: {client_id}, 消息ID: {request.command_id}")
+                    logger.info(f"【serverCommand】收到客户端消息: {client_id}, 消息ID: {request.command_id}")
                     client_messages.put(request)
-                    # 可以在这里立即处理客户端消息
-                    # self._handle_cmd_response(request, client_id)
-                    
+                    # 立即处理客户端消息
+                    self._handle_client_stream_message(request, client_id)
+
             except Exception as e:
-                logger.error(f"处理客户端消息时出错: {e}")
-                
+                logger.error(f"【serverCommand】处理客户端消息时出错: {e}")
+
             finally:
                 # 当客户端断开连接时，放入一个特殊标记
-                logger.info(f"客户端消息处理结束: {client_id}")
+                logger.info(f"【serverCommand】客户端消息处理结束: {client_id}")
                 client_messages.put(None)
 
         # 启动客户端消息处理线程
@@ -139,10 +139,10 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                             command_type=robot_service_pb2.CmdType.CHARGE_CMD,
                             robot_id=123456
                         )
-                    
+
                         # 设置oneof字段
                         request.charge_cmd.CopyFrom(charge_cmd)
-                        logger.info(f"向客户端发送充电命令: {self.command_counter}")
+                        logger.info(f"【serverCommand】向客户端发送充电命令: {self.command_counter}")
                     
                     elif command_type == 1:
                         # 创建RobotModeCommand
@@ -161,14 +161,14 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                         
                         # 验证字段是否设置成功
                         if not request.HasField('robot_mode_command'):
-                            logger.error("RobotModeCommand字段设置失败")
+                            logger.error("【serverCommand】RobotModeCommand字段设置失败")
                         else:
-                            logger.info(f"向客户端发送RobotModeCommand: {self.command_counter}, mode={robot_service_pb2.RobotMode.Name(robot_mode_cmd.robot_mode)}")
+                            logger.info(f"【serverCommand】向客户端发送RobotModeCommand: {self.command_counter}, mode={robot_service_pb2.RobotMode.Name(robot_mode_cmd.robot_mode)}")
                         
                     elif command_type == 2:
                         # 创建Task命令
                         request = self.create_task()
-                        logger.info(f"向客户端发送Task命令: {self.command_counter}, task_id={request.task_cmd.task_id}")
+                        logger.info(f"【serverCommand】向客户端发送Task命令: {self.command_counter}, task_id={request.task_cmd.task_id}")
                         
                     else:
                         # 创建JoyControlCmd
@@ -183,14 +183,14 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                             command_type=robot_service_pb2.CmdType.JOY_CONTROL_CMD,
                             robot_id=123456
                         )
-                        
+
                         # 设置joy_control_cmd字段
                         request.joy_control_cmd.CopyFrom(joy_control_cmd)
-                        logger.info(f"向客户端发送JoyControlCmd: {self.command_counter}")
-                        
+                        logger.info(f"【serverCommand】向客户端发送JoyControlCmd: {self.command_counter}")
+
 
                     # 打印调试信息
-                    logger.debug(f"准备发送命令: {request}")
+                    logger.debug(f"【serverCommand】准备发送命令: {request}")
                     
                     # 发送请求
                     yield request
@@ -204,25 +204,25 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                     while not client_messages.empty():
                         client_msg = client_messages.get_nowait()
                         if client_msg is None:  # 客户端断开连接
-                            logger.info(f"检测到客户端断开连接: {client_id}")
+                            logger.info(f"【serverCommand】检测到客户端断开连接: {client_id}")
                             return
                 except queue.Empty:
                     pass
-                
+
                 # 检查上下文是否被取消
                 if not context.is_active():
-                    logger.info(f"上下文被取消: {client_id}")
+                    logger.info(f"【serverCommand】上下文被取消: {client_id}")
                     break
                 
                 # 短暂休眠，避免CPU占用过高
                 time.sleep(0.1)
-                
+
         except Exception as e:
-            logger.error(f"处理serverCommand请求时出错: {e}")
+            logger.error(f"【serverCommand】处理请求时出错: {e}")
         finally:
             if client_id in self.client_connections:
                 self.client_connections.remove(client_id)
-            logger.info(f"客户端断开serverCommand连接: {client_id}")
+            logger.info(f"【serverCommand】客户端断开连接: {client_id}")
     
             # 创建一个线程来处理客户端消息
     
@@ -231,14 +231,14 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
 
         # 首先创建OperationConfig
         operation_config = robot_service_pb2.OperationConfig(
-            operation_mode=robot_service_pb2.OperationMode.OPERATION_MODE_CAPTURE,
+            operation_mode=robot_service_pb2.OperationMode.OPERATION_MODE_NONE,
             door_ip="192.168.1.100",
-            device_id=123456
+            device_id=2222
         )
         
         # 创建StationConfig
         station_config = robot_service_pb2.StationConfig(
-            station_id=123456,
+            station_id=1111,
             sort=1,
             name=f"测试站点{self.command_counter}",
             agv_marker=f"marker_2",
@@ -260,7 +260,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         task = robot_service_pb2.Task(
             task_id=123456,
             task_name=f"task_{self.command_counter}",
-            station_list=[station],
+            station_list=[station, station, station, station],
             status=robot_service_pb2.TaskStatus.TASK_STATUS_PENDING,
             robot_mode=robot_service_pb2.RobotMode.INSPECTION,
             generate_time=int(current_time * 1000),
@@ -278,26 +278,26 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         request.task_cmd.CopyFrom(task)
         return request
     
-    def _handle_cmd_response(self, request, client_id):
-        """处理客户端上传的响应
-        Args:
-            request: 客户端请求
-            client_id: 客户端ID
-        """
-        try:
-            command_type = robot_service_pb2.CmdType.Name(request.command_type)
-        except ValueError:
-            command_type = f"未知类型({request.command_type})"
+    # def _handle_cmd_response(self, request, client_id):
+    #     """处理客户端上传的响应
+    #     Args:
+    #         request: 客户端请求
+    #         client_id: 客户端ID
+    #     """
+    #     try:
+    #         command_type = robot_service_pb2.CmdType.Name(request.command_type)
+    #     except ValueError:
+    #         command_type = f"未知类型({request.command_type})"
             
-        logger.info(f"接收客户端 {client_id} 响应: {command_type} (command_id: {request.command_id})")
+    #     logger.info(f"接收客户端 {client_id} 响应: {command_type} (command_id: {request.command_id})")
         
-        # 记录响应数据
-        if request.data_json:
-            logger.info(f"响应数据: code={request.data_json.code}, info={request.data_json.info}")
+    #     # 记录响应数据
+    #     if request.data_json:
+    #         logger.info(f"响应数据: code={request.data_json.code}, info={request.data_json.info}")
     
     def _handle_client_message(self, request, client_id):
         """处理客户端上传的消息
-        
+
         Args:
             request: 客户端请求
             client_id: 客户端ID
@@ -306,8 +306,8 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             msg_type = robot_service_pb2.MsgType.Name(request.msg_type)
         except ValueError:
             msg_type = f"未知类型({request.msg_type})"
-            
-        logger.info(f"接收客户端 {client_id} 消息: {msg_type} (msg_id: {request.msg_id}, robot_id: {request.robot_id})")
+
+        logger.info(f"【clientUpload】接收消息: {msg_type} (msg_id: {request.msg_id}, robot_id: {request.robot_id}, client: {client_id})")
         
         # 根据消息类型处理
         if request.HasField('robot_status'):
@@ -319,11 +319,11 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         elif request.HasField('arrive_service_point'):
             self._handle_arrive_service_point(request.arrive_service_point)
         else:
-            logger.warning(f"未知的消息类型或数据字段未设置")
+            logger.warning(f"【clientUpload】未知的消息类型或数据字段未设置")
     
     def _handle_robot_status(self, robot_status):
         """处理机器人状态消息
-        
+
         Args:
             robot_status: 机器人状态
         """
@@ -331,8 +331,8 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             move_status = robot_service_pb2.MoveStatus.Name(robot_status.system_status.move_status)
         except ValueError:
             move_status = f"未知({robot_status.system_status.move_status})"
-            
-        logger.info(f"机器人状态: "
+
+        logger.info(f"【clientUpload】机器人状态: "
                     f"电量={robot_status.battery_info.power_percent:.1f}%, "
                     f"充电状态={robot_status.battery_info.charge_status}, "
                     f"移动状态={move_status}, "
@@ -340,36 +340,173 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
     
     def _handle_device_data(self, device_data):
         """处理设备数据消息
-        
+
         Args:
             device_data: 设备数据
         """
-        logger.info(f"设备数据: "
+        logger.info(f"【clientUpload】设备数据: "
                     f"设备ID={device_data.device_info.device_id}, "
                     f"数据类型={device_data.device_info.data_type}, "
                     f"图片数量={len(device_data.device_info.image_base64)}")
-    
+
     def _handle_environment_data(self, environment_data):
         """处理环境数据消息
-        
+
         Args:
             environment_data: 环境数据
         """
         env_info = environment_data.sensor_data
-        logger.info(f"环境数据: "
+        logger.info(f"【clientUpload】环境数据: "
                     f"温度={env_info.temperature:.1f}°C, "
                     f"湿度={env_info.humidity:.1f}%, "
                     f"PM2.5={env_info.pm25:.1f}, "
                     f"噪音={env_info.noise:.1f}dB")
-    
+
     def _handle_arrive_service_point(self, arrive_service_point):
         """处理到达服务点消息
-        
+
         Args:
             arrive_service_point: 到达服务点数据
         """
-        arrive_info = arrive_service_point.arrive_service_point_info
-        logger.info(f"到达服务点: {'已到达' if arrive_info.is_arrive else '未到达'}")
+        logger.info(f"【clientUpload】到达服务点: {'已到达' if arrive_service_point.is_arrive else '未到达'}")
+
+    def _handle_client_stream_message(self, request, client_id):
+        """处理客户端通过serverCommand流发送的消息
+
+        Args:
+            request: ClientStreamMessage对象
+            client_id: 客户端ID
+        """
+        try:
+            # 获取消息类型名称
+            try:
+                command_type = robot_service_pb2.ClientMessageType.Name(request.command_type)
+            except ValueError:
+                command_type = f"未知类型({request.command_type})"
+
+            logger.info(f"【serverCommand】接收客户端消息: {command_type} (command_id: {request.command_id}, client: {client_id})")
+
+            # 根据消息类型处理
+            if request.command_type == robot_service_pb2.ClientMessageType.HEARTBEAT:
+                logger.info(f"【serverCommand】收到心跳消息")
+
+            elif request.command_type == robot_service_pb2.ClientMessageType.COMMAND_RESPONSE:
+                if request.HasField('response_info'):
+                    self._handle_command_response(request.response_info, client_id)
+
+            elif request.command_type == robot_service_pb2.ClientMessageType.SET_MARKER_RESPONSE:
+                if request.HasField('position_info'):
+                    logger.info(f"【serverCommand】收到设置标记点响应")
+
+            elif request.command_type == robot_service_pb2.ClientMessageType.COMMAND_STATUS_UPDATE:
+                if request.HasField('command_status'):
+                    self._handle_command_status_update(request.command_status, client_id)
+
+            elif request.command_type == robot_service_pb2.ClientMessageType.TASK_PROGRESS_UPDATE:
+                if request.HasField('task_progress'):
+                    self._handle_task_progress_update(request.task_progress, client_id)
+
+            elif request.command_type == robot_service_pb2.ClientMessageType.OPERATION_RESULT:
+                if request.HasField('operation_result'):
+                    self._handle_operation_result(request.operation_result, client_id)
+
+            else:
+                logger.warning(f"【serverCommand】未知的ClientMessageType: {request.command_type}")
+
+        except Exception as e:
+            logger.error(f"【serverCommand】处理客户端流消息失败: {e}")
+
+    def _handle_command_response(self, response_info, client_id):
+        """处理命令响应
+
+        Args:
+            response_info: ServerResponse对象
+            client_id: 客户端ID
+        """
+        logger.info(f"【serverCommand】命令响应 [{client_id}]: code={response_info.code}, info={response_info.info}")
+
+    def _handle_command_status_update(self, command_status, client_id):
+        """处理命令状态更新
+
+        Args:
+            command_status: CommandStatusUpdate对象
+            client_id: 客户端ID
+        """
+        try:
+            # 获取命令类型和状态的名称
+            cmd_type = robot_service_pb2.CmdType.Name(command_status.command_type)
+            status = robot_service_pb2.CommandStatus.Name(command_status.status)
+        except ValueError:
+            cmd_type = f"未知({command_status.command_type})"
+            status = f"未知({command_status.status})"
+
+        logger.info(f"【serverCommand】【命令状态更新】[{client_id}]")
+        logger.info(f"  ├─ 命令ID: {command_status.command_id}")
+        logger.info(f"  ├─ 命令类型: {cmd_type}")
+        logger.info(f"  ├─ 状态: {status}")
+        logger.info(f"  ├─ 消息: {command_status.message}")
+        logger.info(f"  ├─ 重试次数: {command_status.retry_count}")
+        logger.info(f"  └─ 时间戳: {command_status.timestamp}")
+
+    def _handle_task_progress_update(self, task_progress, client_id):
+        """处理任务进度更新
+
+        Args:
+            task_progress: TaskProgressUpdate对象
+            client_id: 客户端ID
+        """
+        try:
+            # 获取任务状态和站点状态的名称
+            task_status = robot_service_pb2.TaskStatus.Name(task_progress.task_status)
+            station_status = robot_service_pb2.StationTaskStatus.Name(task_progress.current_station_status)
+        except ValueError:
+            task_status = f"未知({task_progress.task_status})"
+            station_status = f"未知({task_progress.current_station_status})"
+
+        logger.info(f"【serverCommand】【任务进度更新】[{client_id}]")
+        logger.info(f"  ├─ 任务ID: {task_progress.task_id}")
+        logger.info(f"  ├─ 任务名称: {task_progress.task_name}")
+        logger.info(f"  ├─ 任务状态: {task_status}")
+        logger.info(f"  ├─ 总站点数: {task_progress.total_stations}")
+        logger.info(f"  ├─ 已完成站点: {task_progress.completed_stations}")
+        logger.info(f"  ├─ 失败站点: {task_progress.failed_stations}")
+        logger.info(f"  ├─ 当前站点ID: {task_progress.current_station_id}")
+        logger.info(f"  ├─ 当前站点名称: {task_progress.current_station_name}")
+        logger.info(f"  ├─ 当前站点状态: {station_status}")
+        logger.info(f"  ├─ 消息: {task_progress.message}")
+        logger.info(f"  └─ 时间戳: {task_progress.timestamp}")
+
+    def _handle_operation_result(self, operation_result, client_id):
+        """处理操作结果
+
+        Args:
+            operation_result: OperationResult对象
+            client_id: 客户端ID
+        """
+        try:
+            # 获取操作模式和状态的名称
+            operation_mode = robot_service_pb2.OperationMode.Name(operation_result.operation_mode)
+            operation_status = robot_service_pb2.OperationStatus.Name(operation_result.status)
+        except ValueError:
+            operation_mode = f"未知({operation_result.operation_mode})"
+            operation_status = f"未知({operation_result.status})"
+
+        logger.info(f"【serverCommand】【操作结果】[{client_id}]")
+        logger.info(f"  ├─ 任务ID: {operation_result.task_id}")
+        logger.info(f"  ├─ 站点ID: {operation_result.station_id}")
+        logger.info(f"  ├─ 操作模式: {operation_mode}")
+        logger.info(f"  ├─ 操作状态: {operation_status}")
+        logger.info(f"  ├─ 消息: {operation_result.message}")
+        logger.info(f"  ├─ 设备ID: {operation_result.device_id}")
+        logger.info(f"  ├─ 门禁IP: {operation_result.door_ip}")
+        logger.info(f"  ├─ 图像数量: {len(operation_result.image_base64)}")
+        logger.info(f"  ├─ 耗时: {operation_result.duration:.2f}秒")
+        logger.info(f"  └─ 时间戳: {operation_result.timestamp}")
+
+        # 如果有图像数据，打印图像大小信息
+        if operation_result.image_base64:
+            for idx, img_base64 in enumerate(operation_result.image_base64):
+                logger.info(f"     └─ 图像{idx+1}大小: {len(img_base64)} 字符")
 
 def serve():
     """启动gRPC服务器
@@ -391,19 +528,20 @@ def serve():
     
     # 启动服务器
     server.start()
-    logger.info(f"gRPC测试服务器已启动，监听地址: {server_address}")
-    
+    logger.info(f"【system】gRPC测试服务器已启动，监听地址: {server_address}")
+
     return server
+
 
 if __name__ == '__main__':
     # 启动服务器
     server = serve()
-    
+
     try:
         # 保持服务器运行
         while True:
             time.sleep(86400)  # 一天
     except KeyboardInterrupt:
-        logger.info("收到中断信号，关闭服务器...")
+        logger.info("【system】收到中断信号，关闭服务器...")
         server.stop(0)
-        logger.info("服务器已关闭")
+        logger.info("【system】服务器已关闭")

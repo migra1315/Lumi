@@ -363,70 +363,72 @@ class ServerCommandStreamManager(BaseStreamManager):
                 self.logger.debug(f"发送心跳失败: {e}")
 
     def send_heartbeat(self) -> bool:
-        """发送心跳响应"""
+        """发送心跳消息"""
+        request = self._get_request_type()(
+            command_id=int(uuid.uuid4().hex[:8], 16),
+            command_time=int(time.time() * 1000),
+            command_type=robot_pb2.ClientMessageType.HEARTBEAT,
+            robot_id=self.robot_id,
+            )
+        # 心跳消息可以携带位置信息（可选）
+        # 这里发送空的响应信息作为心跳载荷
         heart_beat_message = robot_pb2.ServerResponse(
             code="0",
             info="heartbeat"
         )
-        request = self._get_request_type()(
-            command_id=int(uuid.uuid4().hex[:8], 16),
-            command_time=int(time.time() * 1000),
-            command_type=robot_pb2.CmdType.HEARTBEAT_CMD,
-            robot_id=self.robot_id,
-            )
-        request.response_info.CopyFrom(heart_beat_message)    
+        request.response_info.CopyFrom(heart_beat_message)
         return self.send_message(request)
 
-    def send_command_response(self, command_id: int, command_type: robot_pb2.CmdType,
-                           response_code: str, response_info: str) -> bool:
-        """发送命令响应"""
-        request = self._get_request_type()(
-            command_id=command_id,
-            command_time=int(time.time() * 1000),
-            command_type=command_type,
-            robot_id=self.robot_id,
-            data_json=robot_pb2.ServerResponse(
-                code=response_code,
-                info=response_info
-            )
-        )
-        return self.send_message(request)
+    # def send_command_response(self, command_id: int, command_type: robot_pb2.CmdType,
+    #                        response_code: str, response_info: str) -> bool:
+    #     """发送命令响应"""
+    #     request = self._get_request_type()(
+    #         command_id=command_id,
+    #         command_time=int(time.time() * 1000),
+    #         command_type=command_type,
+    #         robot_id=self.robot_id,
+    #         data_json=robot_pb2.ServerResponse(
+    #             code=response_code,
+    #             info=response_info
+    #         )
+    #     )
+    #     return self.send_message(request)
 
-    def send_robot_mode_response(self, command_id: int, success: bool = True, 
-                               message: str = "") -> bool:
-        """发送机器人模式命令响应"""
-        code = "0" if success else "1"
-        info = message if message else ("成功" if success else "失败")
-        return self.send_command_response(
-            command_id=command_id,
-            command_type=robot_pb2.CmdType.ROBOT_MODE_CMD,
-            response_code=code,
-            response_info=info
-        )
+    # def send_robot_mode_response(self, command_id: int, success: bool = True, 
+    #                            message: str = "") -> bool:
+    #     """发送机器人模式命令响应"""
+    #     code = "0" if success else "1"
+    #     info = message if message else ("成功" if success else "失败")
+    #     return self.send_command_response(
+    #         command_id=command_id,
+    #         command_type=robot_pb2.CmdType.ROBOT_MODE_CMD,
+    #         response_code=code,
+    #         response_info=info
+    #     )
 
-    def send_task_response(self, command_id: int, success: bool = True,
-                         message: str = "") -> bool:
-        """发送任务命令响应"""
-        code = "0" if success else "1"
-        info = message if message else ("任务接收成功" if success else "任务接收失败")
-        return self.send_command_response(
-            command_id=command_id,
-            command_type=robot_pb2.CmdType.TASK_CMD,
-            response_code=code,
-            response_info=info
-        )
+    # def send_task_response(self, command_id: int, success: bool = True,
+    #                      message: str = "") -> bool:
+    #     """发送任务命令响应"""
+    #     code = "0" if success else "1"
+    #     info = message if message else ("任务接收成功" if success else "任务接收失败")
+    #     return self.send_command_response(
+    #         command_id=command_id,
+    #         command_type=robot_pb2.CmdType.TASK_CMD,
+    #         response_code=code,
+    #         response_info=info
+    #     )
 
-    def send_joy_control_response(self, command_id: int, success: bool = True,
-                                message: str = "") -> bool:
-        """发送摇杆控制命令响应"""
-        code = "0" if success else "1"
-        info = message if message else ("控制指令接收成功" if success else "控制指令接收失败")
-        return self.send_command_response(
-            command_id=command_id,
-            command_type=robot_pb2.CmdType.JOY_CONTROL_CMD,
-            response_code=code,
-            response_info=info
-        )
+    # def send_joy_control_response(self, command_id: int, success: bool = True,
+    #                             message: str = "") -> bool:
+    #     """发送摇杆控制命令响应"""
+    #     code = "0" if success else "1"
+    #     info = message if message else ("控制指令接收成功" if success else "控制指令接收失败")
+    #     return self.send_command_response(
+    #         command_id=command_id,
+    #         command_type=robot_pb2.CmdType.JOY_CONTROL_CMD,
+    #         response_code=code,
+    #         response_info=info
+    #     )
 
     def start_with_heartbeat(self, heartbeat_interval: int = 30):
         """启动流并定期发送心跳"""

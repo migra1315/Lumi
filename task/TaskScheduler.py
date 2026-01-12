@@ -114,6 +114,9 @@ class TaskScheduler:
         command.started_at = datetime.now()
         self.database.update_command_status(command.command_id, CommandStatus.RUNNING)
 
+        # 触发命令状态变化回调
+        self._trigger_callback("on_command_status_change", command)
+
         self.logger.info(f"开始执行命令: {command.command_id}, 类型: {command.cmd_type.value}")
 
         # 根据命令类型路由到不同的执行方法
@@ -327,7 +330,7 @@ class TaskScheduler:
             # 顺序执行所有站点任务（失败后继续）
             for i, station in enumerate(sorted_stations, 1):
                 station_id = station.station_config.station_id
-                self.logger.info(f"执行站点 {i}/{total_stations}: {station_id}")
+                self.logger.info(f"执行站点 {i}/{total_stations}, 当前站点ID {station_id}")
 
                 # 执行站点（包含重试逻辑）
                 if self._execute_station_task_with_retry(station):
@@ -494,11 +497,18 @@ class TaskScheduler:
             
             # 4. 执行操作模式
             if station.station_config.operation_config.operation_mode != OperationMode.NONE:
-                success = self._execute_operation(
+                operation_result = self._execute_operation(
                     station.station_config.operation_config
                 )
-                if not success:
-                    self.logger.error(f"操作失败: {station.station_config.operation_config.operation_mode}")
+
+                # 保存操作结果到metadata
+                if not station.metadata:
+                    station.metadata = {}
+                station.metadata['operation_result'] = operation_result
+
+                # 检查操作是否成功
+                if not operation_result.get('success', False):
+                    self.logger.error(f"操作失败: {operation_result.get('message')}")
                     return False
             
             # 更新站点状态为已完成
@@ -717,61 +727,95 @@ class TaskScheduler:
             except Exception as e:
                 self.logger.error(f"回调函数执行异常: {e}")
 
-    def _execute_operation(self, operation_config: OperationConfig) -> bool:
-        """执行特定操作"""
-        if operation_config.operation_mode == OperationMode.OPEN_DOOR:
-            # 执行开门操作
-            return self._open_door(operation_config.door_ip)
-        elif operation_config.operation_mode == OperationMode.CLOSE_DOOR:
-            # 执行关门操作
-            return self._close_door(operation_config.door_ip)
-        elif operation_config.operation_mode == OperationMode.CAPTURE:
-            # 执行捕获操作
-            return self._capture(operation_config.device_id)
-        elif operation_config.operation_mode == OperationMode.SERVE:
-            # 执行服务操作
-            return self._serve(operation_config.device_id)
+    def _execute_operation(self, operation_config: OperationConfig) -> Dict[str, Any]:
+        """执行特定操作（返回详细结果）"""
+        operation_mode = operation_config.operation_mode
+
+        if operation_mode == OperationMode.OPEN_DOOR:
+            result = self._open_door(operation_config.door_ip)
+        elif operation_mode == OperationMode.CLOSE_DOOR:
+            result = self._close_door(operation_config.door_ip)
+        elif operation_mode == OperationMode.CAPTURE:
+            result = self._capture(operation_config.device_id)
+        elif operation_mode == OperationMode.SERVE:
+            result = self._serve(operation_config.device_id)
         else:
-            self.logger.warning(f"未知操作模式: {operation_config.operation_mode}")
-            return True
-        
-    def _capture(self, device_id: str) -> bool:
-        """捕获操作实现"""
+            result = {
+                'success': True,
+                'message': f'跳过未知操作: {operation_mode}',
+                'timestamp': time.time(),
+                'duration': 0.0
+            }
+
+        return result
+
+    def _capture(self, device_id: str) -> Dict[str, Any]:
+        """捕获操作实现（返回详细结果）"""
         try:
             self.logger.info(f"执行捕获操作: {device_id}")
-            # 调用机器人控制器的捕获方法
-            return self.robot_controller.capture(device_id)
+            result = self.robot_controller.capture(device_id)
+            return result
         except Exception as e:
             self.logger.error(f"捕获操作失败: {e}")
-            return False
-        
-    def _open_door(self, door_ip: str) -> bool:
-        """开门操作实现"""
+            return {
+                'success': False,
+                'images': [],
+                'message': f'捕获操作异常: {str(e)}',
+                'device_id': device_id,
+                'timestamp': time.time(),
+                'duration': 0.0
+            }
+
+    def _open_door(self, door_ip: str) -> Dict[str, Any]:
+        """开门操作实现（返回详细结果）"""
         try:
             self.logger.info(f"执行开门操作: {door_ip}")
-            # 调用机器人控制器的开门方法
-            return self.robot_controller.open_door(door_ip)
+            result = self.robot_controller.open_door(door_ip)
+            return result
         except Exception as e:
             self.logger.error(f"开门操作失败: {e}")
-            return False
-    
-    def _close_door(self, door_ip: str) -> bool:
-        """关门操作实现"""
+            return {
+                'success': False,
+                'message': f'开门操作异常: {str(e)}',
+                'door_ip': door_ip,
+                'timestamp': time.time(),
+                'duration': 0.0
+            }
+
+    def _close_door(self, door_ip: str) -> Dict[str, Any]:
+        """关门操作实现（返回详细结果）"""
         try:
             self.logger.info(f"执行关门操作: {door_ip}")
-            # 调用机器人控制器的关门方法
-            return self.robot_controller.close_door(door_ip)
+            result = self.robot_controller.close_door(door_ip)
+            return result
         except Exception as e:
             self.logger.error(f"关门操作失败: {e}")
-            return False
-    
-    def _serve(self, device_id: str) -> bool:
-        """服务操作实现"""
+            return {
+                'success': False,
+                'message': f'关门操作异常: {str(e)}',
+                'door_ip': door_ip,
+                'timestamp': time.time(),
+                'duration': 0.0
+            }
+
+    def _serve(self, device_id: str) -> Dict[str, Any]:
+        """服务操作实现（返回详细结果）"""
         try:
             self.logger.info(f"执行服务操作: {device_id}")
-            # 调用机器人控制器的服务方法
-            return self.robot_controller.serve(device_id)
+            result = self.robot_controller.serve(device_id)
+            # 触发系统回调：通知RobotControlSystem到达站点
+            self._trigger_system_callback(
+                "on_arrive_service_station",
+                device_id=device_id
+            )
+            return result
         except Exception as e:
             self.logger.error(f"服务操作失败: {e}")
-            return False
+            return {
+                'success': False,
+                'message': f'服务操作异常: {str(e)}',
+                'device_id': device_id,
+                'timestamp': time.time(),
+                'duration': 0.0
+            }
 

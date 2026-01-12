@@ -76,6 +76,28 @@ enum ClientMessageType {
     HEARTBEAT = 0; // 心跳
     COMMAND_RESPONSE = 1; // 普通命令响应
     SET_MARKER_RESPONSE = 2; // 设置标记点响应
+    COMMAND_STATUS_UPDATE = 3; // 命令状态更新
+    TASK_PROGRESS_UPDATE = 4; // 任务进度更新
+    OPERATION_RESULT = 5; // 操作结果反馈
+}
+
+// 命令状态枚举
+enum CommandStatus {
+    COMMAND_STATUS_PENDING = 0; // 待处理
+    COMMAND_STATUS_QUEUED = 1; // 已入队
+    COMMAND_STATUS_RUNNING = 2; // 执行中
+    COMMAND_STATUS_COMPLETED = 3; // 已完成
+    COMMAND_STATUS_FAILED = 4; // 失败
+    COMMAND_STATUS_CANCELLED = 5; // 已取消
+    COMMAND_STATUS_RETRYING = 6; // 重试中
+}
+
+// 操作状态枚举
+enum OperationStatus {
+    OPERATION_STATUS_SUCCESS = 0; // 操作成功
+    OPERATION_STATUS_FAILED = 1; // 操作失败
+    OPERATION_STATUS_TIMEOUT = 2; // 操作超时
+    OPERATION_STATUS_ABORT = 3; // 操作中止
 }
 
 // 机器人移动状态
@@ -284,6 +306,45 @@ message ChargeCmd {
     bool charge = 1; // 充电
 }
 
+// 命令状态更新消息
+message CommandStatusUpdate {
+    int64 command_id = 1; // 命令ID
+    CmdType command_type = 2; // 命令类型
+    CommandStatus status = 3; // 命令状态
+    string message = 4; // 状态消息
+    int64 timestamp = 5; // 时间戳
+    int32 retry_count = 6; // 重试次数
+}
+
+// 任务进度更新消息
+message TaskProgressUpdate {
+    int64 task_id = 1; // 任务ID
+    string task_name = 2; // 任务名称
+    TaskStatus task_status = 3; // 任务状态
+    int32 total_stations = 4; // 总站点数
+    int32 completed_stations = 5; // 已完成站点数
+    int32 failed_stations = 6; // 失败站点数
+    int64 current_station_id = 7; // 当前站点ID
+    string current_station_name = 8; // 当前站点名称
+    StationTaskStatus current_station_status = 9; // 当前站点状态
+    string message = 10; // 进度消息
+    int64 timestamp = 11; // 时间戳
+}
+
+// 操作结果消息
+message OperationResult {
+    int64 task_id = 1; // 任务ID
+    int64 station_id = 2; // 站点ID
+    OperationMode operation_mode = 3; // 操作模式
+    OperationStatus status = 4; // 操作状态
+    string message = 5; // 结果消息
+    repeated string image_base64 = 6; // 图像数据(仅CAPTURE)
+    int64 device_id = 7; // 设备ID
+    string door_ip = 8; // 门禁IP
+    int64 timestamp = 9; // 时间戳
+    double duration = 10; // 操作耗时(秒)
+}
+
 
 // 服务端下发消息
 message ServerStreamMessage {
@@ -310,5 +371,8 @@ message ClientStreamMessage {
     oneof data_json {
         ServerResponse response_info = 5;
         PositionInfo position_info = 6;
+        CommandStatusUpdate command_status = 7;
+        TaskProgressUpdate task_progress = 8;
+        OperationResult operation_result = 9;
     }
 }

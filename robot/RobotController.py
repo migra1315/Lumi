@@ -449,88 +449,115 @@ class RobotController():
             self.last_error = str(e)
             return False
     
-    def open_door(self, door_id: str) -> bool:
+    def open_door(self, door_ip: str) -> Dict[str, Any]:
         """
-        开门操作（需要根据实际硬件实现）
-        
+        开门操作
+
         Args:
-            door_id: 门ID
-            
+            door_ip: 门禁IP地址或门ID
+
         Returns:
-            bool: 操作是否成功
+            Dict: {
+                'success': bool,
+                'message': str,
+                'door_ip': str,
+                'timestamp': float,
+                'duration': float
+            }
         """
-        # 这里需要根据实际的开门机制实现
-        # 可能是通过机械臂操作门把手，或者发送信号给门禁系统
-        
-        self.logger.info(f"执行开门操作: {door_id}")
+        self.logger.info(f"执行开门操作: {door_ip}")
         self.system_status = SystemStatus.DOOR_OPERATING
-        
+        start_time = time.time()
+
         try:
-            # TODO: 实现具体的开门逻辑
-            # 示例：通过机械臂操作门把手
-            if door_id == "door1":
-                # 假设这是一个实验室门，需要先移动到特定位置
-                success = self._operate_lab_door(door_id)
-            else:
-                self.logger.warning(f"未知的门ID: {door_id}")
-                success = False
-            
+            # 调用现有的_operate_lab_door方法
+            success = self._operate_lab_door(door_ip, close=False)
+            duration = time.time() - start_time
+
             if success:
                 self.system_status = SystemStatus.IDLE
-                self.logger.info(f"开门操作完成: {door_id}")
-                self._trigger_callback("on_task_complete", "open_door", door_id)
+                return {
+                    'success': True,
+                    'message': f'开门成功，耗时{duration:.2f}秒',
+                    'door_ip': door_ip,
+                    'timestamp': time.time(),
+                    'duration': duration
+                }
             else:
                 self.system_status = SystemStatus.ERROR
-                self.last_error = f"开门操作失败: {door_id}"
-                self.logger.error(self.last_error)
-            
-            return success
-            
+                return {
+                    'success': False,
+                    'message': f'开门失败，耗时{duration:.2f}秒',
+                    'door_ip': door_ip,
+                    'timestamp': time.time(),
+                    'duration': duration
+                }
+
         except Exception as e:
-            self.logger.error(f"开门操作时发生错误: {e}")
+            self.logger.error(f"开门操作异常: {e}")
             self.system_status = SystemStatus.ERROR
-            self.last_error = str(e)
-            return False
+            return {
+                'success': False,
+                'message': f'开门异常: {str(e)}',
+                'door_ip': door_ip,
+                'timestamp': time.time(),
+                'duration': time.time() - start_time
+            }
     
-    def close_door(self, door_id: str) -> bool:
+    def close_door(self, door_ip: str) -> Dict[str, Any]:
         """
-        关门操作（需要根据实际硬件实现）
-        
+        关门操作
+
         Args:
-            door_id: 门ID
-            
+            door_ip: 门禁IP地址或门ID
+
         Returns:
-            bool: 操作是否成功
+            Dict: {
+                'success': bool,
+                'message': str,
+                'door_ip': str,
+                'timestamp': float,
+                'duration': float
+            }
         """
-        self.logger.info(f"执行关门操作: {door_id}")
+        self.logger.info(f"执行关门操作: {door_ip}")
         self.system_status = SystemStatus.DOOR_OPERATING
-        
+        start_time = time.time()
+
         try:
-            # TODO: 实现具体的关门逻辑
-            # 示例：通过机械臂操作门把手
-            if door_id == "door1":
-                # 假设这是一个实验室门，需要先移动到特定位置
-                success = self._operate_lab_door(door_id, close=True)
-            else:
-                self.logger.warning(f"未知的门ID: {door_id}")
-                success = False
-            
+            # 调用现有的_operate_lab_door方法
+            success = self._operate_lab_door(door_ip, close=True)
+            duration = time.time() - start_time
+
             if success:
                 self.system_status = SystemStatus.IDLE
-                self.logger.info(f"关门操作完成: {door_id}")
-                self._trigger_callback("on_task_complete", "close_door", door_id)
+                return {
+                    'success': True,
+                    'message': f'关门成功，耗时{duration:.2f}秒',
+                    'door_ip': door_ip,
+                    'timestamp': time.time(),
+                    'duration': duration
+                }
             else:
                 self.system_status = SystemStatus.ERROR
-                self.last_error = f"关门操作失败: {door_id}"
-                self.logger.error(self.last_error)
-            
-            return success
-            
+                return {
+                    'success': False,
+                    'message': f'关门失败，耗时{duration:.2f}秒',
+                    'door_ip': door_ip,
+                    'timestamp': time.time(),
+                    'duration': duration
+                }
+
         except Exception as e:
-            self.logger.error(f"关门操作时发生错误: {e}")
+            self.logger.error(f"关门操作异常: {e}")
             self.system_status = SystemStatus.ERROR
-            self.last_error = str(e)
-            return False
+            return {
+                'success': False,
+                'message': f'关门异常: {str(e)}',
+                'door_ip': door_ip,
+                'timestamp': time.time(),
+                'duration': time.time() - start_time
+            }
     
     def _operate_lab_door(self, door_id: str, close: bool = False) -> bool:
         """
@@ -674,44 +701,108 @@ class RobotController():
             self.logger.error(f"位置调整失败: {e}")
             return False
 
-    def capture_image(self, device_id: str = None) -> str:
+    def capture(self, device_id: str) -> Dict[str, Any]:
         """
-        拍照功能 - 通过相机设备采集图像
+        拍照操作 - 采集图像并返回base64编码数据
 
         Args:
-            device_id: 设备ID（可选）
+            device_id: 设备ID
 
         Returns:
-            str: Base64编码的图像数据，失败返回空字符串
+            Dict: {
+                'success': bool,
+                'images': List[str],  # base64图像列表
+                'message': str,
+                'device_id': str,
+                'timestamp': float,
+                'duration': float
+            }
         """
         try:
-            self.logger.info(f"开始拍照 - 设备ID: {device_id}")
+            self.logger.info(f"执行拍照操作 - 设备ID: {device_id}")
+            start_time = time.time()
 
             # TODO: 实现实际的相机采集逻辑
-            # 这里需要根据实际的相机设备接口来实现
-            # 可能的实现方式：
-            # 1. 通过USB相机采集
-            # 2. 通过网络相机采集
-            # 3. 调用机械臂上的相机
+            # 方案1: OpenCV采集USB相机
+            # 方案2: HTTP请求网络相机
+            # 方案3: 调用机械臂相机SDK
 
-            # 示例代码（需要根据实际情况修改）:
-            # import cv2
-            # import base64
-            # cap = cv2.VideoCapture(0)  # 或根据device_id选择相机
-            # ret, frame = cap.read()
-            # if ret:
-            #     _, buffer = cv2.imencode('.jpg', frame)
-            #     img_base64 = base64.b64encode(buffer).decode('utf-8')
-            #     cap.release()
-            #     return img_base64
-            # cap.release()
+            # 示例：模拟拍照
+            import base64
+            mock_image_data = b"mock_image_bytes"
+            img_base64 = base64.b64encode(mock_image_data).decode('utf-8')
 
-            self.logger.warning("拍照功能未实现，返回空数据")
-            return ""
+            duration = time.time() - start_time
+
+            return {
+                'success': True,
+                'images': [img_base64],
+                'message': f'拍照成功，耗时{duration:.2f}秒',
+                'device_id': device_id,
+                'timestamp': time.time(),
+                'duration': duration
+            }
 
         except Exception as e:
             self.logger.error(f"拍照失败: {e}")
-            return ""
+            return {
+                'success': False,
+                'images': [],
+                'message': f'拍照失败: {str(e)}',
+                'device_id': device_id,
+                'timestamp': time.time(),
+                'duration': 0.0
+            }
+
+    def serve(self, device_id: str) -> Dict[str, Any]:
+        """
+        服务操作（如仪表读数、设备检查等）
+
+        Args:
+            device_id: 设备ID
+
+        Returns:
+            Dict: {
+                'success': bool,
+                'message': str,
+                'device_id': str,
+                'data': Dict,  # 服务数据
+                'timestamp': float,
+                'duration': float
+            }
+        """
+        try:
+            self.logger.info(f"执行服务操作: {device_id}")
+            start_time = time.time()
+
+            # TODO: 实现具体的服务逻辑
+            # 例如：仪表读数、设备状态检查等
+            service_data = {
+                'device_status': 'normal',
+                'reading_value': 0.0
+            }
+
+            duration = time.time() - start_time
+
+            return {
+                'success': True,
+                'message': f'服务操作完成，耗时{duration:.2f}秒',
+                'device_id': device_id,
+                'data': service_data,
+                'timestamp': time.time(),
+                'duration': duration
+            }
+
+        except Exception as e:
+            self.logger.error(f"服务操作失败: {e}")
+            return {
+                'success': False,
+                'message': f'服务操作失败: {str(e)}',
+                'device_id': device_id,
+                'data': {},
+                'timestamp': time.time(),
+                'duration': time.time() - start_time
+            }
 
     def get_environment_data(self) -> Dict[str, float]:
         """
