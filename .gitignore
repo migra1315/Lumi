@@ -15,3 +15,6 @@ proto/RobotService_pb2.pyi
 gRPC/proto/RobotService_bp.proto
 CLAUDE.md
 cl.bat
+.claude/settings.local.json
+docs/任务执行状态反馈测试说明.md
+docs/任务执行状态反馈实现方案.md

@@ -327,8 +327,10 @@ message TaskProgressUpdate {
     int64 current_station_id = 7; // 当前站点ID
     string current_station_name = 8; // 当前站点名称
     StationTaskStatus current_station_status = 9; // 当前站点状态
-    string message = 10; // 进度消息
-    int64 timestamp = 11; // 时间戳
+    string current_station_phase = 10; // 当前站点执行阶段
+    string current_station_detail = 11; // 当前站点详细进度描述
+    string message = 12; // 进度消息
+    int64 timestamp = 13; // 时间戳
 }
 
 // 操作结果消息

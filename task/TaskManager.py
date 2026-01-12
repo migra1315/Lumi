@@ -7,7 +7,7 @@ from utils.dataConverter import convert_data_json_to_task_cmd, convert_task_cmd_
 from task.TaskDatabase import TaskDatabase
 from task.TaskScheduler import TaskScheduler
 from dataModels.CommandModels import TaskCmd, CmdType, CommandEnvelope
-from dataModels.TaskModels import Task, Station, StationConfig, OperationConfig, OperationMode, RobotMode, TaskStatus, StationTaskStatus
+from dataModels.TaskModels import Task, Station, StationConfig, OperationConfig, OperationMode, RobotMode, TaskStatus, StationTaskStatus, StationExecutionPhase
 from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus, create_unified_command
 
 class TaskManager:
@@ -41,6 +41,7 @@ class TaskManager:
         self.scheduler.register_callback("on_station_start", self._on_station_start)
         self.scheduler.register_callback("on_station_complete", self._on_station_complete)
         self.scheduler.register_callback("on_station_retry", self._on_station_retry)
+        self.scheduler.register_callback("on_station_progress", self._on_station_progress)  # 新增：站点进度回调
 
         # 注册命令级回调
         self.scheduler.register_callback("on_command_complete", self._on_command_complete)
@@ -114,6 +115,93 @@ class TaskManager:
         except Exception as e:
             self.logger.error(f"执行紧急停止失败: {e}")
             return False
+
+    def get_current_execution_state(self) -> Dict[str, Any]:
+        """获取当前执行状态（统一接口）
+
+        Returns:
+            Dict with keys: command, task, station
+        """
+        state = {
+            "command": None,
+            "task": None,
+            "station": None
+        }
+
+        if self.scheduler.current_command:
+            state["command"] = {
+                "command_id": self.scheduler.current_command.command_id,
+                "cmd_type": self.scheduler.current_command.cmd_type.value,
+                "status": self.scheduler.current_command.status.value
+            }
+
+        if self.scheduler.current_task:
+            task = self.scheduler.current_task
+            state["task"] = {
+                "task_id": task.task_id,
+                "task_name": task.task_name,
+                "status": task.status.value,
+                "total_stations": len(task.station_list),
+                "completed_stations": sum(1 for s in task.station_list
+                                        if s.status == StationTaskStatus.COMPLETED)
+            }
+
+        if self.scheduler.current_station:
+            station = self.scheduler.current_station
+            state["station"] = {
+                "station_id": station.station_config.station_id,
+                "status": station.status.value,
+                "execution_phase": station.execution_phase.value,
+                "progress_detail": station.progress_detail,
+                "retry_count": station.retry_count
+            }
+
+        return state
+
+    def get_current_task_info(self) -> Dict[str, Any]:
+        """仅获取当前任务信息
+
+        Returns:
+            Dict: 任务信息字典，如果没有当前任务则返回 None
+        """
+        if not self.scheduler.current_task:
+            return None
+
+        task = self.scheduler.current_task
+        return {
+            "task_id": task.task_id,
+            "task_name": task.task_name,
+            "status": task.status.value,
+            "station_list": [
+                {
+                    "station_id": s.station_config.station_id,
+                    "status": s.status.value,
+                    "retry_count": s.retry_count
+                }
+                for s in task.station_list
+            ]
+        }
+
+    def get_current_station_info(self) -> Dict[str, Any]:
+        """仅获取当前站点信息（包含执行阶段）
+
+        Returns:
+            Dict: 站点信息字典，如果没有当前站点则返回 None
+        """
+        if not self.scheduler.current_station:
+            return None
+
+        station = self.scheduler.current_station
+        return {
+            "station_id": station.station_config.station_id,
+            "name": station.station_config.name,  # 新增：站点名称
+            "status": station.status.value,
+            "execution_phase": station.execution_phase.value,
+            "progress_detail": station.progress_detail,
+            "agv_marker": station.station_config.agv_marker,
+            "retry_count": station.retry_count,
+            "started_at": station.started_at.isoformat() if station.started_at else None
+        }
 
     # ==================== 指令响应相关方法 ====================
     def receive_command(self, command_envelope: CommandEnvelope) -> str:
@@ -410,6 +498,24 @@ class TaskManager:
         """站点重试回调"""
         self.logger.warning(f"站点重试: {station.station_config.station_id}, 重试次数: {station.retry_count}")
         # 可以在这里发送通知或更新UI
+
+    def _on_station_progress(self, station: Station):
+        """站点进度更新回调"""
+        self.logger.info(
+            f"站点进度更新: {station.station_config.station_id} - "
+            f"{station.execution_phase.value} - {station.progress_detail}"
+        )
+
+        # 触发系统级回调，上报给 RobotControlSystem
+        task = self.scheduler.current_task
+        if task:
+            self._trigger_system_callback(
+                "on_task_progress",
+                task=task,
+                station=station,
+                phase=station.execution_phase.value,
+                detail=station.progress_detail
+            )
 
     # ==================== 命令级回调处理 ====================
 

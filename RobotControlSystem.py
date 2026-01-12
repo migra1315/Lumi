@@ -116,8 +116,10 @@ class RobotControlSystem:
             self.channel = grpc.insecure_channel(
                 self.server_address,
                 options=[
-                    ('grpc.keepalive_time_ms', 10000),
-                    ('grpc.keepalive_timeout_ms', 5000),
+                    ('grpc.keepalive_time_ms', 30000),
+                    ('grpc.keepalive_timeout_ms', 10000),
+                    ('grpc.http2.max_pings_without_data', 0),  # 允许无数据时的ping
+                    ('grpc.keepalive_permit_without_calls', True),
                 ]
             )
 
@@ -138,7 +140,8 @@ class RobotControlSystem:
 
             # 启动持久化流
             client_upload_started = self.client_upload_manager.start_stream()
-            server_command_started = self.server_command_manager.start_with_heartbeat()
+            # server_command_started = self.server_command_manager.start_with_heartbeat()
+            server_command_started = self.server_command_manager.start_stream()
             
             if client_upload_started and server_command_started:
                 self.is_connected = True
@@ -341,12 +344,13 @@ class RobotControlSystem:
                 ext_position_info=robot_status.get('ext_axis', [0.0]*4),
             )
             # 构建任务信息（当前执行的任务）
-            current_task = self.task_manager.scheduler.current_task
-            if current_task:
+            current_task_info = self.task_manager.get_current_task_info()
+            if current_task_info:
                 task_info = Task(
-                    task_id=current_task.task_id,
-                    task_name=current_task.task_name,
-                    station_list=[current_task] if current_task else []
+                    task_id=current_task_info["task_id"],
+                    task_name=current_task_info["task_name"],
+                    station_list=[],
+                    status=TaskStatus(current_task_info["status"])
                 )
             else:
                 task_info = Task(
@@ -418,12 +422,13 @@ class RobotControlSystem:
                 ext_position_info=robot_status.get('ext_axis', [0.0]*4),
             )
             # 构建任务信息（当前执行的任务）
-            current_task = self.task_manager.scheduler.current_task
-            if current_task:
+            current_task_info = self.task_manager.get_current_task_info()
+            if current_task_info:
                 task_info = Task(
-                    task_id=current_task.task_id,
-                    task_name=current_task.task_name,
-                    station_list=[current_task] if current_task else []
+                    task_id=current_task_info["task_id"],
+                    task_name=current_task_info["task_name"],
+                    station_list=[],
+                    status=TaskStatus(current_task_info["status"])
                 )
             else:
                 task_info = Task(
@@ -485,12 +490,13 @@ class RobotControlSystem:
 
 
             # 构建任务信息（当前执行的任务）
-            current_task = self.task_manager.scheduler.current_task
-            if current_task:
+            current_task_info = self.task_manager.get_current_task_info()
+            if current_task_info:
                 task_info = Task(
-                    task_id=current_task.task_id,
-                    task_name=current_task.task_name,
-                    station_list=[current_task] if current_task else []
+                    task_id=current_task_info["task_id"],
+                    task_name=current_task_info["task_name"],
+                    station_list=[],
+                    status=TaskStatus(current_task_info["status"])
                 )
             else:
                 task_info = Task(
@@ -545,12 +551,13 @@ class RobotControlSystem:
                 ext_position_info=robot_status.get('ext_axis', [0.0]*4),
             )
             # 构建任务信息（当前执行的任务）
-            current_task = self.task_manager.scheduler.current_task
-            if current_task:
+            current_task_info = self.task_manager.get_current_task_info()
+            if current_task_info:
                 task_info = Task(
-                    task_id=current_task.task_id,
-                    task_name=current_task.task_name,
-                    station_list=[current_task] if current_task else []
+                    task_id=current_task_info["task_id"],
+                    task_name=current_task_info["task_name"],
+                    station_list=[],
+                    status=TaskStatus(current_task_info["status"])
                 )
             else:
                 task_info = Task(
@@ -808,8 +815,18 @@ class RobotControlSystem:
             completed_stations = sum(1 for s in task.station_list if s.status == StationTaskStatus.COMPLETED)
             failed_stations = sum(1 for s in task.station_list if s.status == StationTaskStatus.FAILED)
 
-            # 获取当前站点
-            current_station = station or self.task_manager.scheduler.current_station
+            # 获取当前站点信息
+            if station is None:
+                current_station_info = self.task_manager.get_current_station_info()
+            else:
+                # 从 station 对象提取信息
+                current_station_info = {
+                    "station_id": station.station_config.station_id,
+                    "name": station.station_config.name,
+                    "status": station.status.value,
+                    "execution_phase": station.execution_phase.value,
+                    "progress_detail": station.progress_detail
+                } if station else None
 
             # 映射任务状态
             task_status_map = {
@@ -838,9 +855,14 @@ class RobotControlSystem:
                 total_stations=total_stations,
                 completed_stations=completed_stations,
                 failed_stations=failed_stations,
-                current_station_id=int(current_station.station_config.station_id) if current_station else 0,
-                current_station_name=current_station.station_config.name if current_station else "",
-                current_station_status=station_status_map.get(current_station.status, robot_pb2.StationTaskStatus.STATION_TASK_STATUS_PENDING) if current_station else robot_pb2.StationTaskStatus.STATION_TASK_STATUS_PENDING,
+                current_station_id=int(current_station_info["station_id"]) if current_station_info else 0,
+                current_station_name=current_station_info.get("name", "") if current_station_info else "",
+                current_station_status=station_status_map.get(
+                    StationTaskStatus(current_station_info["status"]),
+                    robot_pb2.StationTaskStatus.STATION_TASK_STATUS_PENDING
+                ) if current_station_info else robot_pb2.StationTaskStatus.STATION_TASK_STATUS_PENDING,
+                current_station_phase=current_station_info.get("execution_phase", "") if current_station_info else "",
+                current_station_detail=current_station_info.get("progress_detail", "") if current_station_info else "",
                 message=f"进度: {completed_stations}/{total_stations}",
                 timestamp=int(time.time() * 1000)
             )
@@ -1066,7 +1088,7 @@ if __name__ == "__main__":
 
     }
     
-    robot_system = RobotControlSystem(config, use_mock=True,report=False)
+    robot_system = RobotControlSystem(config, use_mock=False,report=False)
     try:
         # 启动系统
         robot_system.start()

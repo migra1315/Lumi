@@ -8,7 +8,7 @@ import logging
 from task.TaskDatabase import TaskDatabase
 from dataModels.TaskModels import (
     Task, Station, StationConfig, OperationMode,
-    TaskStatus, StationTaskStatus, OperationConfig, RobotMode
+    TaskStatus, StationTaskStatus, StationExecutionPhase, OperationConfig, RobotMode
 )
 from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus, CommandCategory
 from dataModels.CommandModels import CmdType
@@ -37,6 +37,7 @@ class TaskScheduler:
             "on_station_start": [],
             "on_station_complete": [],
             "on_station_retry": [],
+            "on_station_progress": [],    # 新增：站点进度更新回调
             "on_command_complete": [],   # 新增：命令完成回调
             "on_command_failed": []       # 新增：命令失败回调
         }
@@ -95,9 +96,15 @@ class TaskScheduler:
                 else:
                     # 检查当前命令状态
                     if self.current_command.status in [CommandStatus.COMPLETED, CommandStatus.FAILED, CommandStatus.CANCELLED]:
+                        # 清除逻辑应该更精细
+                        cmd_type = self.current_command.cmd_type
+
                         self.current_command = None
-                        self.current_task = None
-                        self.current_station = None
+
+                        # 仅当前命令是 TASK_CMD 时才清除任务和站点
+                        if cmd_type == CmdType.TASK_CMD:
+                            self.current_task = None
+                            self.current_station = None
                     else:
                         time.sleep(0.1)
 
@@ -256,6 +263,13 @@ class TaskScheduler:
             self.logger.error(f"命令数据类型错误，期望Task，实际: {type(task)}")
             command.error_message = f"数据类型错误: {type(task)}"
             return False
+
+        # 设置任务状态为运行中
+        task.status = TaskStatus.RUNNING
+        self.logger.info(f"任务开始执行: {task.task_id}, 任务名称: {task.task_name}")
+
+        # 触发任务开始回调
+        self._trigger_callback("on_task_start", task)
 
         # 执行任务
         success = self._execute_task_internal(task)
@@ -446,57 +460,90 @@ class TaskScheduler:
         return False
 
     def _execute_station_task(self, station: Station) -> bool:
-        """执行单个站点任务"""
+        """执行单个站点任务（添加细粒度进度更新）"""
         try:
             self.current_station = station
-            
+            station_id = station.station_config.station_id
+
             # 更新站点状态为运行中
             station.status = StationTaskStatus.RUNNING
+            station.execution_phase = StationExecutionPhase.PENDING
             station.started_at = datetime.now()
-            station_id = station.station_config.station_id
             self.database.update_station_task_status(station_id, StationTaskStatus.RUNNING)
-    
+
             # 记录执行日志
             self.database.log_task_action(
-                self.current_task.task_id, 
-                station_id, 
-                "start", 
-                "running", 
+                self.current_task.task_id,
+                station_id,
+                "start",
+                "running",
                 "开始执行站点任务"
             )
-            
+
             # 触发站点开始回调
             self._trigger_callback("on_station_start", station)
-            
-            # 1. 移动AGV到指定标记点
-            self.logger.info(f"移动AGV到 {station.station_config.agv_marker}")
+
+            # === 阶段 1: 移动 AGV ===
+            station.execution_phase = StationExecutionPhase.AGV_MOVING
+            station.progress_detail = f"AGV 移动到标记点 {station.station_config.agv_marker}"
+            self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
+
+            # 触发进度更新回调
+            self._trigger_callback("on_station_progress", station)
+
             success = self.robot_controller.move_to_marker(
                 station.station_config.agv_marker
             )
             if not success:
-                self.logger.error(f"AGV移动失败: {station.station_config.agv_marker}")
+                station.execution_phase = StationExecutionPhase.FAILED
+                station.error_message = f"AGV 移动失败: {station.station_config.agv_marker}"
+                self.logger.error(station.error_message)
                 return False
-            
-            # 2. 机械臂移动到归位位置
-            self.logger.info("移动机械臂到归位位置")
+
+            # === 阶段 2: 移动机械臂 ===
+            station.execution_phase = StationExecutionPhase.ARM_POSITIONING
+            station.progress_detail = f"机械臂移动到归位位置 {station.station_config.robot_pos}"
+            self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
+
+            # 触发进度更新回调
+            self._trigger_callback("on_station_progress", station)
+
             success = self.robot_controller.move_robot_to_position(
                 station.station_config.robot_pos
             )
             if not success:
-                self.logger.error("机械臂移动失败")
+                station.execution_phase = StationExecutionPhase.FAILED
+                station.error_message = "机械臂移动失败"
+                self.logger.error(station.error_message)
                 return False
-            
-            # 3. 外部轴移动到归位位置
-            self.logger.info("移动外部轴到归位位置")
+
+            # === 阶段 3: 移动外部轴 ===
+            station.execution_phase = StationExecutionPhase.EXT_POSITIONING
+            station.progress_detail = f"外部轴移动到归位位置 {station.station_config.ext_pos}"
+            self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
+
+            # 触发进度更新回调
+            self._trigger_callback("on_station_progress", station)
+
             success = self.robot_controller.move_ext_to_position(
                 station.station_config.ext_pos
             )
             if not success:
-                self.logger.error("外部轴移动失败")
+                station.execution_phase = StationExecutionPhase.FAILED
+                station.error_message = "外部轴移动失败"
+                self.logger.error(station.error_message)
                 return False
-            
-            # 4. 执行操作模式
+
+            # === 阶段 4: 执行操作 ===
             if station.station_config.operation_config.operation_mode != OperationMode.NONE:
+                operation_mode = station.station_config.operation_config.operation_mode
+                station.execution_phase = StationExecutionPhase.OPERATING
+                station.progress_detail = f"执行操作: {operation_mode.value}"
+                self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
+
+                # 触发进度更新回调
+                self._trigger_callback("on_station_progress", station)
+
                 operation_result = self._execute_operation(
                     station.station_config.operation_config
                 )
@@ -508,30 +555,36 @@ class TaskScheduler:
 
                 # 检查操作是否成功
                 if not operation_result.get('success', False):
-                    self.logger.error(f"操作失败: {operation_result.get('message')}")
+                    station.execution_phase = StationExecutionPhase.FAILED
+                    station.error_message = f"操作失败: {operation_result.get('message')}"
+                    self.logger.error(station.error_message)
                     return False
-            
-            # 更新站点状态为已完成
+
+            # === 完成 ===
+            station.execution_phase = StationExecutionPhase.COMPLETED
             station.status = StationTaskStatus.COMPLETED
+            station.progress_detail = "站点任务完成"
             station.completed_at = datetime.now()
             self.database.update_station_task_status(station_id, StationTaskStatus.COMPLETED)
-            
+
             # 记录执行日志
             self.database.log_task_action(
-                self.current_task.task_id, 
-                station_id, 
-                "complete", 
-                "completed", 
+                self.current_task.task_id,
+                station_id,
+                "complete",
+                "completed",
                 "站点任务完成"
             )
-            
+
             # 触发站点完成回调
             self._trigger_callback("on_station_complete", station)
-            
+
             return True
-            
+
         except Exception as e:
-            self.logger.error(f"站点任务执行异常: {e}")
+            station.execution_phase = StationExecutionPhase.FAILED
+            station.error_message = f"站点执行异常: {str(e)}"
+            self.logger.exception(f"站点 {station_id} 执行异常")
             return False
 
     def _determine_task_status(self, task: Task) -> TaskStatus:

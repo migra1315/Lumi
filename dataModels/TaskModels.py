@@ -14,6 +14,17 @@ class StationTaskStatus(Enum):
     TO_RETRY = "to_retry"    # 重试中
 
 
+class StationExecutionPhase(Enum):
+    """站点执行阶段"""
+    PENDING = "pending"                    # 待执行
+    AGV_MOVING = "agv_moving"              # AGV 移动中
+    ARM_POSITIONING = "arm_positioning"    # 机械臂定位中
+    EXT_POSITIONING = "ext_positioning"    # 外部轴定位中
+    OPERATING = "operating"                # 执行操作中
+    COMPLETED = "completed"                # 已完成
+    FAILED = "failed"                      # 失败
+
+
 class TaskStatus(Enum):
     PENDING = "pending"                # 待执行
     RUNNING = "running"                # 执行中
@@ -84,6 +95,11 @@ class Station:
     """站点任务(对站点配置参数的封装。增加相关任务信息)"""
     station_config: StationConfig           # 单个站点
     status: StationTaskStatus = StationTaskStatus.PENDING # 任务状态
+
+    # 新增：执行阶段描述
+    execution_phase: StationExecutionPhase = StationExecutionPhase.PENDING  # 执行阶段
+    progress_detail: str = ""  # 详细进度描述
+
     created_at: datetime = None # 创建时间
     started_at: Optional[datetime] = None # 开始时间
     completed_at: Optional[datetime] = None # 完成时间
@@ -91,17 +107,19 @@ class Station:
     max_retries: int = 3  # 最大重试次数
     error_message: Optional[str] = None
     metadata: Dict[str, Any] = None  # 元数据，用于存储额外信息
-    
+
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = datetime.now()
         if self.metadata is None:
             self.metadata = {}
-    
+
     def to_dict(self):
         return {
             "station_config": self.station_config.to_dict(),
             "status": self.status.value,
+            "execution_phase": self.execution_phase.value,  # 新增
+            "progress_detail": self.progress_detail,        # 新增
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,

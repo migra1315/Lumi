@@ -123,7 +123,7 @@ class BaseStreamManager(ABC):
             self.logger.info(f"发送消息: msg_id={request.msg_id}, type={msg_type_str}")
         elif hasattr(request, 'command_id'):
             cmd_type_str = robot_pb2.CmdType.Name(request.command_type) if hasattr(robot_pb2.CmdType, 'Name') else request.command_type
-            self.logger.info(f"发送命令: command_id={request.command_id}, type={cmd_type_str}")
+            self.logger.info(f"发送命令响应: command_id={request.command_id}, type={cmd_type_str}")
 
     def _handle_responses(self):
         """处理服务器响应"""
@@ -178,7 +178,8 @@ class BaseStreamManager(ABC):
 
         try:
             self.request_queue.put(request)
-            self._log_request_info(request)
+            #TODO 此处仅是放入队列，实际发送由请求生成器负责
+            # self._log_request_info(request)
             return True
 
         except Exception as e:

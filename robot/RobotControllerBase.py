@@ -30,14 +30,14 @@ class RobotControllerBase(ABC):
     def __init__(self, config: Dict[str, Any] = None, debug: bool = False):
         """
         初始化基类
-        
+
         Args:
             config: 配置字典
             debug: 调试模式
         """
         self.config = config or {}
         self.debug = debug
-        
+
         # 通用状态（所有实现类都应该有的状态）
         self.status = RobotStatus.IDLE
         self.battery_level = 100.0
@@ -50,6 +50,9 @@ class RobotControllerBase(ABC):
 
         # 系统初始化标志
         self._system_initialized = False
+
+        # 回调函数字典
+        self._callbacks: Dict[str, List[Callable]] = {}
     
     def _setup_logger(self, debug: bool) -> logging.Logger:
         """设置日志记录器（子类可以重写）"""
@@ -213,6 +216,36 @@ class RobotControllerBase(ABC):
             "noise": 0.0
         }
 
+
+    # ==================== 回调机制 ====================
+    def register_callback(self, event: str, callback: Callable):
+        """
+        注册回调函数
+
+        Args:
+            event: 事件名称
+            callback: 回调函数
+        """
+        if event not in self._callbacks:
+            self._callbacks[event] = []
+        self._callbacks[event].append(callback)
+        self.logger.debug(f"已注册回调函数到事件: {event}")
+
+    def _trigger_callback(self, event: str, *args, **kwargs):
+        """
+        触发回调函数
+
+        Args:
+            event: 事件名称
+            *args: 位置参数
+            **kwargs: 关键字参数
+        """
+        if event in self._callbacks:
+            for callback in self._callbacks[event]:
+                try:
+                    callback(*args, **kwargs)
+                except Exception as e:
+                    self.logger.error(f"回调函数执行异常 [{event}]: {e}")
 
     # ==================== 公共方法（不需要重写） ====================
     def __del__(self):
