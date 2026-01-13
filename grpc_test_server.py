@@ -364,15 +364,25 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         if station_list is None:
             station_list = []
             # 创建4个默认测试站点
+            agv_marker_list = ["marker_1", "marker_2", "marker_3","charge_point_1F_6010"]
+            ext_pos_list = [[10, 0, 0, 0], [20, 0, 0, 0], [30, 0, 0, 0], [10, 0, 0, 0]]
+            robot_pos_list=[[0, 30, 100, 0, 60, -90],
+                            [0, 40, 90, 0, 60, -90],
+                            [0, 50, 80, 0, 60, -90],
+                            [0, 60, 70, 0, 60, -90]]
+            operation_mode_list = [robot_service_pb2.OperationMode.OPERATION_MODE_NONE, 
+                                   robot_service_pb2.OperationMode.OPERATION_MODE_SERVICE, 
+                                   robot_service_pb2.OperationMode.OPERATION_MODE_NONE, 
+                                   robot_service_pb2.OperationMode.OPERATION_MODE_SERVICE]
             for i in range(4):
                 station = self.create_station(
                     station_id=1111 + i,
                     sort=i + 1,
                     name=f"测试站点{self.command_counter}_{i+1}",
-                    agv_marker=f"marker_{(i % 3) + 1}",  # 循环使用marker_1, marker_2, marker_3
-                    robot_pos=[0, 30, 100, 0, 60, -90],
-                    ext_pos=[10, 0, 0, 0],
-                    operation_mode=robot_service_pb2.OperationMode.OPERATION_MODE_NONE,
+                    agv_marker=agv_marker_list[i],  # 循环使用marker_1, marker_2, marker_3
+                    robot_pos=robot_pos_list[i],
+                    ext_pos=ext_pos_list[i],
+                    operation_mode=operation_mode_list[i],
                     door_ip="192.168.1.100",
                     device_id=2222 + i
                 )

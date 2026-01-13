@@ -489,7 +489,11 @@ class TaskScheduler:
             self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
 
             # 触发进度更新回调
-            self._trigger_callback("on_station_progress", station)
+            self._trigger_callback(
+                "on_station_progress",
+                station=station,
+                command_id=self.current_command.command_id if self.current_command else None
+            )
 
             success = self.robot_controller.move_to_marker(
                 station.station_config.agv_marker
@@ -506,7 +510,11 @@ class TaskScheduler:
             self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
 
             # 触发进度更新回调
-            self._trigger_callback("on_station_progress", station)
+            self._trigger_callback(
+                "on_station_progress",
+                station=station,
+                command_id=self.current_command.command_id if self.current_command else None
+            )
 
             success = self.robot_controller.move_robot_to_position(
                 station.station_config.robot_pos
@@ -523,7 +531,11 @@ class TaskScheduler:
             self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
 
             # 触发进度更新回调
-            self._trigger_callback("on_station_progress", station)
+            self._trigger_callback(
+                "on_station_progress",
+                station=station,
+                command_id=self.current_command.command_id if self.current_command else None
+            )
 
             success = self.robot_controller.move_ext_to_position(
                 station.station_config.ext_pos
@@ -542,7 +554,11 @@ class TaskScheduler:
                 self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
 
                 # 触发进度更新回调
-                self._trigger_callback("on_station_progress", station)
+                self._trigger_callback(
+                    "on_station_progress",
+                    station=station,
+                    command_id=self.current_command.command_id if self.current_command else None
+                )
 
                 operation_result = self._execute_operation(
                     station.station_config.operation_config
@@ -587,6 +603,41 @@ class TaskScheduler:
             self.logger.exception(f"站点 {station_id} 执行异常")
             return False
 
+    def _execute_operation(self, operation_config: OperationConfig) -> Dict[str, Any]:
+        """执行特定操作（返回详细结果）"""
+        operation_mode = operation_config.operation_mode
+
+        if operation_mode == OperationMode.OPEN_DOOR:
+            result = self._open_door(operation_config.door_ip)
+        elif operation_mode == OperationMode.CLOSE_DOOR:
+            result = self._close_door(operation_config.door_ip)
+        elif operation_mode == OperationMode.CAPTURE:
+            result = self._capture(operation_config.device_id)
+        elif operation_mode == OperationMode.SERVE:
+            result = self._serve(operation_config.device_id)
+        else:
+            result = {
+                'success': True,
+                'message': f'跳过未知操作: {operation_mode}',
+                'timestamp': time.time(),
+                'duration': 0.0
+            }
+
+        # 触发操作结果回调
+        self._trigger_callback(
+            "on_operation_result",
+            operation_data={
+                'task_id': self.current_task.task_id if self.current_task else 0,
+                'station_id': self.current_station.station_config.station_id if self.current_station else 0,
+                'operation_mode': operation_config.operation_mode,
+                'result': result,
+                'timestamp': time.time()
+            },
+            command_id=self.current_command.command_id if self.current_command else None
+        )
+
+        return result
+    
     def _determine_task_status(self, task: Task) -> TaskStatus:
         """根据站点执行结果判断任务状态
 
@@ -780,28 +831,6 @@ class TaskScheduler:
             except Exception as e:
                 self.logger.error(f"回调函数执行异常: {e}")
 
-    def _execute_operation(self, operation_config: OperationConfig) -> Dict[str, Any]:
-        """执行特定操作（返回详细结果）"""
-        operation_mode = operation_config.operation_mode
-
-        if operation_mode == OperationMode.OPEN_DOOR:
-            result = self._open_door(operation_config.door_ip)
-        elif operation_mode == OperationMode.CLOSE_DOOR:
-            result = self._close_door(operation_config.door_ip)
-        elif operation_mode == OperationMode.CAPTURE:
-            result = self._capture(operation_config.device_id)
-        elif operation_mode == OperationMode.SERVE:
-            result = self._serve(operation_config.device_id)
-        else:
-            result = {
-                'success': True,
-                'message': f'跳过未知操作: {operation_mode}',
-                'timestamp': time.time(),
-                'duration': 0.0
-            }
-
-        return result
-
     def _capture(self, device_id: str) -> Dict[str, Any]:
         """捕获操作实现（返回详细结果）"""
         try:
@@ -856,8 +885,8 @@ class TaskScheduler:
         try:
             self.logger.info(f"执行服务操作: {device_id}")
             result = self.robot_controller.serve(device_id)
-            # 触发系统回调：通知RobotControlSystem到达站点
-            self._trigger_system_callback(
+            # 触发回调：通知TaskManager到达服务站点
+            self._trigger_callback(
                 "on_arrive_service_station",
                 device_id=device_id
             )

@@ -691,17 +691,18 @@ class RobotControlSystem:
         """处理任务进度回调
 
         Args:
-            **kwargs: 包含task和station对象
+            **kwargs: 包含task、station和command_id
         """
         task = kwargs.get("task")
         station = kwargs.get("station")
+        command_id = kwargs.get("command_id")  # 新增：获取 command_id
 
         if not task:
             return
 
         try:
-            # 发送任务进度更新消息
-            self._send_task_progress_update(task, station)
+            # 发送任务进度更新消息，传递 command_id
+            self._send_task_progress_update(task, station, command_id)
         except Exception as e:
             self.logger.error(f"发送任务进度更新失败: {e}")
 
@@ -799,12 +800,13 @@ class RobotControlSystem:
             self.logger.error(f"发送命令状态更新异常: {e}")
 
 
-    def _send_task_progress_update(self, task, station=None):
+    def _send_task_progress_update(self, task, station=None, command_id=None):
         """发送任务进度更新
 
         Args:
             task: Task对象
             station: 当前站点（可选）
+            command_id: 命令ID（从回调传递）
         """
         try:
             import gRPC.RobotService_pb2 as robot_pb2
@@ -867,9 +869,20 @@ class RobotControlSystem:
                 timestamp=int(time.time() * 1000)
             )
 
+            # 使用传递的 command_id，如果没有则尝试从其他来源获取
+            msg_command_id = command_id
+            if msg_command_id is None:
+                # 备用方案：从 scheduler.current_command 获取
+                if self.task_manager.scheduler.current_command:
+                    msg_command_id = self.task_manager.scheduler.current_command.command_id
+                else:
+                    # 最后备用：使用 task_id（记录警告）
+                    self.logger.warning(f"无法获取 command_id，使用 task_id: {task.task_id}")
+                    msg_command_id = str(task.task_id)
+
             # 创建ClientStreamMessage
             client_msg = robot_pb2.ClientStreamMessage(
-                command_id=int(task.task_id),
+                command_id=int(msg_command_id) if str(msg_command_id).isdigit() else abs(hash(str(msg_command_id))) % (2**31),
                 command_time=int(time.time() * 1000),
                 command_type=robot_pb2.ClientMessageType.TASK_PROGRESS_UPDATE,
                 robot_id=self.robot_id,
@@ -891,7 +904,7 @@ class RobotControlSystem:
         """发送操作结果
 
         Args:
-            operation_data: 操作数据，包含task_id, station_id, operation_mode, result
+            operation_data: 操作数据，包含task_id, station_id, operation_mode, result, command_id
         """
         try:
             import gRPC.RobotService_pb2 as robot_pb2
@@ -940,9 +953,20 @@ class RobotControlSystem:
                 duration=result.get('duration', 0.0)
             )
 
+            # 使用从 operation_data 中传递的 command_id
+            command_id = operation_data.get('command_id')
+            if command_id is None:
+                # 备用方案：从 scheduler.current_command 获取
+                if self.task_manager.scheduler.current_command:
+                    command_id = self.task_manager.scheduler.current_command.command_id
+                else:
+                    # 最后备用：使用 task_id（记录警告）
+                    self.logger.warning(f"无法获取 command_id，使用 task_id: {operation_data.get('task_id', 0)}")
+                    command_id = str(operation_data.get('task_id', 0))
+
             # 创建ClientStreamMessage
             client_msg = robot_pb2.ClientStreamMessage(
-                command_id=int(operation_data.get('task_id', 0)),
+                command_id=int(command_id) if str(command_id).isdigit() else abs(hash(str(command_id))) % (2**31),
                 command_time=int(time.time() * 1000),
                 command_type=robot_pb2.ClientMessageType.OPERATION_RESULT,
                 robot_id=self.robot_id,
@@ -973,77 +997,77 @@ class RobotControlSystem:
             except Exception as e:
                 self.logger.error(f"回调函数执行异常: {e}")
     
-    def send_server_command(self, command_data: Dict[str, Any]) -> bool:
-        """通过serverCommand流发送服务端命令
+    # def send_server_command(self, command_data: Dict[str, Any]) -> bool:
+    #     """通过serverCommand流发送服务端命令
         
-        Args:
-            command_data: 命令数据字典
+    #     Args:
+    #         command_data: 命令数据字典
             
-        Returns:
-            bool: 发送是否成功
-        """
-        if not self.server_command_manager or not self.server_command_manager.is_stream_active:
-            self.logger.error("serverCommand流未激活，无法发送命令")
-            return False
+    #     Returns:
+    #         bool: 发送是否成功
+    #     """
+    #     if not self.server_command_manager or not self.server_command_manager.is_stream_active:
+    #         self.logger.error("serverCommand流未激活，无法发送命令")
+    #         return False
         
-        try:
-            # 创建ServerStreamMessage消息
-            import uuid
-            msg_id = int(uuid.uuid4().hex[:8], 16)
+    #     try:
+    #         # 创建ServerStreamMessage消息
+    #         import uuid
+    #         msg_id = int(uuid.uuid4().hex[:8], 16)
             
-            # 获取命令类型
-            cmd_type = command_data.get('cmd_type', 'unknown')
+    #         # 获取命令类型
+    #         cmd_type = command_data.get('cmd_type', 'unknown')
             
-            # 创建gRPC消息
-            grpc_msg = robot_pb2.ServerStreamMessage(
-                msg_id=msg_id,
-                msg_time=int(time.time()),
-                robot_id=self.robot_id,
-                cmd_type=cmd_type
-            )
+    #         # 创建gRPC消息
+    #         grpc_msg = robot_pb2.ServerStreamMessage(
+    #             msg_id=msg_id,
+    #             msg_time=int(time.time()),
+    #             robot_id=self.robot_id,
+    #             cmd_type=cmd_type
+    #         )
             
-            # 根据命令类型填充数据
-            if cmd_type == 'task':
-                task_data = command_data.get('task_data', {})
-                grpc_msg.task_data.CopyFrom(robot_pb2.TaskCmdData(
-                    task_id=task_data.get('task_id', ''),
-                    task_type=task_data.get('task_type', 'delivery'),
-                    priority=task_data.get('priority', 1),
-                    start_point=task_data.get('start_point', ''),
-                    end_point=task_data.get('end_point', ''),
-                    operation_type=task_data.get('operation_type', 'pickup')
-                ))
-            elif cmd_type == 'mode':
-                mode_data = command_data.get('mode_data', {})
-                grpc_msg.mode_data.CopyFrom(robot_pb2.ModeCmdData(
-                    mode=mode_data.get('mode', 'auto'),
-                    operation_mode=mode_data.get('operation_mode', 'normal')
-                ))
-            elif cmd_type == 'joy':
-                joy_data = command_data.get('joy_data', {})
-                grpc_msg.joy_data.CopyFrom(robot_pb2.JoyCmdData(
-                    linear_x=joy_data.get('linear_x', 0.0),
-                    linear_y=joy_data.get('linear_y', 0.0),
-                    angular_z=joy_data.get('angular_z', 0.0)
-                ))
-            elif cmd_type == 'charge':
-                charge_data = command_data.get('charge_data', {})
-                grpc_msg.charge_data.CopyFrom(robot_pb2.ChargeCmdData(
-                    action=charge_data.get('action', 'start')
-                ))
+    #         # 根据命令类型填充数据
+    #         if cmd_type == 'task':
+    #             task_data = command_data.get('task_data', {})
+    #             grpc_msg.task_data.CopyFrom(robot_pb2.TaskCmdData(
+    #                 task_id=task_data.get('task_id', ''),
+    #                 task_type=task_data.get('task_type', 'delivery'),
+    #                 priority=task_data.get('priority', 1),
+    #                 start_point=task_data.get('start_point', ''),
+    #                 end_point=task_data.get('end_point', ''),
+    #                 operation_type=task_data.get('operation_type', 'pickup')
+    #             ))
+    #         elif cmd_type == 'mode':
+    #             mode_data = command_data.get('mode_data', {})
+    #             grpc_msg.mode_data.CopyFrom(robot_pb2.ModeCmdData(
+    #                 mode=mode_data.get('mode', 'auto'),
+    #                 operation_mode=mode_data.get('operation_mode', 'normal')
+    #             ))
+    #         elif cmd_type == 'joy':
+    #             joy_data = command_data.get('joy_data', {})
+    #             grpc_msg.joy_data.CopyFrom(robot_pb2.JoyCmdData(
+    #                 linear_x=joy_data.get('linear_x', 0.0),
+    #                 linear_y=joy_data.get('linear_y', 0.0),
+    #                 angular_z=joy_data.get('angular_z', 0.0)
+    #             ))
+    #         elif cmd_type == 'charge':
+    #             charge_data = command_data.get('charge_data', {})
+    #             grpc_msg.charge_data.CopyFrom(robot_pb2.ChargeCmdData(
+    #                 action=charge_data.get('action', 'start')
+    #             ))
             
-            # 发送消息
-            success = self.server_command_manager.send_message(grpc_msg)
-            if success:
-                self.logger.info(f"服务端命令已发送: msg_id={msg_id}, cmd_type={cmd_type}")
-            else:
-                self.logger.error(f"服务端命令发送失败: msg_id={msg_id}, cmd_type={cmd_type}")
+    #         # 发送消息
+    #         success = self.server_command_manager.send_message(grpc_msg)
+    #         if success:
+    #             self.logger.info(f"服务端命令已发送: msg_id={msg_id}, cmd_type={cmd_type}")
+    #         else:
+    #             self.logger.error(f"服务端命令发送失败: msg_id={msg_id}, cmd_type={cmd_type}")
             
-            return success
+    #         return success
             
-        except Exception as e:
-            self.logger.error(f"发送服务端命令异常: {e}")
-            return False
+    #     except Exception as e:
+    #         self.logger.error(f"发送服务端命令异常: {e}")
+    #         return False
 
     def shutdown(self):
         """关闭机器人控制系统"""
