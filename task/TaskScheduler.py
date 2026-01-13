@@ -605,16 +605,14 @@ class TaskScheduler:
             }
 
         # 触发操作结果回调
+        # operation_data 只包含操作特定数据，task_id/station_id/command_id从快照获取
         self._trigger_callback(
             "on_operation_result",
             operation_data={
-                'task_id': self.current_task.task_id if self.current_task else 0,
-                'station_id': self.current_station.station_config.station_id if self.current_station else 0,
                 'operation_mode': operation_config.operation_mode,
                 'result': result,
                 'timestamp': time.time()
-            },
-            command_id=self.current_command.command_id if self.current_command else None
+            }
         )
 
         return result

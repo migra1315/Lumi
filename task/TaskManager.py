@@ -2,7 +2,7 @@ from datetime import datetime
 import json
 import uuid
 from utils.logger_config import get_logger
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from utils.dataConverter import convert_data_json_to_task_cmd, convert_task_cmd_to_task
 from task.TaskDatabase import TaskDatabase
 from task.TaskScheduler import TaskScheduler
@@ -42,7 +42,6 @@ class TaskManager:
         self.scheduler.register_callback("on_station_complete", self._on_station_complete)
         self.scheduler.register_callback("on_station_retry", self._on_station_retry)
         self.scheduler.register_callback("on_station_progress", self._on_station_progress)  # 新增：站点进度回调
-        self.scheduler.register_callback("on_arrive_service_station", self._on_arrive_service_station)  # 新增：到达服务站点回调
         self.scheduler.register_callback("on_operation_result", self._on_operation_result)  # 新增：操作结果回调
 
         # 注册命令级回调
@@ -52,8 +51,6 @@ class TaskManager:
 
         # 新增：系统级回调（用于TaskManager -> RobotControlSystem通信）
         self.system_callbacks = {
-            "on_data_ready": None,              # 数据准备就绪回调（用于上报）
-            "on_arrive_service_station": None,          # 到达站点回调
             "on_command_status_change": None,   # 命令状态变化回调
             "on_task_progress": None,           # 任务进度回调
             "on_operation_result": None,        # 操作结果回调
@@ -203,6 +200,27 @@ class TaskManager:
             "agv_marker": station.station_config.agv_marker,
             "retry_count": station.retry_count,
             "started_at": station.started_at.isoformat() if station.started_at else None
+        }
+
+    def get_progress_snapshot(self) -> Optional[Dict[str, Any]]:
+        """获取当前进度快照（线程安全）
+
+        统一的状态访问接口，避免参数传递混乱。用于RobotControlSystem获取
+        当前执行状态以构建上报消息。
+
+        Returns:
+            包含 task, station, command_id 的字典，如果无任务则返回 None
+        """
+        if not self.scheduler.current_task:
+            return None
+
+        return {
+            "task": self.scheduler.current_task,
+            "station": self.scheduler.current_station,
+            "command_id": (
+                self.scheduler.current_command.command_id
+                if self.scheduler.current_command else None
+            )
         }
 
     # ==================== 指令响应相关方法 ====================
@@ -473,13 +491,6 @@ class TaskManager:
         """任务完成回调"""
         self.logger.info(f"任务完成: {task.task_id}")
 
-        # 触发系统回调：通知RobotControlSystem上报设备数据
-        self._trigger_system_callback(
-            "on_data_ready",
-            data_type="task_complete",
-            task=task
-        )
-
     def _on_task_failed(self, task: Task):
         """任务失败回调"""
         self.logger.error(f"任务失败: {task.task_id}")
@@ -489,14 +500,8 @@ class TaskManager:
         """站点开始回调"""
         self.logger.info(f"站点开始: {station.station_config.station_id}")
 
-        # 触发任务进度回调
-        task = self.scheduler.current_task
-        if task:
-            self._trigger_system_callback(
-                "on_task_progress",
-                task=task,
-                station=station
-            )
+        # 触发任务进度回调（无需参数，从快照获取）
+        self._trigger_system_callback("on_task_progress")
 
     def _on_station_complete(self, station: Station):
         """站点完成回调"""
@@ -505,10 +510,9 @@ class TaskManager:
         # 检查是否有操作结果，触发操作结果回调
         operation_result = station.metadata.get('operation_result') if station.metadata else None
         if operation_result:
-            task = self.scheduler.current_task
+            # operation_data 只包含操作特定数据（operation_mode, result）
+            # task_id/station_id 从快照获取
             operation_data = {
-                'task_id': task.task_id if task else '',
-                'station_id': station.station_config.station_id,
                 'operation_mode': station.station_config.operation_config.operation_mode,
                 'result': operation_result
             }
@@ -517,14 +521,8 @@ class TaskManager:
                 operation_data=operation_data
             )
 
-        # 触发任务进度回调
-        task = self.scheduler.current_task
-        if task:
-            self._trigger_system_callback(
-                "on_task_progress",
-                task=task,
-                station=station
-            )
+        # 触发任务进度回调（无需参数，从快照获取）
+        self._trigger_system_callback("on_task_progress")
 
     def _on_station_retry(self, station: Station):
         """站点重试回调"""
@@ -532,45 +530,26 @@ class TaskManager:
         # 可以在这里发送通知或更新UI
 
     def _on_station_progress(self, station: Station, command_id: str = None):
-        """站点进度更新回调
+        """站点进度更新回调（简化版 - 不传递参数到系统回调）
 
         Args:
             station: 站点对象
-            command_id: 命令ID（从TaskScheduler传递）
+            command_id: 命令ID（保留参数兼容性，但不使用）
         """
         self.logger.info(
             f"站点进度更新: {station.station_config.station_id} - "
             f"{station.execution_phase.value} - {station.progress_detail}"
         )
 
-        # 触发系统级回调，上报给 RobotControlSystem
-        task = self.scheduler.current_task
-        if task:
-            self._trigger_system_callback(
-                "on_task_progress",
-                task=task,
-                station=station,
-                command_id=command_id,  # 传递 command_id
-                phase=station.execution_phase.value,
-                detail=station.progress_detail
-            )
-
-    def _on_arrive_service_station(self, device_id: str):
-        """到达服务站点回调"""
-        self.logger.info(f"到达服务站点: {device_id}")
-
-        # 触发系统级回调，通知 RobotControlSystem 机器人已到达服务站点
-        self._trigger_system_callback(
-            "on_arrive_service_station",
-            device_id=device_id
-        )
+        # 触发系统级回调，上报给 RobotControlSystem（无需传递参数）
+        self._trigger_system_callback("on_task_progress")
 
     def _on_operation_result(self, operation_data: Dict[str, Any], command_id: str = None):
-        """操作结果回调
+        """操作结果回调（简化版 - operation_data只包含操作特定数据）
 
         Args:
-            operation_data: 操作数据
-            command_id: 命令ID（从TaskScheduler传递）
+            operation_data: 操作数据（只包含operation_mode和result，不包含task_id/station_id）
+            command_id: 命令ID（保留参数兼容性，但不使用）
         """
         operation_mode = operation_data.get('operation_mode', 'unknown')
         result = operation_data.get('result', {})
@@ -578,10 +557,9 @@ class TaskManager:
 
         self.logger.info(f"操作结果: {operation_mode} - {'成功' if success else '失败'}")
 
-        # 将 command_id 添加到 operation_data
-        operation_data['command_id'] = command_id
-
         # 触发系统级回调，通知 RobotControlSystem
+        # operation_data 只包含操作特定数据（operation_mode, result）
+        # task_id/station_id/command_id 从快照获取
         self._trigger_system_callback(
             "on_operation_result",
             operation_data=operation_data

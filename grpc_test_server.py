@@ -104,7 +104,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                     # 将消息放入队列供主线程处理
                     client_messages.put(request)
                     # 立即处理客户端消息
-                    self._handle_client_stream_message(request, client_id)
+                    # self._handle_client_stream_message(request, client_id)
 
             except Exception as e:
                 logger.error(f"【serverCommand】处理客户端消息时出错: {e}")
@@ -444,13 +444,14 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                 msg_type = f"未知类型({request.msg_type})"
 
             logger.info(f"【clientUpload】收到消息: {msg_type} (msg_id: {request.msg_id}, robot_id: {request.robot_id})")
+            logger.info(f"{request}")
 
             # 打印位置信息（如果有）
             if request.HasField('position_info'):
                 pos = request.position_info
-                logger.debug(f"  ├─ AGV位置: {list(pos.AGVPositionInfo)}")
-                logger.debug(f"  ├─ 机械臂位置: {list(pos.ARMPositionInfo)}")
-                logger.debug(f"  └─ 外部轴位置: {list(pos.EXTPositionInfo)}")
+                logger.info(f"  ├─ AGV位置: {list(pos.AGVPositionInfo)}")
+                logger.info(f"  ├─ 机械臂位置: {list(pos.ARMPositionInfo)}")
+                logger.info(f"  └─ 外部轴位置: {list(pos.EXTPositionInfo)}")
 
             # 打印任务信息（如果有）
             if request.HasField('task_info') and request.task_info.HasField('inspection_task_list'):
@@ -459,17 +460,13 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                     task_status = robot_service_pb2.TaskStatus.Name(task.status)
                 except ValueError:
                     task_status = f"未知({task.status})"
-                logger.debug(f"  └─ 当前任务: ID={task.task_id}, 名称={task.task_name}, 状态={task_status}")
+                logger.info(f"  └─ 当前任务: ID={task.task_id}, 名称={task.task_name}, 状态={task_status}")
 
             # 根据消息类型处理数据
             if request.HasField('robot_status'):
                 self._handle_robot_status(request.robot_status)
-            elif request.HasField('device_data'):
-                self._handle_device_data(request.device_data)
             elif request.HasField('environment_data'):
                 self._handle_environment_data(request.environment_data)
-            elif request.HasField('arrive_service_point'):
-                self._handle_arrive_service_point(request.arrive_service_point)
             else:
                 logger.warning(f"【clientUpload】消息中无有效数据字段")
 
@@ -515,29 +512,6 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         except Exception as e:
             logger.error(f"【clientUpload】处理机器人状态消息失败: {e}")
     
-    def _handle_device_data(self, device_data):
-        """处理设备数据消息
-
-        Args:
-            device_data: 设备数据(DeviceDataUpload)
-        """
-        try:
-            device_id = device_data.device_info.device_id if device_data.HasField('device_info') else 0
-            data_type = device_data.device_info.data_type if device_data.HasField('device_info') else "未知"
-            image_count = len(device_data.device_info.image_base64) if device_data.HasField('device_info') else 0
-
-            logger.info(f"【clientUpload】【设备数据】")
-            logger.info(f"  ├─ 设备ID: {device_id}")
-            logger.info(f"  ├─ 数据类型: {data_type}")
-            logger.info(f"  └─ 图片数量: {image_count}")
-
-            # 如果有图片数据，打印每张图片的大小
-            if image_count > 0:
-                for idx, img_base64 in enumerate(device_data.device_info.image_base64):
-                    logger.info(f"     └─ 图片{idx+1}大小: {len(img_base64)} 字符")
-
-        except Exception as e:
-            logger.error(f"【clientUpload】处理设备数据消息失败: {e}")
 
     def _handle_environment_data(self, environment_data):
         """处理环境数据消息
@@ -565,18 +539,6 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         except Exception as e:
             logger.error(f"【clientUpload】处理环境数据消息失败: {e}")
 
-    def _handle_arrive_service_point(self, arrive_service_point):
-        """处理到达服务点消息
-
-        Args:
-            arrive_service_point: 到达服务点数据(ArriveServicePointUpload)
-        """
-        try:
-            is_arrive = arrive_service_point.is_arrive
-            logger.info(f"【clientUpload】【到达服务点】: {'✓ 已到达' if is_arrive else '✗ 未到达'}")
-
-        except Exception as e:
-            logger.error(f"【clientUpload】处理到达服务点消息失败: {e}")
 
     def _handle_client_stream_message(self, request, client_id):
         """处理客户端通过serverCommand流发送的消息

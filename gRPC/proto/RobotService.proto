@@ -56,9 +56,7 @@ enum TaskStatus {
 // 消息类型
 enum MsgType {
     ROBOT_STATUS = 0; // 机器人状态
-    DEVICE_DATA = 1; // 巡检设备状态
     ENVIRONMENT_DATA = 2; // 巡检环境信息
-    ARRIVE_SERVER_POINT = 3; // 到达服务器点通知
 }
 
 // 命令类型
@@ -189,19 +187,9 @@ message RobotStatusUpload {
     ErrorInfo error_info = 3;
 }
 
-// 设备数据上传
-message DeviceDataUpload {
-    DeviceInfo device_info = 1;
-}
-
 // 环境数据上传
 message EnvironmentDataUpload {
     EnvironmentInfo sensor_data = 1;
-}
-
-// 到达服务点位数据上传
-message ArriveServicePointUpload {
-    bool is_arrive = 1;
 }
 
 // 客户端上传请求消息（用于双向流）
@@ -214,9 +202,7 @@ message RobotUploadRequest {
     TaskInfo task_info = 6;
     oneof data_json {
         RobotStatusUpload robot_status = 7;
-        DeviceDataUpload device_data = 8;
         EnvironmentDataUpload environment_data = 9;
-        ArriveServicePointUpload arrive_service_point = 10;
     }
 }
 

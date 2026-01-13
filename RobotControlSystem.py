@@ -23,7 +23,7 @@ from utils.dataConverter import convert_server_message_to_command_envelope, conv
 from task.TaskManager import TaskManager
 
 
-from dataModels.MessageModels import ArriveServicePointInfo, BatteryInfo, DeviceInfo, EnvironmentInfo, MessageEnvelope, MsgType, PositionInfo, SystemStatus, TaskListInfo,create_message_envelope
+from dataModels.MessageModels import BatteryInfo, EnvironmentInfo, MessageEnvelope, MsgType, PositionInfo, SystemStatus, TaskListInfo,create_message_envelope
 from dataModels.CommandModels import CmdType, CommandEnvelope, TaskCmd,create_cmd_envelope
 from dataModels.TaskModels import OperationConfig, OperationMode, StationConfig, Station
 
@@ -58,8 +58,6 @@ class RobotControlSystem:
         self.task_manager = TaskManager(self.config, use_mock=use_mock)
 
         # 注册TaskManager系统回调（统一回调路径：TaskScheduler → TaskManager → RobotControlSystem）
-        self.task_manager.register_system_callback("on_data_ready", self._handle_data_ready_callback)
-        self.task_manager.register_system_callback("on_arrive_service_station", self._handle_arrive_service_station_callback)
 
         # 注册新的系统回调
         self.task_manager.register_system_callback("on_command_status_change", self._handle_command_status_callback)
@@ -327,7 +325,7 @@ class RobotControlSystem:
         try:
             # 通过TaskManager获取机器人状态
             robot_status = self.task_manager.get_robot_status()
-                        
+
             # 构建位置信息
             position_info = PositionInfo(
                 agv_position_info=[
@@ -338,17 +336,13 @@ class RobotControlSystem:
                 arm_position_info=robot_status.get('robot_joints', [0.0]*6),
                 ext_position_info=robot_status.get('ext_axis', [0.0]*4),
             )
-            
-            # 构建任务信息（当前执行的任务）
-            current_task_info = self.task_manager.get_current_task_info()
-            if current_task_info:
-                task_info = Task(
-                    task_id=current_task_info["task_id"],
-                    task_name=current_task_info["task_name"],
-                    station_list=[],
-                    status=TaskStatus(current_task_info["status"])
-                )
+
+            # 从快照获取任务信息（统一数据源）
+            snapshot = self.task_manager.get_progress_snapshot()
+            if snapshot:
+                task_info = snapshot["task"]
             else:
+                # 无任务时创建空任务对象
                 task_info = Task(
                     task_id='',
                     task_name='',
@@ -406,7 +400,7 @@ class RobotControlSystem:
         try:
             # 通过TaskManager获取机器人状态
             robot_status = self.task_manager.get_robot_status()
-                        
+
             # 构建位置信息
             position_info = PositionInfo(
                 agv_position_info=[
@@ -417,16 +411,13 @@ class RobotControlSystem:
                 arm_position_info=robot_status.get('robot_joints', [0.0]*6),
                 ext_position_info=robot_status.get('ext_axis', [0.0]*4),
             )
-            # 构建任务信息（当前执行的任务）
-            current_task_info = self.task_manager.get_current_task_info()
-            if current_task_info:
-                task_info = Task(
-                    task_id=current_task_info["task_id"],
-                    task_name=current_task_info["task_name"],
-                    station_list=[],
-                    status=TaskStatus(current_task_info["status"])
-                )
+
+            # 从快照获取任务信息（统一数据源）
+            snapshot = self.task_manager.get_progress_snapshot()
+            if snapshot:
+                task_info = snapshot["task"]
             else:
+                # 无任务时创建空任务对象
                 task_info = Task(
                     task_id='',
                     task_name='',
@@ -462,130 +453,7 @@ class RobotControlSystem:
             
         except Exception as e:
             self.logger.error(f"上报环境数据失败: {e}")
-    
-    def _report_device_data(self, task: Station):
-        """任务完成后上报设备数据
 
-        Args:
-            task: 完成的任务
-        """
-        try:
-            # 通过TaskManager获取机器人状态
-            robot_status = self.task_manager.get_robot_status()
-                        
-            # 构建位置信息
-            position_info = PositionInfo(
-                agv_position_info=[
-                    robot_status.get('current_position', {}).get('x', 0.0),
-                    robot_status.get('current_position', {}).get('y', 0.0),
-                    robot_status.get('current_position', {}).get('theta', 0.0)
-                ],
-                arm_position_info=robot_status.get('robot_joints', [0.0]*6),
-                ext_position_info=robot_status.get('ext_axis', [0.0]*4),
-            )
-
-
-            # 构建任务信息（当前执行的任务）
-            current_task_info = self.task_manager.get_current_task_info()
-            if current_task_info:
-                task_info = Task(
-                    task_id=current_task_info["task_id"],
-                    task_name=current_task_info["task_name"],
-                    station_list=[],
-                    status=TaskStatus(current_task_info["status"])
-                )
-            else:
-                task_info = Task(
-                    task_id='',
-                    task_name='',
-                    station_list=[],
-                    status=TaskStatus.PENDING
-                )
-            
-            # 模拟设备数据
-            device_info = DeviceInfo(
-                deviceId=task.station_config.operation_config.get('device_id', ''),
-                dataType='image',
-                imageBase64='mock_base64_image_data'
-            )
-            
-           
-            # 创建消息信封
-            msg_envelope = create_message_envelope(
-                msg_id=str(uuid.uuid4()),
-                robot_id=self.robot_id,
-                msg_type=MsgType.DEVICE_DATA,
-                position_info=position_info,
-                task_info=task_info,
-                device_info=device_info
-            )
-            
-            # 发送设备数据消息
-            self._send_message(msg_envelope)
-            
-        except Exception as e:
-            self.logger.error(f"上报设备数据失败: {e}")
-    
-    def _report_arrive_service_point(self):
-        """到达服务点后上报
-
-        Args:
-            task: 当前任务
-        """
-        try:
-            # 通过TaskManager获取机器人状态
-            robot_status = self.task_manager.get_robot_status()
-                        
-            # 构建位置信息
-            position_info = PositionInfo(
-                agv_position_info=[
-                    robot_status.get('current_position', {}).get('x', 0.0),
-                    robot_status.get('current_position', {}).get('y', 0.0),
-                    robot_status.get('current_position', {}).get('theta', 0.0)
-                ],
-                arm_position_info=robot_status.get('robot_joints', [0.0]*6),
-                ext_position_info=robot_status.get('ext_axis', [0.0]*4),
-            )
-            # 构建任务信息（当前执行的任务）
-            current_task_info = self.task_manager.get_current_task_info()
-            if current_task_info:
-                task_info = Task(
-                    task_id=current_task_info["task_id"],
-                    task_name=current_task_info["task_name"],
-                    station_list=[],
-                    status=TaskStatus(current_task_info["status"])
-                )
-            else:
-                task_info = Task(
-                    task_id='',
-                    task_name='',
-                    station_list=[],
-                    status=TaskStatus.PENDING
-                )
-            
-
-            # 构建到达服务点信息
-            arrive_info = ArriveServicePointInfo(
-                isArrive=True
-            )
-            
-            
-            # 创建消息信封
-            msg_envelope = create_message_envelope(
-                msg_id=str(uuid.uuid4()),
-                robot_id=self.robot_id,
-                msg_type=MsgType.ARRIVE_SERVER_POINT,
-                position_info=position_info,
-                task_info=task_info,
-                arrive_service_point_info=arrive_info
-            )
-            
-            # 发送到达服务点消息
-            self._send_message(msg_envelope)
-            
-        except Exception as e:
-            self.logger.error(f"上报到达服务点信息失败: {e}")
-    
     def _send_message(self, msg_envelope: MessageEnvelope):
         """发送消息到后台 - 使用gRPC双向流
         
@@ -611,6 +479,7 @@ class RobotControlSystem:
         except Exception as e:
             self.logger.error(f"保存发送的消息到数据库失败: {e}")
 
+
     def _handle_clientUpload_response(self, response):
         """处理从gRPC服务器收到的响应/命令"""
         try:
@@ -624,48 +493,6 @@ class RobotControlSystem:
     #
     #                               回调函数
     #
-
-    def _handle_data_ready_callback(self, data_type: str, **kwargs):
-        """处理TaskManager的数据准备就绪回调（新增：双向回调机制）
-
-        Args:
-            data_type: 数据类型（device_data, task_complete等）
-            **kwargs: 其他参数
-        """
-        self.logger.info(f"收到数据就绪回调: {data_type}")
-
-        try:
-            if data_type == "device_data":
-                # 站点完成后上报设备数据
-                station = kwargs.get("station")
-                if station:
-                    self._report_device_data(station)
-
-            elif data_type == "task_complete":
-                # 任务完成后可以上报任务统计数据
-                task = kwargs.get("task")
-                if task:
-                    self.logger.info(f"任务 {task.task_id} 完成，可以上报统计数据")
-                    # TODO: 实现任务统计数据上报
-
-        except Exception as e:
-            self.logger.error(f"处理数据就绪回调失败: {e}")
-
-    def _handle_arrive_service_station_callback(self, **kwargs):
-        """处理到达站点回调（新增：双向回调机制）
-
-        Args:
-            **kwargs: 其他参数
-        """
-        self.logger.info("收到到达站点回调")
-
-        try:
-            device_id = kwargs.get("device_id")
-            if device_id:
-                self._report_arrive_service_point(device_id)
-
-        except Exception as e:
-            self.logger.error(f"处理到达站点回调失败: {e}")
 
     def _handle_command_status_callback(self, **kwargs):
         """处理命令状态变化回调
@@ -683,22 +510,11 @@ class RobotControlSystem:
         except Exception as e:
             self.logger.error(f"发送命令状态更新失败: {e}")
 
-    def _handle_task_progress_callback(self, **kwargs):
-        """处理任务进度回调
-
-        Args:
-            **kwargs: 包含task、station和command_id
-        """
-        task = kwargs.get("task")
-        station = kwargs.get("station")
-        command_id = kwargs.get("command_id")  # 新增：获取 command_id
-
-        if not task:
-            return
-
+    def _handle_task_progress_callback(self):
+        """处理任务进度回调（简化版 - 无需参数）"""
         try:
-            # 发送任务进度更新消息，传递 command_id
-            self._send_task_progress_update(task, station, command_id)
+            # 直接调用，无需参数（从TaskManager快照获取数据）
+            self._send_task_progress_update()
         except Exception as e:
             self.logger.error(f"发送任务进度更新失败: {e}")
 
@@ -706,30 +522,18 @@ class RobotControlSystem:
         """处理操作结果回调
 
         Args:
-            **kwargs: 包含operation_data
+            **kwargs: 包含operation_data（操作特定数据，如result、operation_mode）
         """
         operation_data = kwargs.get("operation_data")
         if not operation_data:
             return
 
         try:
-            # 发送操作结果消息
+            # 发送操作结果消息（task_id/station_id/command_id从快照获取）
             self._send_operation_result(operation_data)
         except Exception as e:
             self.logger.error(f"发送操作结果失败: {e}")
 
-    def register_callback(self, event: str, callback: Callable):
-        """注册回调函数
-        
-        Args:
-            event: 事件名称
-            callback: 回调函数
-        """
-        if event in self.callbacks:
-            self.callbacks[event].append(callback)
-            self.logger.debug(f"已注册回调函数到事件: {event}")
-        else:
-            self.logger.warning(f"未知事件类型: {event}")
 
     # ==================== 新增消息发送方法 ====================
 
@@ -796,17 +600,21 @@ class RobotControlSystem:
             self.logger.error(f"发送命令状态更新异常: {e}")
 
 
-    def _send_task_progress_update(self, task, station=None, command_id=None):
-        """发送任务进度更新
-
-        Args:
-            task: Task对象
-            station: 当前站点（可选）
-            command_id: 命令ID（从回调传递）
-        """
+    def _send_task_progress_update(self):
+        """发送任务进度更新（简化版 - 从TaskManager获取快照）"""
         try:
             import gRPC.RobotService_pb2 as robot_pb2
             from dataModels.TaskModels import TaskStatus, StationTaskStatus
+
+            # 从 TaskManager 获取完整快照
+            snapshot = self.task_manager.get_progress_snapshot()
+            if not snapshot:
+                self.logger.warning("无任务进度可上报")
+                return
+
+            task = snapshot["task"]
+            station = snapshot["station"]
+            command_id = snapshot["command_id"]
 
             # 统计站点状态
             total_stations = len(task.station_list)
@@ -814,17 +622,15 @@ class RobotControlSystem:
             failed_stations = sum(1 for s in task.station_list if s.status == StationTaskStatus.FAILED)
 
             # 获取当前站点信息
-            if station is None:
-                current_station_info = self.task_manager.get_current_station_info()
-            else:
-                # 从 station 对象提取信息
+            current_station_info = None
+            if station:
                 current_station_info = {
                     "station_id": station.station_config.station_id,
                     "name": station.station_config.name,
                     "status": station.status.value,
                     "execution_phase": station.execution_phase.value,
                     "progress_detail": station.progress_detail
-                } if station else None
+                }
 
             # 映射任务状态
             task_status_map = {
@@ -865,16 +671,8 @@ class RobotControlSystem:
                 timestamp=int(time.time() * 1000)
             )
 
-            # 使用传递的 command_id，如果没有则尝试从其他来源获取
-            msg_command_id = command_id
-            if msg_command_id is None:
-                # 备用方案：从 scheduler.current_command 获取
-                if self.task_manager.scheduler.current_command:
-                    msg_command_id = self.task_manager.scheduler.current_command.command_id
-                else:
-                    # 最后备用：使用 task_id（记录警告）
-                    self.logger.warning(f"无法获取 command_id，使用 task_id: {task.task_id}")
-                    msg_command_id = str(task.task_id)
+            # 使用快照中的 command_id
+            msg_command_id = command_id if command_id else str(task.task_id)
 
             # 创建ClientStreamMessage
             client_msg = robot_pb2.ClientStreamMessage(
@@ -897,15 +695,30 @@ class RobotControlSystem:
 
 
     def _send_operation_result(self, operation_data: Dict[str, Any]):
-        """发送操作结果
+        """发送操作结果（简化版 - 从TaskManager获取task_id/station_id/command_id）
 
         Args:
-            operation_data: 操作数据，包含task_id, station_id, operation_mode, result, command_id
+            operation_data: 操作数据，包含operation_mode和result（特定于操作的数据）
         """
         try:
             import gRPC.RobotService_pb2 as robot_pb2
             from dataModels.TaskModels import OperationMode
 
+            # 从快照获取task_id, station_id, command_id
+            snapshot = self.task_manager.get_progress_snapshot()
+            if not snapshot:
+                self.logger.warning("无法获取进度快照，操作结果上报失败")
+                return
+
+            task = snapshot["task"]
+            station = snapshot["station"]
+            command_id = snapshot["command_id"]
+
+            task_id = int(task.task_id) if task else 0
+            station_id = int(station.station_config.station_id) if station else 0
+            msg_command_id = command_id if command_id else str(task_id)
+
+            # 从 operation_data 提取操作特定数据
             result = operation_data.get('result', {})
             operation_mode = operation_data.get('operation_mode')
 
@@ -937,8 +750,8 @@ class RobotControlSystem:
 
             # 创建OperationResult消息
             operation_result = robot_pb2.OperationResult(
-                task_id=int(operation_data.get('task_id', 0)),
-                station_id=int(operation_data.get('station_id', 0)),
+                task_id=task_id,
+                station_id=station_id,
                 operation_mode=operation_mode_map.get(operation_mode, robot_pb2.OperationMode.OPERATION_MODE_NONE),
                 status=operation_status,
                 message=result.get('message', ''),
@@ -949,20 +762,9 @@ class RobotControlSystem:
                 duration=result.get('duration', 0.0)
             )
 
-            # 使用从 operation_data 中传递的 command_id
-            command_id = operation_data.get('command_id')
-            if command_id is None:
-                # 备用方案：从 scheduler.current_command 获取
-                if self.task_manager.scheduler.current_command:
-                    command_id = self.task_manager.scheduler.current_command.command_id
-                else:
-                    # 最后备用：使用 task_id（记录警告）
-                    self.logger.warning(f"无法获取 command_id，使用 task_id: {operation_data.get('task_id', 0)}")
-                    command_id = str(operation_data.get('task_id', 0))
-
             # 创建ClientStreamMessage
             client_msg = robot_pb2.ClientStreamMessage(
-                command_id=int(command_id) if str(command_id).isdigit() else abs(hash(str(command_id))) % (2**31),
+                command_id=int(msg_command_id) if str(msg_command_id).isdigit() else abs(hash(str(msg_command_id))) % (2**31),
                 command_time=int(time.time() * 1000),
                 command_type=robot_pb2.ClientMessageType.OPERATION_RESULT,
                 robot_id=self.robot_id,
@@ -979,6 +781,21 @@ class RobotControlSystem:
         except Exception as e:
             self.logger.error(f"发送操作结果异常: {e}")
 
+
+    def register_callback(self, event: str, callback: Callable):
+        """注册回调函数
+        
+        Args:
+            event: 事件名称
+            callback: 回调函数
+        """
+        if event in self.callbacks:
+            self.callbacks[event].append(callback)
+            self.logger.debug(f"已注册回调函数到事件: {event}")
+        else:
+            self.logger.warning(f"未知事件类型: {event}")
+
+
     def _trigger_callback(self, event: str, *args, **kwargs):
         """触发回调函数
         
@@ -993,78 +810,6 @@ class RobotControlSystem:
             except Exception as e:
                 self.logger.error(f"回调函数执行异常: {e}")
     
-    # def send_server_command(self, command_data: Dict[str, Any]) -> bool:
-    #     """通过serverCommand流发送服务端命令
-        
-    #     Args:
-    #         command_data: 命令数据字典
-            
-    #     Returns:
-    #         bool: 发送是否成功
-    #     """
-    #     if not self.server_command_manager or not self.server_command_manager.is_stream_active:
-    #         self.logger.error("serverCommand流未激活，无法发送命令")
-    #         return False
-        
-    #     try:
-    #         # 创建ServerStreamMessage消息
-    #         import uuid
-    #         msg_id = int(uuid.uuid4().hex[:8], 16)
-            
-    #         # 获取命令类型
-    #         cmd_type = command_data.get('cmd_type', 'unknown')
-            
-    #         # 创建gRPC消息
-    #         grpc_msg = robot_pb2.ServerStreamMessage(
-    #             msg_id=msg_id,
-    #             msg_time=int(time.time()),
-    #             robot_id=self.robot_id,
-    #             cmd_type=cmd_type
-    #         )
-            
-    #         # 根据命令类型填充数据
-    #         if cmd_type == 'task':
-    #             task_data = command_data.get('task_data', {})
-    #             grpc_msg.task_data.CopyFrom(robot_pb2.TaskCmdData(
-    #                 task_id=task_data.get('task_id', ''),
-    #                 task_type=task_data.get('task_type', 'delivery'),
-    #                 priority=task_data.get('priority', 1),
-    #                 start_point=task_data.get('start_point', ''),
-    #                 end_point=task_data.get('end_point', ''),
-    #                 operation_type=task_data.get('operation_type', 'pickup')
-    #             ))
-    #         elif cmd_type == 'mode':
-    #             mode_data = command_data.get('mode_data', {})
-    #             grpc_msg.mode_data.CopyFrom(robot_pb2.ModeCmdData(
-    #                 mode=mode_data.get('mode', 'auto'),
-    #                 operation_mode=mode_data.get('operation_mode', 'normal')
-    #             ))
-    #         elif cmd_type == 'joy':
-    #             joy_data = command_data.get('joy_data', {})
-    #             grpc_msg.joy_data.CopyFrom(robot_pb2.JoyCmdData(
-    #                 linear_x=joy_data.get('linear_x', 0.0),
-    #                 linear_y=joy_data.get('linear_y', 0.0),
-    #                 angular_z=joy_data.get('angular_z', 0.0)
-    #             ))
-    #         elif cmd_type == 'charge':
-    #             charge_data = command_data.get('charge_data', {})
-    #             grpc_msg.charge_data.CopyFrom(robot_pb2.ChargeCmdData(
-    #                 action=charge_data.get('action', 'start')
-    #             ))
-            
-    #         # 发送消息
-    #         success = self.server_command_manager.send_message(grpc_msg)
-    #         if success:
-    #             self.logger.info(f"服务端命令已发送: msg_id={msg_id}, cmd_type={cmd_type}")
-    #         else:
-    #             self.logger.error(f"服务端命令发送失败: msg_id={msg_id}, cmd_type={cmd_type}")
-            
-    #         return success
-            
-    #     except Exception as e:
-    #         self.logger.error(f"发送服务端命令异常: {e}")
-    #         return False
-
     def shutdown(self):
         """关闭机器人控制系统"""
         self.stop()
@@ -1119,7 +864,9 @@ if __name__ == "__main__":
 
     }
     
-    robot_system = RobotControlSystem(config, use_mock=False,report=False)
+    robot_system = RobotControlSystem(config, 
+                                    use_mock=True,
+                                    report=True)
     try:
         # 启动系统
         robot_system.start()

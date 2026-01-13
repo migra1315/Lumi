@@ -11,7 +11,7 @@ from dataModels.CommandModels import (
 from dataModels.MessageModels import (
     MessageEnvelope, MsgType, create_message_envelope, UploadResponse,
     BatteryInfo, PositionInfo, TaskListInfo, SystemStatus, ErrorInfo,
-    DeviceInfo, EnvironmentInfo, ArriveServicePointInfo
+    DeviceInfo, EnvironmentInfo
 )
 
 # ====================== gRPC -> Python 转换 ======================
@@ -197,9 +197,7 @@ def convert_robot_upload_response_to_message_envelope(grpc_response: robot_pb2.R
     # 转换MsgType枚举
     msg_type_map = {
         robot_pb2.MsgType.ROBOT_STATUS: MsgType.ROBOT_STATUS,
-        robot_pb2.MsgType.DEVICE_DATA: MsgType.DEVICE_DATA,
         robot_pb2.MsgType.ENVIRONMENT_DATA: MsgType.ENVIRONMENT_DATA,
-        robot_pb2.MsgType.ARRIVE_SERVER_POINT: MsgType.ARRIVE_SERVER_POINT,
     }
     
     msg_type = msg_type_map.get(grpc_response.msg_type, MsgType.ROBOT_STATUS)
@@ -224,6 +222,219 @@ def convert_robot_upload_response_to_message_envelope(grpc_response: robot_pb2.R
 
 # ====================== Python -> gRPC 转换 ======================
 
+def _datetime_to_timestamp(dt_str: str) -> int:
+    """将ISO格式时间字符串转换为毫秒时间戳
+
+    Args:
+        dt_str: ISO格式时间字符串
+
+    Returns:
+        int: 毫秒时间戳，如果转换失败返回0
+    """
+    if not dt_str:
+        return 0
+    try:
+        dt = datetime.fromisoformat(dt_str)
+        return int(dt.timestamp() * 1000)
+    except (ValueError, AttributeError):
+        return 0
+
+
+def _convert_operation_config_to_proto(op_config: Dict[str, Any]) -> robot_pb2.OperationConfig:
+    """将OperationConfig字典转换为proto OperationConfig对象
+
+    Args:
+        op_config: 操作配置字典
+
+    Returns:
+        robot_pb2.OperationConfig: proto OperationConfig对象
+    """
+    if not op_config:
+        return robot_pb2.OperationConfig()
+
+    # OperationMode 映射
+    operation_mode_map = {
+        'None': robot_pb2.OperationMode.OPERATION_MODE_NONE,
+        'open_door': robot_pb2.OperationMode.OPERATION_MODE_OPEN_DOOR,
+        'close_door': robot_pb2.OperationMode.OPERATION_MODE_CLOSE_DOOR,
+        'capture': robot_pb2.OperationMode.OPERATION_MODE_CAPTURE,
+        'serve': robot_pb2.OperationMode.OPERATION_MODE_SERVICE,
+    }
+
+    operation_mode_str = op_config.get('operation_mode', 'None')
+    operation_mode = operation_mode_map.get(operation_mode_str, robot_pb2.OperationMode.OPERATION_MODE_NONE)
+
+    return robot_pb2.OperationConfig(
+        operation_mode=operation_mode,
+        door_ip=op_config.get('door_ip', ''),
+        device_id=op_config.get('device_id', 0)
+    )
+
+
+def _convert_station_config_to_proto(station_config: Dict[str, Any]) -> robot_pb2.StationConfig:
+    """将StationConfig字典转换为proto StationConfig对象
+
+    Args:
+        station_config: 站点配置字典
+
+    Returns:
+        robot_pb2.StationConfig: proto StationConfig对象
+    """
+    if not station_config:
+        return robot_pb2.StationConfig()
+
+    # 转换 station_id
+    try:
+        station_id = int(station_config.get('station_id', 0))
+    except (ValueError, TypeError):
+        station_id = 0
+
+    # 转换 OperationConfig
+    operation_config_dict = station_config.get('operation_config', {})
+    operation_config_proto = _convert_operation_config_to_proto(operation_config_dict)
+
+    return robot_pb2.StationConfig(
+        station_id=station_id,
+        sort=station_config.get('sort', 0),
+        name=station_config.get('name', ''),
+        agv_marker=station_config.get('agv_marker', ''),
+        robot_pos=list(station_config.get('robot_pos', [])),
+        ext_pos=list(station_config.get('ext_pos', [])),
+        operation_config=operation_config_proto
+    )
+
+
+def _convert_station_to_proto(station: Dict[str, Any]) -> robot_pb2.Station:
+    """将Station字典转换为proto Station对象
+
+    Args:
+        station: 站点字典
+
+    Returns:
+        robot_pb2.Station: proto Station对象
+    """
+    if not station:
+        return robot_pb2.Station()
+
+    # StationTaskStatus 映射
+    station_status_map = {
+        'pending': robot_pb2.StationTaskStatus.STATION_TASK_STATUS_PENDING,
+        'running': robot_pb2.StationTaskStatus.STATION_TASK_STATUS_RUNNING,
+        'completed': robot_pb2.StationTaskStatus.STATION_TASK_STATUS_COMPLETED,
+        'failed': robot_pb2.StationTaskStatus.STATION_TASK_STATUS_FAILED,
+        'cancelled': robot_pb2.StationTaskStatus.STATION_TASK_STATUS_CANCELLED,
+        'retrying': robot_pb2.StationTaskStatus.STATION_TASK_STATUS_RETRYING,
+        'to_retry': robot_pb2.StationTaskStatus.STATION_TASK_STATUS_TO_RETRY,
+    }
+
+    # 转换 StationConfig
+    station_config_dict = station.get('station_config', {})
+    station_config_proto = _convert_station_config_to_proto(station_config_dict)
+
+    # 转换状态
+    status_str = station.get('status', 'pending')
+    station_status = station_status_map.get(status_str, robot_pb2.StationTaskStatus.STATION_TASK_STATUS_PENDING)
+
+    # 转换时间戳
+    generate_time = _datetime_to_timestamp(station.get('generate_time'))
+    created_at = _datetime_to_timestamp(station.get('created_at'))
+    started_at = _datetime_to_timestamp(station.get('started_at'))
+    completed_at = _datetime_to_timestamp(station.get('completed_at'))
+
+    return robot_pb2.Station(
+        station_config=station_config_proto,
+        status=station_status,
+        generate_time=generate_time,
+        created_at=created_at,
+        started_at=started_at,
+        completed_at=completed_at,
+        retry_count=station.get('retry_count', 0),
+        max_retries=station.get('max_retries', 3),
+        error_message=station.get('error_message', '')
+    )
+
+
+def _convert_task_to_proto(task_info: Dict[str, Any]) -> robot_pb2.TaskInfo:
+    """将task_info字典转换为proto TaskInfo对象
+
+    Args:
+        task_info: 任务信息字典
+
+    Returns:
+        robot_pb2.TaskInfo: proto TaskInfo对象
+    """
+    if not task_info:
+        return robot_pb2.TaskInfo()
+
+    # TaskStatus 映射
+    task_status_map = {
+        'pending': robot_pb2.TaskStatus.TASK_STATUS_PENDING,
+        'running': robot_pb2.TaskStatus.TASK_STATUS_RUNNING,
+        'completed': robot_pb2.TaskStatus.TASK_STATUS_COMPLETED,
+        'partial_completed': robot_pb2.TaskStatus.TASK_STATUS_COMPLETED,  # 映射到已完成
+        'failed': robot_pb2.TaskStatus.TASK_STATUS_FAILED,
+        'skipped': robot_pb2.TaskStatus.TASK_STATUS_CANCELLED,  # 映射到已取消
+        'retrying': robot_pb2.TaskStatus.TASK_STATUS_RETRYING,
+    }
+
+    # RobotMode 映射
+    robot_mode_map = {
+        'inspection': robot_pb2.RobotMode.INSPECTION,
+        'service': robot_pb2.RobotMode.SERVICE,
+        'joy_control': robot_pb2.RobotMode.JOY_CONTROL,
+        'estop': robot_pb2.RobotMode.ESTOP,
+        'charge': robot_pb2.RobotMode.CHARGE,
+        'stand_by': robot_pb2.RobotMode.STAND_BY,
+    }
+
+    # 转换 task_id（支持字符串和整数）
+    try:
+        task_id = int(task_info.get('task_id', 0))
+    except (ValueError, TypeError):
+        task_id = 0
+
+    # 转换 status
+    status_str = task_info.get('status', 'pending')
+    task_status = task_status_map.get(status_str, robot_pb2.TaskStatus.TASK_STATUS_PENDING)
+
+    # 转换 robot_mode
+    robot_mode_str = task_info.get('robot_mode', 'stand_by')
+    robot_mode = robot_mode_map.get(robot_mode_str, robot_pb2.RobotMode.STAND_BY)
+
+    # 转换 station_list
+    station_list = []
+    stations_data = task_info.get('station_list', [])
+    if stations_data:
+        for station_dict in stations_data:
+            station_proto = _convert_station_to_proto(station_dict)
+            station_list.append(station_proto)
+
+    # 转换时间戳
+    generate_time = _datetime_to_timestamp(task_info.get('generate_time'))
+    created_at = _datetime_to_timestamp(task_info.get('created_at'))
+    started_at = _datetime_to_timestamp(task_info.get('started_at'))
+    completed_at = _datetime_to_timestamp(task_info.get('completed_at'))
+
+    # 创建 Task proto 对象
+    task_proto = robot_pb2.Task(
+        task_id=task_id,
+        task_name=task_info.get('task_name', ''),
+        station_list=station_list,
+        status=task_status,
+        robot_mode=robot_mode,
+        generate_time=generate_time,
+        created_at=created_at,
+        started_at=started_at,
+        completed_at=completed_at,
+        error_message=task_info.get('error_message', '')
+    )
+
+    # 创建并返回 TaskInfo
+    return robot_pb2.TaskInfo(
+        inspection_task_list=task_proto
+    )
+
+
 def convert_message_envelope_to_robot_upload_request(msg_envelope: MessageEnvelope) -> robot_pb2.RobotUploadRequest:
     """将MessageEnvelope转换为gRPC RobotUploadRequest
     
@@ -236,9 +447,7 @@ def convert_message_envelope_to_robot_upload_request(msg_envelope: MessageEnvelo
     # 转换MsgType枚举
     msg_type_map = {
         MsgType.ROBOT_STATUS: robot_pb2.MsgType.ROBOT_STATUS,
-        MsgType.DEVICE_DATA: robot_pb2.MsgType.DEVICE_DATA,
         MsgType.ENVIRONMENT_DATA: robot_pb2.MsgType.ENVIRONMENT_DATA,
-        MsgType.ARRIVE_SERVER_POINT: robot_pb2.MsgType.ARRIVE_SERVER_POINT,
     }
     
     grpc_msg_type = msg_type_map.get(msg_envelope.msg_type, robot_pb2.MsgType.ROBOT_STATUS)
@@ -262,8 +471,7 @@ def convert_message_envelope_to_robot_upload_request(msg_envelope: MessageEnvelo
 
     # 创建 TaskInfo
     task_info = data_json.get('task_info', {})
-    # TODO 未实现task转proto结构逻辑
-    task_info_proto = robot_pb2.TaskInfo()
+    task_info_proto = _convert_task_to_proto(task_info)
 
     # 创建基础请求
     grpc_msg = robot_pb2.RobotUploadRequest(
@@ -353,32 +561,7 @@ def convert_message_envelope_to_robot_upload_request(msg_envelope: MessageEnvelo
         )
         
         grpc_msg.environment_data.CopyFrom(environment_data)
-    
-    elif msg_envelope.msg_type == MsgType.DEVICE_DATA:
-        device_info = data_json.get('device_info', {})
-        
-        
-        # 创建设备信息
-        device_info_proto = robot_pb2.DeviceInfo(
-            device_id=device_info.get('deviceId', ''),
-            data_type=device_info.get('dataType', ''),
-            image_base64=list(device_info.get('imageBase64', []))
-        )
-        
-        device_data = robot_pb2.DeviceDataUpload(
-            device_info=device_info_proto
-        )
-        
-        grpc_msg.device_data.CopyFrom(device_data)
-    
-    elif msg_envelope.msg_type == MsgType.ARRIVE_SERVER_POINT:
-        arrive_info = data_json.get('arrive_service_point_info', {})        
-        arrive_data = robot_pb2.ArriveServicePointUpload(
-            is_arrive = arrive_info.get('isArrive', False)
-        )
-        
-        grpc_msg.arrive_service_point.CopyFrom(arrive_data)
-    
+
     return grpc_msg
 
 

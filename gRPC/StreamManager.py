@@ -288,19 +288,6 @@ class ClientUploadStreamManager(BaseStreamManager):
         request.robot_status.CopyFrom(robot_status)
         return self.send_message(request)
 
-    def send_device_data(self, msg_id: int, msg_type: robot_pb2.MsgType,
-                       device_data: robot_pb2.DeviceDataUpload) -> bool:
-        """发送设备数据"""
-        request = self._get_request_type()(
-            msg_id=msg_id,
-            msg_time=int(time.time() * 1000),
-            msg_type=msg_type,
-            robot_id=self.robot_id
-        )
-        # 设置oneof字段
-        request.device_data.CopyFrom(device_data)
-        return self.send_message(request)
-
     def send_environment_data(self, msg_id: int, msg_type: robot_pb2.MsgType,
                            environment_data: robot_pb2.EnvironmentDataUpload) -> bool:
         """发送环境数据"""
@@ -312,19 +299,6 @@ class ClientUploadStreamManager(BaseStreamManager):
         )
         # 设置oneof字段
         request.environment_data.CopyFrom(environment_data)
-        return self.send_message(request)
-
-    def send_arrive_service_point(self, msg_id: int, msg_type: robot_pb2.MsgType,
-                               arrive_service_point: robot_pb2.ArriveServicePointUpload) -> bool:
-        """发送到达服务点信息"""
-        request = self._get_request_type()(
-            msg_id=msg_id,
-            msg_time=int(time.time() * 1000),
-            msg_type=msg_type,
-            robot_id=self.robot_id
-        )
-        # 设置oneof字段
-        request.arrive_service_point.CopyFrom(arrive_service_point)
         return self.send_message(request)
 
     def send_heartbeat(self) -> bool:

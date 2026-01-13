@@ -10,9 +10,7 @@ from dataModels.TaskModels import Task
 class MsgType(Enum):
     """消息类型枚举"""
     ROBOT_STATUS = "robot_status"          # 机器人状态
-    DEVICE_DATA = "device_data"            # 巡检设备状态
     ENVIRONMENT_DATA = "environment_data"  # 巡检环境信息
-    ARRIVE_SERVER_POINT = "arrive_server_point"  # 是否到达服务器点
 
 
 class MoveStatus(Enum):
@@ -120,13 +118,6 @@ class EnvironmentInfo:
         return asdict(self)
 
 
-@dataclass
-class ArriveServicePointInfo:
-    """是否到达服务点"""
-    is_arrive: bool          # 是否到达服务点
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
 
 
 @dataclass
@@ -150,21 +141,6 @@ class RobotStatusDataJson:
         return result
 
 @dataclass
-class DeviceDataJson:
-    """设备巡检数据"""
-    position_info: PositionInfo
-    task_info: Task
-    device_info: DeviceInfo
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "position_info": self.position_info.to_dict(),
-            "task_info": self.task_info.to_dict(),
-            "device_info": self.device_info.to_dict()
-        }
-
-
-@dataclass
 class EnvironmentDataJson:
     """环境巡检数据"""
     position_info: PositionInfo
@@ -176,21 +152,6 @@ class EnvironmentDataJson:
             "position_info": self.position_info.to_dict(),
             "task_info": self.task_info.to_dict(),
             "environment_info": self.environment_info.to_dict()
-        }
-
-
-@dataclass
-class ArriveServePointDataJson:
-    """是否到达服务点数据"""
-    position_info: PositionInfo
-    task_info: Task
-    arrive_service_point_info: ArriveServicePointInfo
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "position_info": self.position_info.to_dict(),
-            "task_info": self.task_info.to_dict(),
-            "arrive_service_point_info": self.arrive_service_point_info.to_dict()
         }
 
 
@@ -222,9 +183,7 @@ class MessageEnvelope:
 # 消息类型与对应数据类的映射
 _MSG_TYPE_TO_DATA_CLASS = {
     MsgType.ROBOT_STATUS: RobotStatusDataJson,
-    MsgType.DEVICE_DATA: DeviceDataJson,
     MsgType.ENVIRONMENT_DATA: EnvironmentDataJson,
-    MsgType.ARRIVE_SERVER_POINT: ArriveServePointDataJson,
 }
 
 # 消息类型与数据类参数名的映射
@@ -236,20 +195,10 @@ _MSG_TYPE_TO_PARAM_NAME = {
         "system_status": "system_status",
         "error_info": "error_info"
     },
-    MsgType.DEVICE_DATA: {
-        "position_info": "position_info",
-        "task_info": "task_info",
-        "device_info": "device_info"
-    },
     MsgType.ENVIRONMENT_DATA: {
         "position_info": "position_info",
         "task_info": "task_info",
         "environment_info": "environment_info"
-    },
-    MsgType.ARRIVE_SERVER_POINT: {
-        "position_info": "position_info",
-        "task_info": "task_info",
-        "arrive_service_point_info": "arrive_service_point_info"
     },
 }
 
@@ -317,22 +266,6 @@ def create_robot_status_message(
         error_info=error_info
     )
 
-def create_device_data_message(
-    msg_id: str,
-    robot_id: str,
-    position_info: PositionInfo,
-    task_info: TaskListInfo,
-    device_info: DeviceInfo
-) -> MessageEnvelope:
-    """创建设备巡检数据消息"""
-    return create_message_envelope(
-        msg_id=msg_id,
-        robot_id=robot_id,
-        msg_type=MsgType.DEVICE_DATA,
-        position_info=position_info,
-        task_info=task_info,
-        device_info=device_info
-    )
 
 def create_environment_data_message(
     msg_id: str,
@@ -349,21 +282,4 @@ def create_environment_data_message(
         position_info=position_info,
         task_info=task_info,
         environment_info=environment_info
-    )
-
-def create_arrive_serve_point_message(
-    msg_id: str,
-    robot_id: str,
-    position_info: PositionInfo,
-    task_info: TaskListInfo,
-    arrive_service_point_info: ArriveServicePointInfo
-) -> MessageEnvelope:
-    """创建是否到达服务点消息"""
-    return create_message_envelope(
-        msg_id=msg_id,
-        robot_id=robot_id,
-        msg_type=MsgType.ARRIVE_SERVER_POINT,
-        position_info=position_info,
-        task_info=task_info,
-        arrive_service_point_info=arrive_service_point_info
     )
