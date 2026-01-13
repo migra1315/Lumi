@@ -3,7 +3,7 @@ from gRPC import RobotService_pb2 as robot_pb2
 import grpc
 import threading
 import time
-import logging
+from utils.logger_config import get_logger
 import queue
 import uuid
 from typing import Optional, Generator, Any, Callable
@@ -23,7 +23,7 @@ class BaseStreamManager(ABC):
         """
         self.stub = stub
         self.robot_id = robot_id
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.logger = get_logger(f"{__name__}.{self.__class__.__name__}")
 
         # 流状态控制
         self.is_stream_active = False

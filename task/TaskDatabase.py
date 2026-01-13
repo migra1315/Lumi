@@ -3,7 +3,7 @@ import json
 from typing import Generator, List, Dict, Any, Optional
 import sqlite3
 from contextlib import contextmanager
-import logging
+from utils.logger_config import get_logger
 from dataModels.TaskModels import Task, Station, StationTaskStatus, TaskStatus
 from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus
 
@@ -12,7 +12,7 @@ class TaskDatabase:
     
     def __init__(self, db_path: str = "tasks.db"):
         self.db_path = db_path
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self._init_database()
     
     def _init_database(self):

@@ -6,7 +6,7 @@ RobotControllerBase.py
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Callable
 from enum import Enum
-import logging
+from utils.logger_config import get_logger
 
 class RobotStatus(Enum):
     IDLE = "idle"
@@ -46,34 +46,13 @@ class RobotControllerBase(ABC):
         self.last_error = None
 
         # 初始化日志
-        self.logger = self._setup_logger(debug)
+        self.logger = get_logger(self.__class__.__name__)
 
         # 系统初始化标志
         self._system_initialized = False
 
         # 回调函数字典
         self._callbacks: Dict[str, List[Callable]] = {}
-    
-    def _setup_logger(self, debug: bool) -> logging.Logger:
-        """设置日志记录器（子类可以重写）"""
-        logger = logging.getLogger(self.__class__.__name__)
-        
-        if debug:
-            logger.setLevel(logging.DEBUG)
-        else:
-            logger.setLevel(logging.INFO)
-        
-        logger.propagate = False  # 禁用日志传播到父logger
-        
-        if not logger.handlers:
-            console_handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            console_handler.setFormatter(formatter)
-            logger.addHandler(console_handler)
-        
-        return logger
     
     # ==================== 抽象方法 ====================
     @abstractmethod

@@ -3,7 +3,7 @@ import time
 import json
 import socket
 import threading
-import logging
+from utils.logger_config import get_logger
 import uuid
 
 class AGVController:
@@ -19,23 +19,8 @@ class AGVController:
         :param system_config: 系统配置字典，包含AGV连接信息等
         :param debug: 是否启用调试模式
         """
-        # 配置logging
-        self.logger = logging.getLogger(__name__)
-        
-        # 设置日志级别
-        if debug:
-            self.logger.setLevel(logging.DEBUG)
-        else:
-            self.logger.setLevel(logging.INFO)
-        
-        # 确保只添加一次处理器
-        if not self.logger.handlers:
-            console_handler = logging.StreamHandler()
-            # 设置日志格式
-            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-            console_handler.setFormatter(formatter)
-            # 添加处理器到logger
-            self.logger.addHandler(console_handler)
+        # 配置日志
+        self.logger = get_logger(__name__)
 
         # AGV控制相关配置
         self.agv_ip = system_config.get("agv_ip")      # AGV IP地址

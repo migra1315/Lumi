@@ -4,7 +4,6 @@
 用于测试机器人控制系统的gRPC通信功能
 """
 
-import logging
 import queue
 import threading
 import time
@@ -13,13 +12,10 @@ from concurrent import futures
 
 import gRPC.RobotService_pb2 as robot_service_pb2
 import gRPC.RobotService_pb2_grpc as robot_service_pb2_grpc
+from utils.logger_config import setup_logging, log_system_info, get_logger
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# 获取logger
+logger = get_logger(__name__)
 
 class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
     """gRPC服务实现类"""
@@ -369,7 +365,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             robot_pos_list=[[0, 30, 100, 0, 60, -90],
                             [0, 40, 90, 0, 60, -90],
                             [0, 50, 80, 0, 60, -90],
-                            [0, 60, 70, 0, 60, -90]]
+                            [0, 50, 80, 0, 0, -90]]
             operation_mode_list = [robot_service_pb2.OperationMode.OPERATION_MODE_NONE, 
                                    robot_service_pb2.OperationMode.OPERATION_MODE_SERVICE, 
                                    robot_service_pb2.OperationMode.OPERATION_MODE_NONE, 
@@ -969,6 +965,20 @@ if __name__ == '__main__':
         robot_mode=robot_service_pb2.RobotMode.CHARGE
     )
     """
+
+    # 配置统一日志系统
+    setup_logging(
+        level="INFO",
+        use_color=True,
+        enable_file_logging=True
+    )
+
+    # 记录系统信息
+    log_system_info()
+
+    logger.info("=" * 80)
+    logger.info("启动 gRPC 测试服务器")
+    logger.info("=" * 80)
 
     # 启动服务器
     server, servicer = serve()

@@ -12,7 +12,7 @@ import time
 import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, Callable, Generator
-import logging
+from utils.logger_config import get_logger
 
 import grpc
 import gRPC.RobotService_pb2 as robot_pb2
@@ -52,14 +52,7 @@ class RobotControlSystem:
         self.is_running = False
 
         # 初始化日志
-        self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.INFO if not DBG else logging.DEBUG)
-        self.logger.propagate = False
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
+        self.logger = get_logger(__name__)
 
         # 初始化任务管理器（TaskManager完全管理robot_controller）
         self.task_manager = TaskManager(self.config, use_mock=use_mock)
@@ -1076,9 +1069,20 @@ class RobotControlSystem:
 
 # 测试代码
 if __name__ == "__main__":
-    # 配置日志
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
+    # 导入并配置统一日志系统
+    from utils.logger_config import setup_logging, log_system_info
+
+    # 配置日志（使用统一配置）
+    setup_logging(
+        level="INFO",
+        use_color=True,
+        enable_file_logging=True,
+        robot_id=123456
+    )
+
+    # 记录系统信息
+    log_system_info()
+
     # 创建机器人控制系统
     config = {
         'robot_id': 123456,

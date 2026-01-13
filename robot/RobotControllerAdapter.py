@@ -3,7 +3,7 @@ RobotControllerAdapter.py
 适配器类，提供与MockRobotController相同的接口
 """
 
-import logging
+from utils.logger_config import get_logger
 from typing import List, Dict, Any, Optional
 from robot.RobotControllerBase import RobotControllerBase, RobotStatus, BatteryStatus
 from robot.RobotController import RobotController
@@ -20,7 +20,7 @@ class RobotControllerAdapter(RobotControllerBase):
             system_config: 系统配置字典
             debug: 是否启用调试模式
         """
-        self.logger = logging.getLogger("RobotControllerAdapter")
+        self.logger = get_logger("RobotControllerAdapter")
         
         # 创建真实的机器人控制器
         self._real_controller = RobotController(system_config, debug)
@@ -50,7 +50,7 @@ class AGVControllerAdapter:
     
     def __init__(self, real_controller: RobotController):
         self._controller = real_controller
-        self.logger = logging.getLogger("AGVControllerAdapter")
+        self.logger = get_logger("AGVControllerAdapter")
     
     def move_to_marker(self, marker_id: str) -> bool:
         """移动到指定标记点"""
@@ -89,7 +89,7 @@ class JakaControllerAdapter:
     
     def __init__(self, real_controller: RobotController):
         self._controller = real_controller
-        self.logger = logging.getLogger("JakaControllerAdapter")
+        self.logger = get_logger("JakaControllerAdapter")
     
     def move_to_position(self, position: List[float]) -> bool:
         """移动到指定位置"""
@@ -134,7 +134,7 @@ class ExtControllerAdapter:
     
     def __init__(self, real_controller: RobotController):
         self._controller = real_controller
-        self.logger = logging.getLogger("ExtControllerAdapter")
+        self.logger = get_logger("ExtControllerAdapter")
     
     def move_to_position(self, position: List[float]) -> bool:
         """移动到指定位置"""

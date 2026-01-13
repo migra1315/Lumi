@@ -5,7 +5,7 @@ RobotController.py
 """
 
 import time
-import logging
+from utils.logger_config import get_logger
 import threading
 from typing import Dict, List, Any, Optional, Callable
 from enum import Enum
@@ -58,7 +58,7 @@ class RobotController():
         self.last_error = None
         
         # 初始化日志
-        self.logger = self._setup_logger(debug)
+        self.logger = get_logger("RobotController")
         
         # 初始化子控制器
         self._init_sub_controllers()
@@ -94,26 +94,6 @@ class RobotController():
         self._stop_env_monitor = False
 
         self.logger.info("机器人控制器初始化完成")
-    
-    def _setup_logger(self, debug: bool) -> logging.Logger:
-        """设置日志记录器"""
-        logger = logging.getLogger("RobotController")
-        
-        if debug:
-            logger.setLevel(logging.DEBUG)
-        else:
-            logger.setLevel(logging.INFO)
-        
-        # 确保只添加一次处理器
-        if not logger.handlers:
-            console_handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            console_handler.setFormatter(formatter)
-            logger.addHandler(console_handler)
-        
-        return logger
     
     def _init_sub_controllers(self):
         """初始化子控制器"""

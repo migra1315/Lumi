@@ -1,7 +1,7 @@
 from datetime import datetime
 import json
 import uuid
-import logging
+from utils.logger_config import get_logger
 from typing import Dict, List, Any
 from utils.dataConverter import convert_data_json_to_task_cmd, convert_task_cmd_to_task
 from task.TaskDatabase import TaskDatabase
@@ -22,7 +22,7 @@ class TaskManager:
         """
         self.config = config or {}
         self.use_mock = use_mock
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # 初始化机器人控制器（由TaskManager完全管理）
         self._init_robot_controller()

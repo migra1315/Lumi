@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional, List, Dict, Any
-import logging
+from utils.logger_config import get_logger
 from task.TaskDatabase import TaskDatabase
 from dataModels.TaskModels import (
     Task, Station, StationConfig, OperationMode,
@@ -27,7 +27,7 @@ class TaskScheduler:
         self.is_running = False
         self.scheduler_thread: Optional[threading.Thread] = None
         self.executor = ThreadPoolExecutor(max_workers=1)  # 单任务执行
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # 回调函数注册
         self.task_callbacks = {

@@ -7,7 +7,7 @@ from doctest import FAIL_FAST
 import time
 import requests
 import json
-import logging
+from utils.logger_config import get_logger
 from robot.jaka import JAKA
 
 
@@ -31,24 +31,9 @@ class ArmController(JAKA):
         :param ext_axis_limits: 外部轴关节限制配置
         :param debug: 是否启用调试模式
         """
-        # 配置logging
-        self.logger = logging.getLogger(__name__)
+        # 配置日志
+        self.logger = get_logger(__name__)
         
-        # 设置日志级别
-        if debug:
-            self.logger.setLevel(logging.DEBUG)
-            print("调试模式已启用")
-        else:
-            self.logger.setLevel(logging.INFO)
-        
-        # 确保只添加一次处理器
-        if not self.logger.handlers:
-            console_handler = logging.StreamHandler()
-            # 设置日志格式
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            console_handler.setFormatter(formatter)
-            # 添加处理器到logger
-            self.logger.addHandler(console_handler)
 
         # 调用父类初始化，但不立即连接
         super().__init__(system_config["robot_ip"], connect=False)
