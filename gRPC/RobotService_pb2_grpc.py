@@ -52,14 +52,14 @@ class RobotServiceServicer(object):
     """
 
     def clientUpload(self, request_iterator, context):
-        """双向流式通信: 上传机器人状态、设备数据、环境数据、到达服务点位数据
+        """双向流式通信: 客户端上传机器人状态、设备数据、环境数据、到达服务点位数据
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def serverCommand(self, request_iterator, context):
-        """双向流式通信: 推送任务分配、服务指令
+        """双向流式通信: 服务端推送任务分配、服务指令
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
