@@ -106,13 +106,15 @@ class RobotControlSystem:
         """初始化gRPC客户端"""
         try:
             # 创建gRPC通道
+            # 注意: keepalive_time_ms 需要大于服务端的 GRPC_ARG_HTTP2_MIN_RECV_PING_INTERVAL_WITHOUT_DATA_MS
+            # 服务端默认最小间隔是5分钟(300秒)，所以客户端应该设置更长的间隔避免"Too many pings"错误
             self.channel = grpc.insecure_channel(
                 self.server_address,
                 options=[
-                    ('grpc.keepalive_time_ms', 30000),
-                    ('grpc.keepalive_timeout_ms', 10000),
-                    ('grpc.http2.max_pings_without_data', 0),  # 允许无数据时的ping
-                    ('grpc.keepalive_permit_without_calls', True),
+                    ('grpc.keepalive_time_ms', 60000),  # 每60秒发送ping（如果有数据传输）
+                    ('grpc.keepalive_timeout_ms', 20000),  # ping超时20秒
+                    ('grpc.http2.max_pings_without_data', 2),  # 无数据时最多发送2次ping
+                    ('grpc.keepalive_permit_without_calls', False),  # 没有活跃调用时不发送keepalive ping
                 ]
             )
 

@@ -37,9 +37,10 @@ class TaskScheduler:
             "on_station_start": [],
             "on_station_complete": [],
             "on_station_retry": [],
-            "on_station_progress": [],    # 新增：站点进度更新回调
-            "on_command_complete": [],   # 新增：命令完成回调
-            "on_command_failed": []       # 新增：命令失败回调
+            "on_station_progress": [],       # 站点进度更新回调
+            "on_command_complete": [],       # 命令完成回调
+            "on_command_failed": [],         # 命令失败回调
+            "on_command_status_change": []   # 命令状态变化回调（RUNNING/RETRYING等）
         }
     
     def start(self):
@@ -61,26 +62,18 @@ class TaskScheduler:
     
     def add_command(self, command: UnifiedCommand):
         """添加命令到队列（新接口，支持所有命令类型）"""
+        # 更新命令状态为已加入队列
+        command.status = CommandStatus.QUEUED
+
         self.command_queue.put(command)
         # 保存命令到数据库
         self.database.save_command(command)
+
+        # 触发命令状态变化回调（QUEUED）
+        self._trigger_callback("on_command_status_change", command)
+
         self.logger.info(f"命令 {command.command_id} (类型: {command.cmd_type.value}) 已添加到队列，优先级: {command.priority}")
 
-    # def add_task(self, task: Task):
-    #     """添加任务到队列（兼容旧接口）"""
-    #     # 将Task转换为UnifiedCommand
-    #     from dataModels.UnifiedCommand import create_unified_command
-    #     command = create_unified_command(
-    #         command_id=task.task_id,
-    #         cmd_type=CmdType.TASK_CMD,
-    #         data=task,
-    #         metadata={"source": "add_task"}
-    #     )
-    #     self.add_command(command)
-    #     # 同时保存任务到tasks表
-    #     self.database.save_task(task)
-    #     self.logger.info(f"任务 {task.task_id} 已添加到队列")
-    
     def _scheduler_loop(self):
         """调度器主循环（支持统一命令队列）"""
         while self.is_running:
@@ -160,6 +153,9 @@ class TaskScheduler:
             command.error_message = f"未知命令类型: {command.cmd_type}"
             self.database.update_command_status(command.command_id, CommandStatus.FAILED, command.error_message)
 
+            # 触发命令失败回调
+            self._trigger_callback("on_command_failed", command)
+
     def _command_execution_done(self, future, command: UnifiedCommand):
         """命令执行完成回调"""
         try:
@@ -191,6 +187,10 @@ class TaskScheduler:
                     command.status = CommandStatus.RETRYING
                     self.database.add_command_retry_count(command.command_id)
                     self.database.update_command_status(command.command_id, CommandStatus.RETRYING)
+
+                    # 触发命令状态变化回调（RETRYING）
+                    self._trigger_callback("on_command_status_change", command)
+
                     self.logger.info(f"命令 {command.command_id} 将进行第 {command.retry_count} 次重试")
                     time.sleep(1)
                     # 重新加入队列
@@ -228,25 +228,6 @@ class TaskScheduler:
             if command.metadata:
                 self.database.update_command_metadata(command.command_id, command.metadata)
 
-    # def _execute_task(self, task: Task):
-    #     """执行任务（兼容旧接口，已废弃，请使用add_command）"""
-    #     self.current_task = task
-
-    #     # 更新任务状态为运行中
-    #     task.status = TaskStatus.RUNNING
-    #     task.started_at = datetime.now()
-    #     self.database.update_task_status(task.task_id, TaskStatus.RUNNING)
-
-    #     # 触发任务开始回调
-    #     self._trigger_callback("on_task_start", task)
-
-    #     # 按照sort顺序排序站点
-    #     sorted_stations = sorted(task.station_list, key=lambda s: s.station_config.sort)
-
-    #     # 提交到线程池执行
-    #     future = self.executor.submit(self._execute_task_internal, task)
-    #     future.add_done_callback(lambda f: self._task_execution_done(f, task))
-    
     # ==================== 命令类型的执行方法 ====================
    
     def _execute_task_command(self, command: UnifiedCommand) -> bool:
@@ -772,50 +753,6 @@ class TaskScheduler:
             command.error_message = str(e)
             return False
 
-    # def _task_execution_done(self, future, task: Task):
-    #     """任务执行完成回调"""
-    #     try:
-    #         success = future.result()
-
-    #         if success:
-    #             # 检查是否所有站点都已完成
-    #             all_completed = all(s.status == StationTaskStatus.COMPLETED for s in task.station_list)
-    #             if all_completed:
-    #                 task.status = TaskStatus.COMPLETED
-    #                 task.completed_at = datetime.now()
-    #                 self.database.update_task_status(task.task_id, TaskStatus.COMPLETED)
-    #                 self._trigger_callback("on_task_complete", task)
-    #                 self.logger.info(f"任务 {task.task_id} 执行完成")
-    #             else:
-    #                 # 部分站点失败，但任务继续完成
-    #                 task.status = TaskStatus.COMPLETED
-    #                 task.completed_at = datetime.now()
-    #                 self.database.update_task_status(task.task_id, TaskStatus.COMPLETED)
-    #                 self._trigger_callback("on_task_complete", task)
-    #                 self.logger.info(f"任务 {task.task_id} 执行完成，但部分站点执行失败")
-    #         else:
-    #             # 任务执行失败
-    #             task.status = TaskStatus.FAILED
-    #             task.completed_at = datetime.now()
-    #             task.error_message = f"任务执行失败，当前站点: {self.current_station.station_config.station_id if self.current_station else '未知'}"
-    #             self.database.update_task_status(
-    #                 task.task_id, 
-    #                 TaskStatus.FAILED, 
-    #                 task.error_message
-    #             )
-    #             self._trigger_callback("on_task_failed", task)
-    #             self.logger.error(f"任务 {task.task_id} 执行失败")
-                
-    #     except Exception as e:
-    #         self.logger.error(f"任务执行回调异常: {e}")
-    #         task.status = TaskStatus.FAILED
-    #         task.completed_at = datetime.now()
-    #         self.database.update_task_status(
-    #             task.task_id, 
-    #             TaskStatus.FAILED, 
-    #             f"回调异常: {str(e)}"
-    #         )
-    
     # ==================== 回调函数 ====================
 
     def register_callback(self, event: str, callback: Callable):

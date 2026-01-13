@@ -366,7 +366,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                             [0, 40, 90, 0, 60, -90],
                             [0, 50, 80, 0, 60, -90],
                             [0, 50, 80, 0, 0, -90]]
-            operation_mode_list = [robot_service_pb2.OperationMode.OPERATION_MODE_NONE, 
+            operation_mode_list = [robot_service_pb2.OperationMode.OPERATION_MODE_CAPTURE, 
                                    robot_service_pb2.OperationMode.OPERATION_MODE_SERVICE, 
                                    robot_service_pb2.OperationMode.OPERATION_MODE_NONE, 
                                    robot_service_pb2.OperationMode.OPERATION_MODE_SERVICE]
@@ -410,24 +410,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         logger.info(log_msg if log_prefix else f"【手动触发】{log_msg}")
 
         return request
-    
-    # def _handle_cmd_response(self, request, client_id):
-    #     """处理客户端上传的响应
-    #     Args:
-    #         request: 客户端请求
-    #         client_id: 客户端ID
-    #     """
-    #     try:
-    #         command_type = robot_service_pb2.CmdType.Name(request.command_type)
-    #     except ValueError:
-    #         command_type = f"未知类型({request.command_type})"
-            
-    #     logger.info(f"接收客户端 {client_id} 响应: {command_type} (command_id: {request.command_id})")
-        
-    #     # 记录响应数据
-    #     if request.data_json:
-    #         logger.info(f"响应数据: code={request.data_json.code}, info={request.data_json.info}")
-    
+      
     def _handle_client_message(self, request, client_id):
         """处理客户端上传的消息
 
@@ -686,6 +669,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             task_progress: TaskProgressUpdate对象
             client_id: 客户端ID
         """
+        return
         try:
             # 获取任务状态和站点状态的名称
             try:
@@ -871,8 +855,24 @@ def serve():
     # 创建servicer实例（需要在外部保持引用，以便键盘监听线程访问）
     servicer = RobotServiceServicer()
 
+    # 服务端keepalive配置 - 允许客户端更频繁地发送ping
+    server_options = [
+        # 允许客户端发送ping的最小间隔（毫秒），默认是5分钟，这里设为30秒
+        ('grpc.http2.min_ping_interval_without_data_ms', 30000),
+        # 允许服务端在没有数据时接受ping
+        ('grpc.http2.max_pings_without_data', 0),
+        # 服务端keepalive时间
+        ('grpc.keepalive_time_ms', 60000),
+        ('grpc.keepalive_timeout_ms', 20000),
+        # 允许没有活跃调用时发送keepalive
+        ('grpc.keepalive_permit_without_calls', True),
+    ]
+
     # 创建服务器，使用10个线程处理请求
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=10),
+        options=server_options
+    )
 
     # 注册服务
     robot_service_pb2_grpc.add_RobotServiceServicer_to_server(

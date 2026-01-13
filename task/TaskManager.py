@@ -8,7 +8,7 @@ from task.TaskDatabase import TaskDatabase
 from task.TaskScheduler import TaskScheduler
 from dataModels.CommandModels import TaskCmd, CmdType, CommandEnvelope
 from dataModels.TaskModels import Task, Station, StationConfig, OperationConfig, OperationMode, RobotMode, TaskStatus, StationTaskStatus, StationExecutionPhase
-from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus, create_unified_command
+from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus, CommandCategory, create_unified_command
 
 class TaskManager:
     """任务管理器 - 主控制器，负责任务的接收、解析和调度"""
@@ -293,6 +293,36 @@ class TaskManager:
             # 更新命令状态为已取消
             self.database.update_command_status(command_id, CommandStatus.CANCELLED)
             self.logger.info(f"命令已取消: {command_id}")
+
+            # 构建一个简单的命令对象用于回调通知
+            # 从数据库获取命令信息
+            command_info = self.get_command_status(command_id)
+            if command_info and "error" not in command_info:
+                # 解析命令类型和分类
+                try:
+                    cmd_type = CmdType(command_info.get("cmd_type", "response_cmd"))
+                except ValueError:
+                    cmd_type = CmdType.RESPONSE_CMD
+
+                try:
+                    category = CommandCategory(command_info.get("category", "control"))
+                except ValueError:
+                    category = CommandCategory.CONTROL
+
+                # 创建一个临时的命令对象用于回调
+                cancelled_command = UnifiedCommand(
+                    command_id=command_id,
+                    cmd_type=cmd_type,
+                    category=category,
+                    status=CommandStatus.CANCELLED,
+                    error_message="命令已被取消"
+                )
+                # 触发系统回调：通知RobotControlSystem命令状态变化
+                self._trigger_system_callback(
+                    "on_command_status_change",
+                    command=cancelled_command
+                )
+
             return True
 
         except Exception as e:

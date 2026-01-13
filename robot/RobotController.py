@@ -54,7 +54,6 @@ class RobotController():
         
         # 控制器状态
         self.system_status = SystemStatus.IDLE
-        self.current_marker = None
         self.last_error = None
         
         # 初始化日志
@@ -322,7 +321,6 @@ class RobotController():
             success = self.agv_controller.agv_moveto(marker_id)
             
             if success:
-                self.current_marker = marker_id
                 self.system_status = SystemStatus.IDLE
                 self.logger.info(f"AGV已成功移动到标记点: {marker_id}")
                 self._trigger_callback("on_task_complete", "move_agv", marker_id)
@@ -589,12 +587,10 @@ class RobotController():
         self.system_status = SystemStatus.CHARGING
 
         try:
-            # 移动到充电桩（如果还没在充电位置）
-            if self.current_marker != "charge_point_1F_6010":
-                move_success = self.move_to_marker("charge_point_1F_6010")
-                if not move_success:
-                    self.logger.error("无法移动到充电桩")
-                    return False
+            move_success = self.move_to_marker("charge_point_1F_6010")
+            if not move_success:
+                self.logger.error("无法移动到充电桩")
+                return False
 
             return True
 
@@ -716,7 +712,7 @@ class RobotController():
 
             return {
                 'success': True,
-                'images': [img_base64],
+                'images': [img_base64, img_base64],
                 'message': f'拍照成功，耗时{duration:.2f}秒',
                 'device_id': device_id,
                 'timestamp': time.time(),
