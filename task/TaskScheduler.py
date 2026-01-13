@@ -688,20 +688,14 @@ class TaskScheduler:
             return False
 
     def _execute_charge_command(self, command: UnifiedCommand) -> bool:
-        """执行充电命令"""
+        """执行充电命令 (Trigger信号，无需参数)"""
         try:
-            data_json = command.data
-            charge_cmd = data_json.get('charge_cmd', {})
-            charge = charge_cmd.get('charge', False)
+            self.logger.info("执行充电命令 (Trigger信号)")
+            success = self.robot_controller.charge()
 
-            if charge:
-                self.logger.info("执行开始充电命令")
-                success = self.robot_controller.charge()
-            else:
-                self.logger.info("执行停止充电命令")
-                # TODO: 实现停止充电逻辑
-                success = True
-            #TODO：如果返回False，command.error_message 中也应做相应的记录
+            if not success:
+                command.error_message = "充电命令执行失败"
+
             return success
 
         except Exception as e:
@@ -732,21 +726,15 @@ class TaskScheduler:
             return False
 
     def _execute_position_adjust_command(self, command: UnifiedCommand) -> bool:
-        """执行位置调整命令"""
+        """执行位置调整命令 (Trigger信号，无需参数，使用默认充电桩位置)"""
         try:
-            data_json = command.data
-            position_adjust_cmd = data_json.get('position_adjust_cmd', {})
-            marker_id = position_adjust_cmd.get('marker_id', '')
+            self.logger.info("执行位置调整命令 (Trigger信号)")
+            success = self.robot_controller.position_adjust(marker_id='charge_point_1F_6010')
 
-            if marker_id:
-                self.logger.info(f"执行位置调整命令: {marker_id}")
-                success = self.robot_controller.position_adjust(marker_id)
-                #TODO：如果返回False，command.error_message 中也应做相应的记录
-                return success
-            else:
-                self.logger.warning("未指定目标标记点")
-                command.error_message = "未指定目标标记点"
-                return False
+            if not success:
+                command.error_message = "位置调整命令执行失败"
+
+            return success
 
         except Exception as e:
             self.logger.error(f"执行位置调整命令失败: {e}")

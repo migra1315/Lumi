@@ -5,8 +5,8 @@ from datetime import datetime
 import gRPC.RobotService_pb2 as robot_pb2
 
 from dataModels.CommandModels import (
-    CommandEnvelope, CmdType, create_cmd_envelope, TaskCmd, RobotModeCmd, 
-    joyControlCmd, CommandResponse, ChargeCmd, SetMarkerCmd, PositionAdjustCmd
+    CommandEnvelope, CmdType, create_cmd_envelope, TaskCmd, RobotModeCmd,
+    joyControlCmd, CommandResponse, SetMarkerCmd
 )
 from dataModels.MessageModels import (
     MessageEnvelope, MsgType, create_message_envelope, UploadResponse,
@@ -156,32 +156,22 @@ def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.Ser
             }
         }
         
-    elif server_cmd_request.HasField('charge_cmd'):
-        charge_cmd = server_cmd_request.charge_cmd
-        
-        data_json = {
-            "charge_cmd": {
-                "charge": charge_cmd.charge
-            }
-        }
-        
     elif server_cmd_request.HasField('set_marker_cmd'):
         set_marker_cmd = server_cmd_request.set_marker_cmd
-        
+
         data_json = {
             "set_marker_cmd": {
                 "marker_name": set_marker_cmd.marker_name
             }
         }
-        
-    elif server_cmd_request.HasField('position_adjust_cmd'):
-        position_adjust_cmd = server_cmd_request.position_adjust_cmd
-        
-        data_json = {
-            "position_adjust_cmd": {
-                "adjust": position_adjust_cmd.adjust
-            }
-        }
+
+    # CHARGE_CMD 和 POSITION_ADJUST_CMD 是 Trigger 信号，无需 dataJson 参数
+    # 根据 command_type 判断，data_json 保持为空字典
+    elif cmd_type == CmdType.CHARGE_CMD:
+        data_json = {}  # Trigger 信号，无需参数
+
+    elif cmd_type == CmdType.POSITION_ADJUST_CMD:
+        data_json = {}  # Trigger 信号，无需参数
     
     # 创建命令信封
     command_envelope = CommandEnvelope(

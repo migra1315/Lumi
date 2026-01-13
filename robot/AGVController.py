@@ -302,7 +302,7 @@ class AGVController:
             return False
 
     # TODO: 待测试
-    def agv_position_adjust(self, current_point_name='充电桩名'):
+    def agv_position_adjust(self, current_point_name=''):
         """
         重定位AGV位置
         

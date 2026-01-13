@@ -338,6 +338,7 @@ class RobotControlSystem:
                 arm_position_info=robot_status.get('robot_joints', [0.0]*6),
                 ext_position_info=robot_status.get('ext_axis', [0.0]*4),
             )
+            
             # 构建任务信息（当前执行的任务）
             current_task_info = self.task_manager.get_current_task_info()
             if current_task_info:

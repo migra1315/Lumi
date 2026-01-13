@@ -656,7 +656,7 @@ class RobotController():
             self.logger.error(f"设置标记点失败: {e}")
             return False
         
-    def position_adjust(self,marker_id: str) -> bool:
+    def position_adjust(self, marker_id: str) -> bool:
         """
         位置调整 - 移动到指定标记点
 

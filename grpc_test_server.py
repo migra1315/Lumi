@@ -36,6 +36,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         logger.info("  2 - 发送机器人模式命令 (ROBOT_MODE_CMD)")
         logger.info("  3 - 发送任务命令 (TASK_CMD)")
         logger.info("  4 - 发送摇杆控制命令 (JOY_CONTROL_CMD)")
+        logger.info("  5 - 发送位置校正控制命令 (POSITION_ADJUST_CMD)")
         logger.info("  a - 切换自动发送模式 (当前: 关闭)")
         logger.info("  q - 退出服务器")
     
@@ -196,7 +197,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         current_time = time.time()
         self.command_counter += 1
 
-        charge_cmd = robot_service_pb2.ChargeCmd(charge=True)
+        # charge_cmd = robot_service_pb2.ChargeCmd(charge=True)
 
         request = robot_service_pb2.ServerStreamMessage(
             command_id=self.command_counter,
@@ -204,9 +205,25 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             command_type=robot_service_pb2.CmdType.CHARGE_CMD,
             robot_id=123456
         )
-        request.charge_cmd.CopyFrom(charge_cmd)
+        # request.charge_cmd.CopyFrom(charge_cmd)
 
         logger.info(f"【手动触发】创建充电命令: {self.command_counter}")
+        return request
+
+    def create_position_adjust_command(self):
+        """创建位置调整命令"""
+        current_time = time.time()
+        self.command_counter += 1
+
+        # charge_cmd = robot_service_pb2.ChargeCmd(charge=True)
+
+        request = robot_service_pb2.ServerStreamMessage(
+            command_id=self.command_counter,
+            command_time=int(current_time * 1000),
+            command_type=robot_service_pb2.CmdType.POSITION_ADJUST_CMD,
+            robot_id=123456
+        )
+        logger.info(f"【手动触发】创建位置调整命令: {self.command_counter}")
         return request
 
     def create_robot_mode_command(self, robot_mode=None):
@@ -411,6 +428,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
 
         return request
       
+    # ==================== Station和Task创建方法 ====================
     def _handle_client_message(self, request, client_id):
         """处理客户端上传的消息
 
@@ -827,6 +845,11 @@ def keyboard_input_handler(servicer, stop_event):
             elif key == '4':
                 logger.info("【键盘输入】触发: 摇杆控制命令 (JOY_CONTROL_CMD)")
                 cmd = servicer.create_joy_control_command()
+                servicer.manual_command_queue.put(cmd)
+            
+            elif key == '5':
+                logger.info("【键盘输入】触发: 位置校正控制命令 (POSITION_ADJUST_CMD)")
+                cmd = servicer.create_position_adjust_command()
                 servicer.manual_command_queue.put(cmd)
 
             elif key == 'a':
