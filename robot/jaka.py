@@ -7,6 +7,7 @@ Discription:
 import os
 import time
 import sys
+from utils.logger_config import get_logger
 # 获取当前脚本所在目录
 current_dir = os.path.dirname(os.path.abspath(__file__))
 # 获取compose目录路径（当前目录的父目录）
@@ -19,7 +20,7 @@ try:
     import os
     
     # 将JAKA_SDK_LINUX目录添加到系统路径
-    sdk_path = os.path.join(compose_dir, 'JAKA_SDK_WINDOWS')
+    sdk_path = os.path.join(compose_dir, './utils/JAKA_SDK_WINDOWS')
     sys.path.append(sdk_path)
     
     # 尝试直接导入jkrc.so
@@ -28,7 +29,7 @@ try:
 except Exception as e1:
     try:
         # 方法2：作为模块导入
-        from JAKA_SDK_WINDOWS import jkrc
+        from utils.JAKA_SDK_WINDOWS import jkrc
         print("[INFO] 成功从JAKA_SDK_WINDOWS模块导入jkrc")
     except Exception as e2:
         raise NameError(f"JAKA SDK path error! 无法导入jkrc模块: {str(e1)} / {str(e2)}")
@@ -42,6 +43,7 @@ class JAKA():
     def __init__(self, address, connect=True):
         self.address = address
         self.robot = None
+        self.logger = get_logger(__name__)
         if (connect):
             self.jaka_connect()
 
@@ -58,7 +60,7 @@ class JAKA():
 
     def _get_controller_ip(self):  # 10
         ret = self.robot.get_controller_ip()
-        print("controller ip is:", ret[1])
+        self.logger.info("controller ip is: %s", ret[1])
         return ret[1]
 
     def _drag_mode_enable(self):  # 11
@@ -182,11 +184,11 @@ class JAKA():
         # add 180
         pos_now = self.robot.get_joint_position()
         if pos_now[0] == 0:
-            print('now pos', pos_now)
+            self.logger.debug('now pos %s', pos_now)
             target_joint = self.robot.kine_inverse(pos_now[1], pos)
             if target_joint[0] == 0:
                 de = target_joint[1][5] - pos_now[1][5]
-                print("1::::", de / 3.1415926 * 180)
+                self.logger.debug("1:::: %s", de / 3.1415926 * 180)
                 if (abs(de) > (3.1415 / 2)):
                     joint_pos = []
                     for i in target_joint[1]:
@@ -196,25 +198,25 @@ class JAKA():
                     else:
                         joint_pos[5] += 3.1415
 
-                    print("2::: ", (joint_pos[5] - pos_now[1][5]) / 3.1415926 * 180)
+                    self.logger.debug("2::: %s", (joint_pos[5] - pos_now[1][5]) / 3.1415926 * 180)
                     ret, tcp_pos = self.robot.kine_forward(joint_pos)
                 else:
                     tcp_pos = pos
 
-                print("move before: ", pos_now)
+                self.logger.debug("move before: %s", pos_now)
                 ret = self.robot.linear_move(end_pos=tcp_pos, move_mode=self._ABS, is_block=True, speed=120)
                 # ret = self.robot.linear_move(end_pos = pos, move_mode = self._ABS, is_block = True, speed = sp)
                 pos_now = self.robot.get_joint_position()
-                print("move after:", pos_now)
+                self.logger.debug("move after: %s", pos_now)
                 if (ret[0] == 0):
                     pass
                 else:
-                    print(ret[0])
+                    self.logger.error(" %s", ret[0])
             else:
-                print(target_joint[0])
+                self.logger.error(" %s", target_joint[0])
             # time.sleep(0.08)
         else:
-            print('[JAKA] error!!!!!', pos_now)
+            self.logger.error('[JAKA] error!!!!! %s', pos_now)
 
     # '''
     # INCRPose : increase position [X, Y, Z, Roll, Pitch, Yaw]
@@ -227,7 +229,7 @@ class JAKA():
             INCRPose[i] = curPose[i] + INCRPose[i]
         ret = self.robot.linear_move(end_pos=INCRPose, move_mode=self._ABS, is_block=True, speed=speedInput)
         if (ret[0] == -4):
-            print("[JAKA] Inverse solution failed")
+            self.logger.error("[JAKA] Inverse solution failed")
         return ret
 
 
@@ -261,14 +263,14 @@ class JAKA():
     def download_file(self, local, remote, opt=2):
         self.robot.init_ftp_client()
         result = self.robot.download_file(local, remote, opt)
-        print('download file  from APP state is : ' + str(result))
+        self.logger.info('download file  from APP state is : %s', str(result))
         self.robot.close_ftp_client()
 
     # upload  program
     def upload_file(self, local, remote, opt=2):
         self.robot.init_ftp_client()
         result = self.robot.upload_file(local, remote, opt)
-        print('upload file to APP, the state is : ' + str(result))
+        self.logger.info('upload file to APP, the state is : %s', str(result))
         self.robot.close_ftp_client()
 
     # run program
@@ -276,47 +278,47 @@ class JAKA():
         # program:'./sdk_exam'
         ret = self.robot.program_load(program)
         if ret[0] == 0:
-            print('load program success! start running......')
+            self.logger.info('load program success! start running......')
         self.robot.get_loaded_program()
         ret = self.robot.program_run()
         if ret[0] == 0:
-            print('running program over !!! ')
+            self.logger.info('running program over !!! ')
 
     # disconnect from the robot
     def robot_disconnect(self):
         self.robot.disable_robot()
-        print("[JAKA] disable successfully")
+        self.logger.info("[JAKA] disable successfully")
         self.robot.power_off()
-        print("[JAKA] power_off successfully")
+        self.logger.info("[JAKA] power_off successfully")
         self.robot.logout()
-        print("[JAKA] logout successfully")
+        self.logger.info("[JAKA] logout successfully")
 
     def jaka_connect(self):
-        print(self.address)
+        self.logger.info("%s", self.address)
         self.robot = jkrc.RC(self.address)
         if not self.robot:
             return False
         
-        print("[JAKA] logining...")
+        self.logger.info("[JAKA] logining...")
         ret=self.robot.login(1)[0]
-        print("login status: "+str(ret))
+        self.logger.info("login status: %s", str(ret))
         if ret != 0:
             return False
 
 
         # 获取power_on结果
         power_result = self.robot.power_on()[0]
-        print(f"[JAKA] power_on result: {power_result}")
+        self.logger.info("[JAKA] power_on result: %s", power_result)
         
         # 获取enable_robot结果
         enable_result = self.robot.enable_robot()[0]
-        print(f"[JAKA] enable_robot result: {enable_result}")
+        self.logger.info("[JAKA] enable_robot result: %s", enable_result)
 
         #检查结果，如果都返回0则成功，否则失败
         if power_result == 0 and enable_result == 0:
-            print("[JAKA] power_on和enable_robot都执行成功")
+            self.logger.info("[JAKA] power_on和enable_robot都执行成功")
             return True
         else:
-            print("[JAKA] power_on或enable_robot执行失败")
+            self.logger.warning("[JAKA] power_on或enable_robot执行失败")
             return False
 

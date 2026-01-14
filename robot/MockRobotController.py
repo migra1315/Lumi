@@ -261,12 +261,45 @@ class MockRobotController(RobotControllerBase):
         return success
     
     def get_status(self) -> Dict[str, Any]:
-        """获取Mock状态"""
+        """获取Mock状态 - 与真实机器人控制器返回结构一致"""
         base_status = super().get_status()
+
+        # 将移动状态映射到AGV move_status字符串
+        move_status_map = {
+            RobotStatus.IDLE: "idle",
+            RobotStatus.MOVING: "moving",
+            RobotStatus.ARM_OPERATING: "idle",  # 机械臂操作时AGV是idle
+            RobotStatus.EXT_OPERATING: "idle",
+            RobotStatus.DOOR_OPERATING: "idle",
+            RobotStatus.ERROR: "error",
+            RobotStatus.CHARGING: "idle",
+            RobotStatus.SETUP: "idle"
+        }
+
+        # 构建与真实控制器一致的状态字典
         base_status.update({
-            "current_position": self.current_position,
+            # AGV位置信息 - 扁平化结构（与RobotControlSystem期望的一致）
+            "agv_status_x": self.current_position.get("x", 0.0),
+            "agv_status_y": self.current_position.get("y", 0.0),
+            "agv_status_theta": self.current_position.get("theta", 0.0),
+
+            # 机械臂和外部轴位置
             "robot_joints": self.robot_joints,
             "ext_axis": self.ext_axis,
+
+            # 电池和充电状态
+            "power_percent": self.battery_level,
+            "charge_state": (self.status == RobotStatus.CHARGING),
+
+            # 移动状态（字符串格式，用于AGV状态）
+            "move_status": move_status_map.get(self.status, "idle"),
+
+            # 急停状态
+            "soft_estop_state": self.error_scenarios.get("agv_stuck", False),
+            "hard_estop_state": False,  # Mock环境默认无硬急停
+            "estop_state": self.error_scenarios.get("agv_stuck", False) or self.error_scenarios.get("arm_collision", False),
+
+            # Mock特有数据（可选，用于调试）
             "error_scenarios": self.error_scenarios,
             "environment_data": self.environment_data,
             "device_states": self.device_states,
@@ -322,10 +355,95 @@ class MockRobotController(RobotControllerBase):
             self.battery_level += random.uniform(0.5, 1.0)
             self.battery_level = min(100.0, self.battery_level)
             time.sleep(2)  # 每2秒增加一次电量
-        
+
         if self.status == RobotStatus.CHARGING:
             self.logger.info("充电完成")
             self.status = RobotStatus.IDLE
+
+    def joy_control(self, data_json: Dict[str, Any]) -> bool:
+        """摇杆控制模拟
+
+        Args:
+            data_json: 摇杆控制数据，包含 joy_control_cmd 字段
+                      - angular_velocity: 角速度
+                      - linear_velocity: 线速度
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            joy_cmd = data_json.get('joy_control_cmd', {})
+            angular_velocity = joy_cmd.get('angular_velocity', '0')
+            linear_velocity = joy_cmd.get('linear_velocity', '0')
+
+            self.logger.info(f"摇杆控制 - 线速度: {linear_velocity}, 角速度: {angular_velocity}")
+
+            # 模拟摇杆控制，更新位置
+            if self.status != RobotStatus.ERROR:
+                self.status = RobotStatus.MOVING
+
+                # 简单模拟位置变化
+                try:
+                    linear_vel = float(linear_velocity)
+                    angular_vel = float(angular_velocity)
+
+                    # 模拟位置更新（简化版）
+                    self.current_position['x'] += linear_vel * 0.1
+                    self.current_position['y'] += linear_vel * 0.1 * 0.5
+                    self.current_position['theta'] += angular_vel * 0.1
+
+                    time.sleep(0.1)  # 模拟控制延迟
+
+                    self.status = RobotStatus.IDLE
+                    return True
+                except ValueError:
+                    self.logger.error(f"无效的速度值: linear={linear_velocity}, angular={angular_velocity}")
+                    return False
+            else:
+                self.logger.warning("机器人处于错误状态，无法执行摇杆控制")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"摇杆控制失败: {e}")
+            return False
+    
+    def set_marker(self, marker_id: str) -> bool:
+        """
+        设置当前标记点
+
+        Args:
+            marker_id: 标记点ID
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            self.logger.info(f"设置当前标记点为: {marker_id}")
+            marker = {"marker_id": marker_id, **self.current_position}
+            self._marker_positions.append(marker)
+            return True
+
+        except Exception as e:
+            self.logger.error(f"设置标记点失败: {e}")
+            return False
+    
+    
+    def position_adjust(self, marker_id: str) -> bool:
+        """
+        位置调整 - 移动到指定标记点
+
+        Args:
+            marker_id: 目标标记点ID
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            self.logger.info(f"开始位置调整 - 目标标记点: {marker_id}")
+        
+        except Exception as e:
+            self.logger.error(f"位置调整失败: {e}")
+            return False
     
     # ==================== Mock特有方法 ====================
     def start_monitoring(self):
@@ -383,7 +501,7 @@ class MockRobotController(RobotControllerBase):
                 device = random.choice(list(self.device_states.keys()))
                 new_state = "offline" if self.device_states[device] == "online" else "online"
                 self.device_states[device] = new_state
-                self.logger.info(f"设备 {device} 状态变为: {new_state}")
+                # self.logger.info(f"设备 {device} 状态变为: {new_state}")
             
             time.sleep(1)
     

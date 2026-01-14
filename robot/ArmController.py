@@ -2,11 +2,12 @@
 """JAKA Integrated Control System
 集成JAKA机器人、外部轴和AGV的控制功能
 """
+import os
 from doctest import FAIL_FAST
 import time
 import requests
 import json
-import logging
+from utils.logger_config import get_logger
 from robot.jaka import JAKA
 
 
@@ -30,24 +31,9 @@ class ArmController(JAKA):
         :param ext_axis_limits: 外部轴关节限制配置
         :param debug: 是否启用调试模式
         """
-        # 配置logging
-        self.logger = logging.getLogger(__name__)
+        # 配置日志
+        self.logger = get_logger(__name__)
         
-        # 设置日志级别
-        if debug:
-            self.logger.setLevel(logging.DEBUG)
-            print("调试模式已启用")
-        else:
-            self.logger.setLevel(logging.INFO)
-        
-        # 确保只添加一次处理器
-        if not self.logger.handlers:
-            console_handler = logging.StreamHandler()
-            # 设置日志格式
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            console_handler.setFormatter(formatter)
-            # 添加处理器到logger
-            self.logger.addHandler(console_handler)
 
         # 调用父类初始化，但不立即连接
         super().__init__(system_config["robot_ip"], connect=False)
@@ -65,7 +51,17 @@ class ArmController(JAKA):
         
         # 加载外部轴关节限制
         self.ext_axis_limits = ext_axis_limits
-        
+    
+    def _load_ext_axis_limits(self):
+        """加载外部轴关节限制参数"""
+        # 默认限制值
+        print(f"[MOCK] 使用默认外部轴限制值")
+        return {
+            "joint1": {"min": 0, "max": 200, "desc": "升降，单位mm"}, 
+            "joint2": {"min": -140, "max": 140, "desc": "腰部旋转，单位度"},
+            "joint3": {"min": -180, "max": 180, "desc": "头部旋转，单位度"},
+            "joint4": {"min": -5, "max": 35, "desc": "头部俯仰，单位度"}
+        }
     def _adjust_to_joint_limits(self, point):
         """
         调整关节位置以确保在限制范围内
@@ -319,7 +315,16 @@ class ArmController(JAKA):
         
         self.logger.info("系统已关闭")
 
-    # 扩展JAKA类的方法，使其更适用于集成控制系统
+    # ===========================
+    # 集成控制功能
+    # ===========================
+    def arm_get_state(self):
+        """
+        获取机械臂当前状态
+        
+        :return: 机械臂状态字典
+        """
+        return self.get_joints()
     
     def rob_moveto(self, jpos, vel=None):
         """

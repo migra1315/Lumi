@@ -1,210 +1,612 @@
 from datetime import datetime
 import json
 import uuid
-import hashlib
-from typing import Dict, List
+from utils.logger_config import get_logger
+from typing import Dict, List, Any, Optional
+from utils.dataConverter import convert_data_json_to_task_cmd, convert_task_cmd_to_task
 from task.TaskDatabase import TaskDatabase
 from task.TaskScheduler import TaskScheduler
-from dataModels.TaskModels import StationConfig, Task, OperationMode, OperationConfig
-import logging
+from dataModels.CommandModels import TaskCmd, CmdType, CommandEnvelope
+from dataModels.TaskModels import Task, Station, StationConfig, OperationConfig, OperationMode, RobotMode, TaskStatus, StationTaskStatus, StationExecutionPhase
+from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus, CommandCategory, create_unified_command
+
 class TaskManager:
-    """任务管理器 - 主控制器"""
-    
-    def __init__(self, robot_controller):
-        self.robot_controller = robot_controller
+    """任务管理器 - 主控制器，负责任务的接收、解析和调度"""
+
+    def __init__(self, config: Dict[str, Any] = None, use_mock: bool = True):
+        """初始化任务管理器
+
+        Args:
+            config: 系统配置字典
+            use_mock: 是否使用Mock机器人控制器
+        """
+        self.config = config or {}
+        self.use_mock = use_mock
+        self.logger = get_logger(__name__)
+
+        # 初始化机器人控制器（由TaskManager完全管理）
+        self._init_robot_controller()
+
+        # 初始化数据库和调度器
         self.database = TaskDatabase()
-        self.scheduler = TaskScheduler(robot_controller, self.database)
-        self.logger = logging.getLogger(__name__)
+        self.scheduler = TaskScheduler(self.robot_controller, self.database)
         
         # 启动调度器
         self.scheduler.start()
         
-        # 注册回调
+        # 注册调度器回调
         self.scheduler.register_callback("on_task_start", self._on_task_start)
         self.scheduler.register_callback("on_task_complete", self._on_task_complete)
         self.scheduler.register_callback("on_task_failed", self._on_task_failed)
-    
-    def receive_task_from_cmd(self, task_cmd) -> str:
-        """从TaskCmd接收任务"""
+        self.scheduler.register_callback("on_station_start", self._on_station_start)
+        self.scheduler.register_callback("on_station_complete", self._on_station_complete)
+        self.scheduler.register_callback("on_station_retry", self._on_station_retry)
+        self.scheduler.register_callback("on_station_progress", self._on_station_progress)  # 新增：站点进度回调
+        self.scheduler.register_callback("on_operation_result", self._on_operation_result)  # 新增：操作结果回调
+
+        # 注册命令级回调
+        self.scheduler.register_callback("on_command_complete", self._on_command_complete)
+        self.scheduler.register_callback("on_command_failed", self._on_command_failed)
+        self.scheduler.register_callback("on_command_status_change", self._on_command_status_change)
+
+        # 新增：系统级回调（用于TaskManager -> RobotControlSystem通信）
+        self.system_callbacks = {
+            "on_command_status_change": None,   # 命令状态变化回调
+            "on_task_progress": None,           # 任务进度回调
+            "on_operation_result": None,        # 操作结果回调
+        }
+
+    def _init_robot_controller(self):
+        """初始化机器人控制器（内部方法，完全封装）"""
         try:
-            # 提取任务信息
-            task_id = task_cmd.taskId
-            robot_mode = task_cmd.robotMode
-            station_tasks = task_cmd.stationTasks
-            
-            # 为每个站点创建一个单独的Task对象
-            task_ids = []
-            for station_data in station_tasks:
-                # 创建站点配置
-                station = StationConfig(
-                    station_id=station_data.station_id,
-                    sort=station_data.sort,
-                    name=station_data.name,
-                    agv_marker=station_data.agv_marker,
-                    robot_pos=station_data.robot_pos,
-                    ext_pos=station_data.ext_pos,
-                    operation_config=station_data.operation_config
-                )
-                
-                # 生成任务ID
-                task_id = f"{task_id}_{station.station_id}"
-                
-                # 创建巡检任务
-                task = Task(
-                    task_id=task_id,
-                    station=station,
-                    priority=self._calculate_priority([station]),
-                    metadata={
-                        "source": "cmd", 
-                        "station_id": station.station_id,
-                        "robot_mode": robot_mode
-                    }
-                )
-                
-                # 添加到调度器
-                self.scheduler.add_task(task)
-                task_ids.append(task_id)
-            
-            # 返回第一个任务ID或空字符串
-            return task_ids[0] if task_ids else ""
-            
+            if self.use_mock:
+                self.logger.info("TaskManager: 使用Mock机器人控制器")
+                from robot.MockRobotController import MockRobotController
+                self.robot_controller = MockRobotController(self.config['robot_config'])
+            else:
+                self.logger.info("TaskManager: 使用真实机器人控制器")
+                from robot.RobotController import RobotController as RealRobotController
+                self.robot_controller = RealRobotController(self.config)
+
+            # 初始化机器人系统
+            if not self.robot_controller.setup_system():
+                raise Exception("机器人系统初始化失败")
+
+            self.logger.info("TaskManager: 机器人控制器初始化成功")
+
         except Exception as e:
-            self.logger.error(f"从TaskCmd接收任务失败: {e}")
+            self.logger.error(f"TaskManager: 初始化机器人控制器失败: {e}")
             raise
-    
-    def receive_task_from_json(self, json_data: Dict) -> str:
-        """从JSON接收单个任务"""
+
+    # ==================== 状态查询相关方法 ====================
+    def get_robot_status(self) -> Dict[str, Any]:
+        """获取机器人状态（供RobotControlSystem调用）
+
+        Returns:
+            Dict[str, Any]: 机器人状态信息
+        """
         try:
-            # 解析JSON数据
-            stations_data = json_data.get("stations", {})
-            
-            # 为每个站点创建一个单独的InspectionTask对象
-            task_ids = []
-            for station_id, station_info in stations_data.items():
-                # 创建操作配置对象
-                operation_config_data = station_info.get("operation_config", {})
-                operation_config = OperationConfig(
-                    operation_mode=OperationMode(operation_config_data.get("operation_mode", "None")),
-                    door_ip=operation_config_data.get("door_ip"),
-                    device_id=operation_config_data.get("device_id")
-                )
-                
-                station = StationConfig(
-                    station_id=station_id,
-                    name=station_info.get("name", ""),
-                    agv_marker=station_info.get("agv_marker", ""),
-                    robot_pos=station_info.get("robot_pos", []),
-                    ext_pos=station_info.get("ext_pos", []),
-                    operation_config=operation_config
-                )
-                
-                # 生成任务ID
-                task_id = self._generate_task_id({**json_data, "station_id": station_id})
-                
-                # 创建巡检任务
-                task = Task(
-                    task_id=task_id,
-                    station=station,
-                    priority=self._calculate_priority([station]),
-                    metadata={"source": "json", "station_id": station_id}
-                )
-                
-                # 添加到调度器
-                self.scheduler.add_task(task)
-                task_ids.append(task_id)
-            
-            # 返回第一个任务ID或空字符串
-            return task_ids[0] if task_ids else ""
-            
+            return self.robot_controller.get_status()
         except Exception as e:
-            self.logger.error(f"接收任务失败: {e}")
+            self.logger.error(f"获取机器人状态失败: {e}")
+            return {}
+
+    def get_environment_data(self) -> Dict[str, Any]:
+        """获取环境数据（供RobotControlSystem调用）
+
+        Returns:
+            Dict[str, Any]: 环境数据
+        """
+        try:
+            return self.robot_controller.get_environment_data()
+        except Exception as e:
+            self.logger.error(f"获取环境数据失败: {e}")
+            return {}
+
+    def execute_emergency_stop(self) -> bool:
+        """执行紧急停止（供RobotControlSystem调用）
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            return self.robot_controller.emergency_stop()
+        except Exception as e:
+            self.logger.error(f"执行紧急停止失败: {e}")
+            return False
+
+    def get_current_execution_state(self) -> Dict[str, Any]:
+        """获取当前执行状态（统一接口）
+
+        Returns:
+            Dict with keys: command, task, station
+        """
+        state = {
+            "command": None,
+            "task": None,
+            "station": None
+        }
+
+        if self.scheduler.current_command:
+            state["command"] = {
+                "command_id": self.scheduler.current_command.command_id,
+                "cmd_type": self.scheduler.current_command.cmd_type.value,
+                "status": self.scheduler.current_command.status.value
+            }
+
+        if self.scheduler.current_task:
+            task = self.scheduler.current_task
+            state["task"] = {
+                "task_id": task.task_id,
+                "task_name": task.task_name,
+                "status": task.status.value,
+                "total_stations": len(task.station_list),
+                "completed_stations": sum(1 for s in task.station_list
+                                        if s.status == StationTaskStatus.COMPLETED)
+            }
+
+        if self.scheduler.current_station:
+            station = self.scheduler.current_station
+            state["station"] = {
+                "station_id": station.station_config.station_id,
+                "status": station.status.value,
+                "execution_phase": station.execution_phase.value,
+                "progress_detail": station.progress_detail,
+                "retry_count": station.retry_count
+            }
+
+        return state
+
+    def get_current_task_info(self) -> Dict[str, Any]:
+        """仅获取当前任务信息
+
+        Returns:
+            Dict: 任务信息字典，如果没有当前任务则返回 None
+        """
+        if not self.scheduler.current_task:
+            return None
+
+        task = self.scheduler.current_task
+        return {
+            "task_id": task.task_id,
+            "task_name": task.task_name,
+            "status": task.status.value,
+            "station_list": [
+                {
+                    "station_id": s.station_config.station_id,
+                    "status": s.status.value,
+                    "retry_count": s.retry_count
+                }
+                for s in task.station_list
+            ]
+        }
+
+    def get_current_station_info(self) -> Dict[str, Any]:
+        """仅获取当前站点信息（包含执行阶段）
+
+        Returns:
+            Dict: 站点信息字典，如果没有当前站点则返回 None
+        """
+        if not self.scheduler.current_station:
+            return None
+
+        station = self.scheduler.current_station
+        return {
+            "station_id": station.station_config.station_id,
+            "name": station.station_config.name,  # 新增：站点名称
+            "status": station.status.value,
+            "execution_phase": station.execution_phase.value,
+            "progress_detail": station.progress_detail,
+            "agv_marker": station.station_config.agv_marker,
+            "retry_count": station.retry_count,
+            "started_at": station.started_at.isoformat() if station.started_at else None
+        }
+
+    def get_progress_snapshot(self) -> Optional[Dict[str, Any]]:
+        """获取当前进度快照（线程安全）
+
+        统一的状态访问接口，避免参数传递混乱。用于RobotControlSystem获取
+        当前执行状态以构建上报消息。
+
+        Returns:
+            包含 task, station, command_id 的字典，如果无任务则返回 None
+        """
+        if not self.scheduler.current_task:
+            return None
+
+        return {
+            "task": self.scheduler.current_task,
+            "station": self.scheduler.current_station,
+            "command_id": (
+                self.scheduler.current_command.command_id
+                if self.scheduler.current_command else None
+            )
+        }
+
+    # ==================== 指令响应相关方法 ====================
+    def receive_command(self, command_envelope: CommandEnvelope) -> str:
+        """接收并处理所有类型的命令（统一入口）
+
+        Args:
+            command_envelope: 命令信封
+
+        Returns:
+            str: 命令ID
+        """
+        try:
+            cmd_id = command_envelope.cmd_id
+            cmd_type = command_envelope.cmd_type
+            data_json = command_envelope.data_json
+
+            self.logger.info(f"TaskManager接收命令: {cmd_id}, 类型: {cmd_type.value}")
+
+            # 根据命令类型创建UnifiedCommand
+            if cmd_type == CmdType.TASK_CMD:
+                # 解析TaskCmd
+                task_cmd = convert_data_json_to_task_cmd(data_json)
+                # 转换为Task对象
+                task = convert_task_cmd_to_task(task_cmd)
+                # 创建统一命令
+                command = create_unified_command(
+                    command_id=cmd_id,
+                    cmd_type=cmd_type,
+                    data=task,
+                    metadata={"source": "receive_command", "robot_id": command_envelope.robot_id}
+                )
+                # # 同时保存到tasks表（兼容性）
+                # self.database.save_task(task)
+
+            else:
+                # 其他命令类型直接使用data_json
+                command = create_unified_command(
+                    command_id=cmd_id,
+                    cmd_type=cmd_type,
+                    data=data_json,
+                    metadata={"source": "receive_command", "robot_id": command_envelope.robot_id}
+                )
+
+            # 添加到调度器队列
+            self.scheduler.add_command(command)
+
+            self.logger.info(f"命令已提交到调度器: {cmd_id}")
+            return cmd_id
+
+        except Exception as e:
+            self.logger.error(f"接收命令失败: {e}")
             raise
-    
-    def _generate_task_id(self, json_data: Dict) -> str:
-        """生成唯一任务ID"""
-        # 使用JSON内容的哈希值作为任务ID的一部分
-        json_str = json.dumps(json_data, sort_keys=True)
-        hash_str = hashlib.md5(json_str.encode()).hexdigest()[:8]
-        
-        # 加上时间戳和随机数
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        random_str = str(uuid.uuid4())[:4]
-        
-        return f"TASK_{timestamp}_{hash_str}_{random_str}"
-    
-    def _calculate_priority(self, stations: List[StationConfig]) -> int:
-        """计算任务优先级"""
-        # TODO: 实现根据任务内容计算优先级的逻辑
-        # 根据任务内容计算优先级
-        # 例如：有充电任务优先级较高
-        for station in stations:
-            if "充电" in station.name:
-                return 10  # 最高优先级
-        return 1
-    
-    def get_task_status(self, task_id: str) -> Dict:
-        """获取任务状态"""
+
+
+
+    # ==================== 任务查询相关方法 ====================
+    def get_command_status(self, command_id: str) -> Dict[str, Any]:
+        """查询命令执行状态
+
+        Args:
+            command_id: 命令ID
+
+        Returns:
+            Dict[str, Any]: 命令状态信息
+        """
         try:
-            with self.database._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
-                row = cursor.fetchone()
-                
-                if row:
-                    return dict(row)
-                else:
-                    return {"error": "任务不存在"}
+            command_dict = self.database.get_command_by_id(command_id)
+            if not command_dict:
+                return {"error": "命令不存在"}
+
+            return command_dict
+
         except Exception as e:
-            self.logger.error(f"获取任务状态失败: {e}")
+            self.logger.error(f"查询命令状态失败: {e}")
             return {"error": str(e)}
-    
-    def get_all_tasks(self, status: str = None) -> List[Dict]:
-        """获取所有任务"""
+
+    def cancel_command(self, command_id: str) -> bool:
+        """取消命令执行
+
+        Args:
+            command_id: 命令ID
+
+        Returns:
+            bool: 是否取消成功
+        """
         try:
-            with self.database._get_connection() as conn:
-                cursor = conn.cursor()
-                
-                if status:
-                    cursor.execute(
-                        "SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC",
-                        (status,)
-                    )
-                else:
-                    cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC")
-                
-                return [dict(row) for row in cursor.fetchall()]
+            # 更新命令状态为已取消
+            self.database.update_command_status(command_id, CommandStatus.CANCELLED)
+            self.logger.info(f"命令已取消: {command_id}")
+
+            # 构建一个简单的命令对象用于回调通知
+            # 从数据库获取命令信息
+            command_info = self.get_command_status(command_id)
+            if command_info and "error" not in command_info:
+                # 解析命令类型和分类
+                try:
+                    cmd_type = CmdType(command_info.get("cmd_type", "response_cmd"))
+                except ValueError:
+                    cmd_type = CmdType.RESPONSE_CMD
+
+                try:
+                    category = CommandCategory(command_info.get("category", "control"))
+                except ValueError:
+                    category = CommandCategory.CONTROL
+
+                # 创建一个临时的命令对象用于回调
+                cancelled_command = UnifiedCommand(
+                    command_id=command_id,
+                    cmd_type=cmd_type,
+                    category=category,
+                    status=CommandStatus.CANCELLED,
+                    error_message="命令已被取消"
+                )
+                # 触发系统回调：通知RobotControlSystem命令状态变化
+                self._trigger_system_callback(
+                    "on_command_status_change",
+                    command=cancelled_command
+                )
+
+            return True
+
         except Exception as e:
-            self.logger.error(f"获取任务列表失败: {e}")
-            return []
+            self.logger.error(f"取消命令失败: {e}")
+            return False
+
+
+    # ==================== 回调函数相关方法 ====================
+    def register_system_callback(self, event: str, callback: callable):
+        """注册系统级回调函数
+
+        Args:
+            event: 事件名称
+            callback: 回调函数
+        """
+        if event in self.system_callbacks:
+            self.system_callbacks[event] = callback
+            self.logger.info(f"已注册系统回调: {event}")
+        else:
+            self.logger.warning(f"未知系统回调事件: {event}")
+
+    def _trigger_system_callback(self, event: str, *args, **kwargs):
+        """触发系统级回调
+
+        Args:
+            event: 事件名称
+            *args: 位置参数
+            **kwargs: 关键字参数
+        """
+        callback = self.system_callbacks.get(event)
+        if callback:
+            try:
+                callback(*args, **kwargs)
+            except Exception as e:
+                self.logger.error(f"系统回调执行异常: {e}")
+
+    # def receive_task_from_cmd(self, task_cmd: TaskCmd) -> str:
+    #     """从TaskCmd接收任务
+        
+    #     Args:
+    #         task_cmd: 任务命令对象
+            
+    #     Returns:
+    #         str: 生成的任务ID
+    #     """
+    #     try:
+    #         # 解析TaskCmd为Task对象
+    #         task = convert_task_cmd_to_task(task_cmd)
+            
+    #         # 添加到调度器
+    #         self.scheduler.add_task(task)
+            
+    #         self.logger.info(f"从TaskCmd接收任务成功，任务ID: {task.task_id}")
+    #         return task.task_id
+            
+    #     except Exception as e:
+    #         self.logger.error(f"从TaskCmd接收任务失败: {e}")
+    #         raise
     
-    def cancel_task(self, task_id: str) -> bool:
-        """取消任务"""
-        # TODO: 实现任务取消逻辑
-        self.logger.info(f"取消任务: {task_id}")
-        return True
+
+    # def receive_task_from_dict(self, task_dict: Dict[str, Any]) -> str:
+    #     """从字典接收任务
+        
+    #     Args:
+    #         task_dict: 任务字典
+            
+    #     Returns:
+    #         str: 生成的任务ID
+    #     """
+    #     try:
+    #         # 提取任务信息
+    #         task_id = task_dict.get("task_id", f"TASK_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    #         task_name = task_dict.get("task_name", "未知任务")
+    #         robot_mode = RobotMode(task_dict.get("robot_mode", "inspection"))
+    #         generate_time = datetime.fromisoformat(task_dict.get("generate_time")) if task_dict.get("generate_time") else datetime.now()
+            
+    #         # 创建站点列表
+    #         station_list = []
+    #         station_configs = task_dict.get("station_config_tasks", [])
+            
+    #         for station_config_dict in station_configs:
+    #             # 创建操作配置
+    #             operation_config_dict = station_config_dict.get("operation_config", {})
+    #             operation_config = OperationConfig(
+    #                 operation_mode=OperationMode(operation_config_dict.get("operation_mode", "none")),
+    #                 door_ip=operation_config_dict.get("door_ip"),
+    #                 device_id=operation_config_dict.get("device_id")
+    #             )
+                
+    #             # 创建站点配置
+    #             station_config = StationConfig(
+    #                 station_id=station_config_dict.get("station_id"),
+    #                 sort=station_config_dict.get("sort", 0),
+    #                 name=station_config_dict.get("name", "未知站点"),
+    #                 agv_marker=station_config_dict.get("agv_marker", ""),
+    #                 robot_pos=station_config_dict.get("robot_pos", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+    #                 ext_pos=station_config_dict.get("ext_pos", [0.0, 0.0, 0.0, 0.0]),
+    #                 operation_config=operation_config
+    #             )
+                
+    #             # 创建站点任务
+    #             station = Station(
+    #                 station_config=station_config,
+    #                 status=StationTaskStatus.PENDING,
+    #                 created_at=datetime.now(),
+    #                 retry_count=0,
+    #                 max_retries=3,
+    #                 metadata={
+    #                     "source": "dict",
+    #                     "task_id": task_id
+    #                 }
+    #             )
+                
+    #             station_list.append(station)
+            
+    #         # 创建任务对象
+    #         task = Task(
+    #             task_id=task_id,
+    #             task_name=task_name,
+    #             station_list=station_list,
+    #             status=TaskStatus.PENDING,
+    #             robot_mode=robot_mode,
+    #             generate_time=generate_time,
+    #             created_at=datetime.now(),
+    #             metadata={
+    #                 "source": "dict",
+    #                 "generate_time": generate_time.isoformat()
+    #             }
+    #         )
+            
+    #         # 添加到调度器
+    #         self.scheduler.add_task(task)
+            
+    #         self.logger.info(f"从字典接收任务成功，任务ID: {task.task_id}")
+    #         return task.task_id
+            
+    #     except Exception as e:
+    #         self.logger.error(f"从字典接收任务失败: {e}")
+    #         raise
     
-    def retry_task(self, task_id: str) -> bool:
-        """重试任务"""
-        # TODO: 实现任务重试逻辑
-        self.logger.info(f"重试任务: {task_id}")
-        return True
-    
+    # ==================== 回调函数 ====================
     def _on_task_start(self, task: Task):
         """任务开始回调"""
         self.logger.info(f"任务开始: {task.task_id}")
         # 可以在这里发送通知或更新UI
-    
+
     def _on_task_complete(self, task: Task):
         """任务完成回调"""
         self.logger.info(f"任务完成: {task.task_id}")
-        # 可以在这里发送通知或更新UI
-    
+
     def _on_task_failed(self, task: Task):
         """任务失败回调"""
         self.logger.error(f"任务失败: {task.task_id}")
         # 可以在这里发送通知或更新UI
+
+    def _on_station_start(self, station: Station):
+        """站点开始回调"""
+        self.logger.info(f"站点开始: {station.station_config.station_id}")
+
+        # 触发任务进度回调（无需参数，从快照获取）
+        self._trigger_system_callback("on_task_progress")
+
+    def _on_station_complete(self, station: Station):
+        """站点完成回调"""
+        self.logger.info(f"站点完成: {station.station_config.station_id}")
+
+        # 检查是否有操作结果，触发操作结果回调
+        operation_result = station.metadata.get('operation_result') if station.metadata else None
+        if operation_result:
+            # operation_data 只包含操作特定数据（operation_mode, result）
+            # task_id/station_id 从快照获取
+            operation_data = {
+                'operation_mode': station.station_config.operation_config.operation_mode,
+                'result': operation_result
+            }
+            self._trigger_system_callback(
+                "on_operation_result",
+                operation_data=operation_data
+            )
+
+        # 触发任务进度回调（无需参数，从快照获取）
+        self._trigger_system_callback("on_task_progress")
+
+    def _on_station_retry(self, station: Station):
+        """站点重试回调"""
+        self.logger.warning(f"站点重试: {station.station_config.station_id}, 重试次数: {station.retry_count}")
+        # 可以在这里发送通知或更新UI
+
+    def _on_station_progress(self, station: Station, command_id: str = None):
+        """站点进度更新回调（简化版 - 不传递参数到系统回调）
+
+        Args:
+            station: 站点对象
+            command_id: 命令ID（保留参数兼容性，但不使用）
+        """
+        self.logger.info(
+            f"站点进度更新: {station.station_config.station_id} - "
+            f"{station.execution_phase.value} - {station.progress_detail}"
+        )
+
+        # 触发系统级回调，上报给 RobotControlSystem（无需传递参数）
+        self._trigger_system_callback("on_task_progress")
+
+    def _on_operation_result(self, operation_data: Dict[str, Any], command_id: str = None):
+        """操作结果回调（简化版 - operation_data只包含操作特定数据）
+
+        Args:
+            operation_data: 操作数据（只包含operation_mode和result，不包含task_id/station_id）
+            command_id: 命令ID（保留参数兼容性，但不使用）
+        """
+        operation_mode = operation_data.get('operation_mode', 'unknown')
+        result = operation_data.get('result', {})
+        success = result.get('success', False)
+
+        self.logger.info(f"操作结果: {operation_mode} - {'成功' if success else '失败'}")
+
+        # 触发系统级回调，通知 RobotControlSystem
+        # operation_data 只包含操作特定数据（operation_mode, result）
+        # task_id/station_id/command_id 从快照获取
+        self._trigger_system_callback(
+            "on_operation_result",
+            operation_data=operation_data
+        )
+
+    # ==================== 命令级回调处理 ====================
+
+    def _on_command_complete(self, command):
+        """命令完成回调"""
+        self.logger.info(f"命令完成: {command.command_id}")
+
+        # 触发系统回调：通知RobotControlSystem命令状态变化
+        self._trigger_system_callback(
+            "on_command_status_change",
+            command=command
+        )
+
+    def _on_command_failed(self, command):
+        """命令失败回调"""
+        self.logger.error(f"命令失败: {command.command_id}")
+
+        # 触发系统回调：通知RobotControlSystem命令状态变化
+        self._trigger_system_callback(
+            "on_command_status_change",
+            command=command
+        )
+
+    def _on_command_status_change(self, command):
+        """命令状态变化回调（任何状态变化都触发）"""
+        self.logger.info(f"命令状态变化: {command.command_id} -> {command.status.value}")
+
+        # 触发系统回调：通知RobotControlSystem命令状态变化
+        self._trigger_system_callback(
+            "on_command_status_change",
+            command=command
+        )
     
     def shutdown(self):
         """关闭管理器"""
         self.scheduler.stop()
+
+        # 关闭机器人系统
+        try:
+            if hasattr(self, 'robot_controller'):
+                self.robot_controller.shutdown_system()
+                self.logger.info("机器人控制器已关闭")
+        except Exception as e:
+            self.logger.error(f"关闭机器人控制器失败: {e}")
+
         self.logger.info("任务管理器已关闭")

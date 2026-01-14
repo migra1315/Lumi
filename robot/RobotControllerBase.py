@@ -6,7 +6,7 @@ RobotControllerBase.py
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Callable
 from enum import Enum
-import logging
+from utils.logger_config import get_logger
 
 class RobotStatus(Enum):
     IDLE = "idle"
@@ -30,56 +30,29 @@ class RobotControllerBase(ABC):
     def __init__(self, config: Dict[str, Any] = None, debug: bool = False):
         """
         初始化基类
-        
+
         Args:
             config: 配置字典
             debug: 调试模式
         """
         self.config = config or {}
         self.debug = debug
-        
+
         # 通用状态（所有实现类都应该有的状态）
         self.status = RobotStatus.IDLE
         self.battery_level = 100.0
         self.battery_status = BatteryStatus.HIGH
         self.current_marker = None
         self.last_error = None
-        
+
         # 初始化日志
-        self.logger = self._setup_logger(debug)
-        
-        # 回调函数
-        self.callbacks = {
-            "on_status_change": [],
-            "on_battery_change": [],
-            "on_error": [],
-            "on_task_start": [],
-            "on_task_complete": []
-        }
-        
+        self.logger = get_logger(self.__class__.__name__)
+
         # 系统初始化标志
         self._system_initialized = False
-    
-    def _setup_logger(self, debug: bool) -> logging.Logger:
-        """设置日志记录器（子类可以重写）"""
-        logger = logging.getLogger(self.__class__.__name__)
-        
-        if debug:
-            logger.setLevel(logging.DEBUG)
-        else:
-            logger.setLevel(logging.INFO)
-        
-        logger.propagate = False  # 禁用日志传播到父logger
-        
-        if not logger.handlers:
-            console_handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            console_handler.setFormatter(formatter)
-            logger.addHandler(console_handler)
-        
-        return logger
+
+        # 回调函数字典
+        self._callbacks: Dict[str, List[Callable]] = {}
     
     # ==================== 抽象方法 ====================
     @abstractmethod
@@ -161,34 +134,99 @@ class RobotControllerBase(ABC):
         """充电操作（有默认实现，子类可重写）"""
         self.logger.info(f"开始充电: {duration}秒（基类模拟实现）")
         self.status = RobotStatus.CHARGING
-        
+
         # 模拟充电
         import time
         start_time = time.time()
         while time.time() - start_time < min(duration, 5.0):
             self.battery_level = min(100.0, self.battery_level + 20.0)
             time.sleep(0.5)
-        
+
         self.status = RobotStatus.IDLE
         return True
-    
-    # ==================== 公共方法（不需要重写） ====================
+
+    def joy_control(self, data_json: Dict[str, Any]) -> bool:
+        """
+        摇杆控制操作（有默认实现，子类可重写）
+
+        Args:
+            data_json: 摇杆控制数据，包含 joy_control_cmd 字段
+                      - angular_velocity: 角速度
+                      - linear_velocity: 线速度
+
+        Returns:
+            bool: 操作是否成功
+        """
+        self.logger.info(f"摇杆控制（基类默认实现）: {data_json}")
+        # 基类默认实现，不执行实际操作
+        return True
+
+    def capture_image(self, device_id: str = None) -> str:
+        """
+        拍照功能（有默认实现，子类可重写）
+
+        Args:
+            device_id: 设备ID（可选）
+
+        Returns:
+            str: Base64编码的图像数据
+        """
+        self.logger.info(f"拍照（基类默认实现） - 设备ID: {device_id}")
+        # 基类默认返回空字符串
+        return ""
+
+    def get_environment_data(self) -> Dict[str, float]:
+        """
+        获取环境数据（有默认实现，子类可重写）
+
+        Returns:
+            Dict[str, float]: 环境数据字典，包含温度、湿度等信息
+        """
+        self.logger.debug("获取环境数据（基类默认实现）")
+        # 基类默认返回空字典或默认值
+        return {
+            "temperature": 0.0,
+            "humidity": 0.0,
+            "oxygen": 0.0,
+            "carbon_dioxide": 0.0,
+            "pm25": 0.0,
+            "pm10": 0.0,
+            "etvoc": 0.0,
+            "noise": 0.0
+        }
+
+
+    # ==================== 回调机制 ====================
     def register_callback(self, event: str, callback: Callable):
-        """注册回调函数"""
-        if event in self.callbacks:
-            self.callbacks[event].append(callback)
-            self.logger.debug(f"已注册回调函数到事件: {event}")
-        else:
-            self.logger.warning(f"未知事件类型: {event}")
-    
+        """
+        注册回调函数
+
+        Args:
+            event: 事件名称
+            callback: 回调函数
+        """
+        if event not in self._callbacks:
+            self._callbacks[event] = []
+        self._callbacks[event].append(callback)
+        self.logger.debug(f"已注册回调函数到事件: {event}")
+
     def _trigger_callback(self, event: str, *args, **kwargs):
-        """触发回调函数"""
-        for callback in self.callbacks.get(event, []):
-            try:
-                callback(*args, **kwargs)
-            except Exception as e:
-                self.logger.error(f"回调函数执行异常: {e}")
-    
+        """
+        触发回调函数
+
+        Args:
+            event: 事件名称
+            *args: 位置参数
+            **kwargs: 关键字参数
+        """
+        if event in self._callbacks:
+            for callback in self._callbacks[event]:
+                try:
+                    callback(*args, **kwargs)
+                except Exception as e:
+                    self.logger.error(f"回调函数执行异常 [{event}]: {e}")
+
+    # ==================== 公共方法（不需要重写） ====================
     def __del__(self):
         """析构函数"""
         try:

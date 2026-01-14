@@ -1,4 +1,4 @@
-from dataModels.TaskModels import StationConfig
+from dataModels.TaskModels import StationConfig, RobotMode
 from dataclasses import dataclass, asdict
 from enum import Enum
 from typing import Dict, List, Optional, Any
@@ -14,18 +14,11 @@ class CmdType(Enum):
     JOY_CONTROL_CMD = "joy_control_cmd"  # 摇杆控制命令
     SET_MARKER_CMD = "set_marker_cmd"  # 设置标记命令
     CHARGE_CMD = "charge_cmd"  # 充电命令
-
-
-class RobotMode(Enum):
-    """机器人模式枚举"""
-    INSPECTION = "normal"  # 正常模式
-    SERVICE = "service"  # 服务模式
-    JOY_CONTROL="joy_control"  # 摇杆控制模式
-    ESTOP = "estop"  # 紧急停止模式
+    POSITION_ADJUST_CMD = "position_adjust_cmd"  # 位置调整命令
 
 
 @dataclass
-class ResponseCmd:
+class CommandResponse:
     """响应信息"""
     code: str              # 命令ID，用于匹配请求
     info: str             # 响应状态，例如 "success" 或 "error"
@@ -35,75 +28,47 @@ class ResponseCmd:
             "info": self.info
         }
     
-@dataclass   
-class responseDataJson:
-    responseCmd: ResponseCmd  # 响应信息
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "responseCmd": self.responseCmd.to_dict()
-        }
-
 
 @dataclass
 class RobotModeCmd:
     """机器人模式命令"""
-    robotMode: RobotMode  # 机器人模式
+    robot_mode: RobotMode  # 机器人模式
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "robotMode": self.robotMode.value
+            "robot_mode": self.robot_mode.value
         }
 
-
-@dataclass
-class RobotModeDataJson:
-    robotModeCmd: RobotModeCmd  # 机器人模式命令
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "robotModeCmd": self.robotModeCmd.to_dict()
-        }
     
 @dataclass
 class TaskCmd:
     """任务下发"""
-    taskId: str  # 任务ID
-    taskName: str  # 任务名称
-    robotMode: RobotMode  # 机器人模式
-    stationTasks: List[StationConfig]  # 站点任务列表
-    generateTime: datetime = None  # 任务生成时间
+    task_id: int  # 任务ID
+    task_name: str  # 任务名称
+    robot_mode: RobotMode  # 机器人模式
+    generate_time: datetime  # 任务生成时间
+    station_config_list: List[StationConfig]  # 站点配置任务列表
+    
+    # TODO 增加函数from_dict()，用于从字典创建TaskCmd对象
+    
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "taskId": self.taskId,
-            "taskName": self.taskName,
-            "robotMode": self.robotMode.value,
-            "generateTime": self.generateTime.isoformat() if self.generateTime else None,
-            "stationTasks": [task.to_dict() for task in self.stationTasks]
+            "task_id": self.task_id,
+            "task_name": self.task_name,
+            "robot_mode": self.robot_mode.value,
+            "generate_time": self.generate_time.isoformat(),
+            "station_config_tasks": [station.to_dict() for station in self.station_config_list]
         }
     
-@dataclass
-class TaskDataJson:
-    taskCmd: TaskCmd  # 任务下发
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "taskCmd": self.taskCmd.to_dict()
-        }
 
 @dataclass
 class SetMarkerCmd:
     """设置标记命令,客户端点击设置机器人当前位置为该标记"""
-    markerId: str  # 标记ID
+    marker_id: str  # 标记ID
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "markerId": self.markerId,
+            "marker_id": self.marker_id,
         }
     
-@dataclass   
-class SetMarkerDataJson:
-    setMarkerCmd: SetMarkerCmd  # 设置标记命令
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "setMarkerCmd": self.setMarkerCmd.to_dict()
-        }
-
 
 @dataclass
 class ChargeCmd:
@@ -115,13 +80,14 @@ class ChargeCmd:
         }
     
 @dataclass
-class ChargeDataJson:
-    chargeCmd: ChargeCmd  # 充电命令
+class PositionAdjustCmd:
+    """位置调整命令"""
+    adjust: bool  # 是否调整位置
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "chargeCmd": self.chargeCmd.to_dict()
+            "adjust": self.adjust,
         }
-    
+
 
 @dataclass
 class joyControlCmd:
@@ -135,30 +101,73 @@ class joyControlCmd:
         }
     
 
-@dataclass
-class joyControlDataJson:
-    joyControlCmd: joyControlCmd  # 摇杆控制命令
+
+@dataclass   
+class responseDataJson:
+    response_cmd: CommandResponse  # 响应信息
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "joyControlCmd": self.joyControlCmd.to_dict()
+            "response_cmd": self.response_cmd.to_dict()
+        }
+
+@dataclass
+class RobotModeDataJson:
+    robot_mode_cmd: RobotModeCmd  # 机器人模式命令
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "robot_mode_cmd": self.robot_mode_cmd.to_dict()
+        }
+
+@dataclass
+class TaskDataJson:
+    task_cmd: TaskCmd  # 任务下发
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "task_cmd": self.task_cmd.to_dict()
+        }
+
+@dataclass   
+class SetMarkerDataJson:
+    set_marker_cmd: SetMarkerCmd  # 设置标记命令
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "set_marker_cmd": self.set_marker_cmd.to_dict()
+        }
+
+
+@dataclass
+class ChargeDataJson:
+    chargeCmd: ChargeCmd  # 充电命令
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "chargeCmd": self.chargeCmd.to_dict()
+        }
+    
+
+@dataclass
+class joyControlDataJson:
+    joy_control_cmd: joyControlCmd  # 摇杆控制命令
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "joy_control_cmd": self.joy_control_cmd.to_dict()
         }
 
 @dataclass
 class CommandEnvelope:
     """消息信封 - 所有数据传输的包装器"""
-    cmdId: str              # 唯一消息ID，用于请求响应匹配和消息去重
-    cmdTime: int            # 消息产生的时间戳（毫秒）
-    cmdType: CmdType        # 核心路由字段，标识功能类型
-    robotId: str            # 机器人标识，用于会话管理和消息路由
-    dataJson: Dict[str, Any]  # 实际的功能数据Json
+    cmd_id: str              # 唯一消息ID，用于请求响应匹配和消息去重
+    cmd_time: int            # 消息产生的时间戳（毫秒）
+    cmd_type: CmdType        # 核心路由字段，标识功能类型
+    robot_id: str            # 机器人标识，用于会话管理和消息路由
+    data_json: Dict[str, Any]  # 实际的功能数据Json
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "cmdId": self.cmdId,
-            "cmdTime": self.cmdTime,
-            "cmdType": self.cmdType.value,
-            "robotId": self.robotId,
-            "dataJson": self.dataJson
+            "cmd_id": self.cmd_id,
+            "cmd_time": self.cmd_time,
+            "cmd_type": self.cmd_type.value,
+            "robot_id": self.robot_id,
+            "data_json": self.data_json
         }
     
     def to_json(self) -> str:
@@ -178,12 +187,12 @@ _CMD_TYPE_TO_DATA_CLASS = {
 
 # 命令类型与数据类参数名的映射
 _CMD_TYPE_TO_PARAM_NAME = {
-    CmdType.TASK_CMD: "taskCmd",
-    CmdType.RESPONSE_CMD: "responseCmd",
-    CmdType.ROBOT_MODE_CMD: "robotModeCmd",
-    CmdType.JOY_CONTROL_CMD: "joyControlCmd",
-    CmdType.SET_MARKER_CMD: "setMarkerCmd",
-    CmdType.CHARGE_CMD: "chargeCmd",
+    CmdType.TASK_CMD: "task_cmd",
+    CmdType.RESPONSE_CMD: "response_cmd",
+    CmdType.ROBOT_MODE_CMD: "robot_mode_cmd",
+    CmdType.JOY_CONTROL_CMD: "joy_control_cmd",
+    CmdType.SET_MARKER_CMD: "set_marker_cmd",
+    CmdType.CHARGE_CMD: "charge_cmd",
 }
 
 def create_cmd_envelope(
@@ -215,11 +224,11 @@ def create_cmd_envelope(
     
     # 创建命令信封
     return CommandEnvelope(
-        cmdId=cmd_id,
-        cmdTime=int(datetime.now().timestamp() * 1000),  # 毫秒时间戳
-        cmdType=cmd_type,
-        robotId=robot_id,
-        dataJson=data_obj.to_dict()
+        cmd_id=cmd_id,
+        cmd_time=int(datetime.now().timestamp() * 1000),  # 毫秒时间戳
+        cmd_type=cmd_type,
+        robot_id=robot_id,
+        data_json=data_obj.to_dict()
     )
 
 # 保留原有的便捷方法，内部调用通用工厂方法
@@ -234,7 +243,7 @@ def create_task_cmd_envelope(
 def create_response_cmd_envelope(
     cmd_id: str,
     robot_id: str,
-    response_cmd: ResponseCmd
+    response_cmd: CommandResponse
 ) -> CommandEnvelope:
     """创建响应消息信封"""
     return create_cmd_envelope(cmd_id, robot_id, CmdType.RESPONSE_CMD, response_cmd)
