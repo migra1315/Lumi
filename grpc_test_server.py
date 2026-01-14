@@ -8,6 +8,9 @@ import queue
 import threading
 import time
 import grpc
+import os
+import base64
+from datetime import datetime
 from concurrent import futures
 
 import gRPC.RobotService_pb2 as robot_service_pb2
@@ -30,7 +33,14 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         # 自动发送开关（可通过键盘输入切换）
         self.auto_send_enabled = False  # 默认关闭自动发送
 
+        # 图像保存目录
+        self.image_save_dir = os.path.join(os.path.dirname(__file__), "received_images")
+        if not os.path.exists(self.image_save_dir):
+            os.makedirs(self.image_save_dir)
+            logger.info(f"【system】创建图像保存目录: {self.image_save_dir}")
+
         logger.info("【system】RobotServiceServicer初始化")
+        logger.info(f"【system】图像保存目录: {self.image_save_dir}")
         logger.info("【system】键盘控制说明:")
         logger.info("  1 - 发送充电命令 (CHARGE_CMD)")
         logger.info("  2 - 发送机器人模式命令 (ROBOT_MODE_CMD)")
@@ -104,7 +114,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                     # 将消息放入队列供主线程处理
                     client_messages.put(request)
                     # 立即处理客户端消息
-                    # self._handle_client_stream_message(request, client_id)
+                    self._handle_client_stream_message(request, client_id)
 
             except Exception as e:
                 logger.error(f"【serverCommand】处理客户端消息时出错: {e}")
@@ -444,8 +454,6 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                 msg_type = f"未知类型({request.msg_type})"
 
             logger.info(f"【clientUpload】收到消息: {msg_type} (msg_id: {request.msg_id}, robot_id: {request.robot_id})")
-            logger.info(f"{request}")
-
             # 打印位置信息（如果有）
             if request.HasField('position_info'):
                 pos = request.position_info
@@ -649,7 +657,6 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             task_progress: TaskProgressUpdate对象
             client_id: 客户端ID
         """
-        return
         try:
             # 获取任务状态和站点状态的名称
             try:
@@ -746,16 +753,60 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             if operation_result.operation_mode == robot_service_pb2.OperationMode.OPERATION_MODE_CAPTURE:
                 image_count = len(operation_result.image_base64)
                 log_func(f"  ├─ 图像数量: {image_count}")
-                # 如果有图像数据，打印图像大小信息
+                # 如果有图像数据，解码并保存到本地
                 if image_count > 0:
-                    for idx, img_base64 in enumerate(operation_result.image_base64):
-                        log_func(f"  │  └─ 图像{idx+1}大小: {len(img_base64)} 字符")
+                    saved_paths = self._save_capture_images(
+                        operation_result.image_base64,
+                        operation_result.task_id,
+                        operation_result.station_id,
+                        operation_result.device_id
+                    )
+                    for idx, (img_base64, save_path) in enumerate(zip(operation_result.image_base64, saved_paths)):
+                        log_func(f"  │  └─ 图像{idx+1}: {len(img_base64)} 字符 -> {save_path}")
 
             log_func(f"  ├─ 耗时: {operation_result.duration:.2f}秒")
             log_func(f"  └─ 时间戳: {operation_result.timestamp}")
 
         except Exception as e:
             logger.error(f"【serverCommand】处理操作结果失败: {e}")
+
+    def _save_capture_images(self, image_base64_list, task_id, station_id, device_id):
+        """保存接收到的图像到本地
+
+        Args:
+            image_base64_list: Base64编码的图像列表
+            task_id: 任务ID
+            station_id: 站点ID
+            device_id: 设备ID
+
+        Returns:
+            list: 保存的文件路径列表
+        """
+        saved_paths = []
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        for idx, img_base64 in enumerate(image_base64_list):
+            try:
+                # 解码Base64图像
+                img_data = base64.b64decode(img_base64)
+
+                # 生成文件名: task_{task_id}_station_{station_id}_device_{device_id}_{timestamp}_{idx}.jpg
+                filename = f"task_{task_id}_station_{station_id}_device_{device_id}_{timestamp}_{idx+1}.jpg"
+                filepath = os.path.join(self.image_save_dir, filename)
+
+                # 保存图像
+                with open(filepath, 'wb') as f:
+                    f.write(img_data)
+
+                saved_paths.append(filepath)
+                logger.info(f"【图像保存】成功保存图像: {filename} ({len(img_data)} 字节)")
+
+            except Exception as e:
+                logger.error(f"【图像保存】保存图像{idx+1}失败: {e}")
+                saved_paths.append(f"保存失败: {e}")
+
+        return saved_paths
+
 
 def keyboard_input_handler(servicer, stop_event):
     """键盘输入处理线程

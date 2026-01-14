@@ -13,6 +13,15 @@ from dataModels.MessageModels import MoveStatus
 from robot.AGVController import AGVController
 from robot.ArmController import ArmController
 
+# 导入相机管理器
+try:
+    from camera.CameraManager import CameraManager, CameraState
+    CAMERA_AVAILABLE = True
+except ImportError as e:
+    CAMERA_AVAILABLE = False
+    CameraManager = None
+    CameraState = None
+
 # 导入环境传感器
 try:
     import sys
@@ -92,6 +101,10 @@ class RobotController():
         self._env_monitor_thread = None
         self._stop_env_monitor = False
 
+        # 相机管理器相关
+        self.camera_manager = None
+        self.camera_config = system_config.get('camera_config', {})
+
         self.logger.info("机器人控制器初始化完成")
     
     def _init_sub_controllers(self):
@@ -146,6 +159,11 @@ class RobotController():
             if not env_sensor_ok:
                 self.logger.warning("环境传感器初始化失败，将使用默认值")
 
+            # 初始化相机
+            camera_ok = self._setup_camera()
+            if not camera_ok:
+                self.logger.warning("相机初始化失败，将使用模拟数据")
+
             self._system_initialized = True
             self.system_status = SystemStatus.IDLE
             self.logger.info("机器人系统初始化完成")
@@ -162,6 +180,9 @@ class RobotController():
         """关闭机器人系统"""
         try:
             self.logger.info("正在关闭机器人系统...")
+
+            # 停止相机
+            self._shutdown_camera()
 
             # 停止环境传感器监控
             self._shutdown_environment_sensor()
@@ -679,7 +700,7 @@ class RobotController():
 
     def capture(self, device_id: str) -> Dict[str, Any]:
         """
-        拍照操作 - 采集图像并返回base64编码数据
+        拍照操作 - 从真实相机采集图像并返回base64编码数据
 
         Args:
             device_id: 设备ID
@@ -698,22 +719,41 @@ class RobotController():
             self.logger.info(f"执行拍照操作 - 设备ID: {device_id}")
             start_time = time.time()
 
-            # TODO: 实现实际的相机采集逻辑
-            # 方案1: OpenCV采集USB相机
-            # 方案2: HTTP请求网络相机
-            # 方案3: 调用机械臂相机SDK
+            # 检查相机管理器是否可用
+            if self.camera_manager is None:
+                self.logger.warning("相机管理器未初始化，返回模拟数据")
+                import base64
+                mock_image_data = b"mock_image_bytes"
+                img_base64 = base64.b64encode(mock_image_data).decode('utf-8')
+                return {
+                    'success': True,
+                    'images': [img_base64],
+                    'message': '模拟拍照成功（相机未启用）',
+                    'device_id': device_id,
+                    'timestamp': time.time(),
+                    'duration': time.time() - start_time
+                }
 
-            # 示例：模拟拍照
-            import base64
-            mock_image_data = b"mock_image_bytes"
-            img_base64 = base64.b64encode(mock_image_data).decode('utf-8')
+            # 从相机获取图像
+            # 获取抓拍配置
+            num_captures = self.camera_config.get('capture_count', 2)
+            capture_interval = self.camera_config.get('capture_interval', 0.5)
+            capture_quality = self.camera_config.get('capture_quality', 95)
+
+            # 使用相机管理器的批量拍摄功能
+            images = self.camera_manager.capture_multiple(
+                count=num_captures,
+                interval=capture_interval,
+                quality=capture_quality
+            )
 
             duration = time.time() - start_time
+            success = len(images) > 0
 
             return {
-                'success': True,
-                'images': [img_base64, img_base64],
-                'message': f'拍照成功，耗时{duration:.2f}秒',
+                'success': success,
+                'images': images,
+                'message': f'拍照{"成功" if success else "失败"}，采集{len(images)}/{num_captures}张，耗时{duration:.2f}秒',
                 'device_id': device_id,
                 'timestamp': time.time(),
                 'duration': duration
@@ -727,7 +767,7 @@ class RobotController():
                 'message': f'拍照失败: {str(e)}',
                 'device_id': device_id,
                 'timestamp': time.time(),
-                'duration': 0.0
+                'duration': time.time() - start_time if 'start_time' in locals() else 0.0
             }
 
     def serve(self, device_id: str) -> Dict[str, Any]:
@@ -970,6 +1010,70 @@ class RobotController():
 
         except Exception as e:
             self.logger.error(f"关闭环境传感器时发生错误: {e}")
+
+    # ==================== 相机管理相关方法 ====================
+
+    def _setup_camera(self) -> bool:
+        """
+        初始化相机管理器
+
+        Returns:
+            bool: 初始化是否成功
+        """
+        if not self.camera_config.get('camera_enabled', False):
+            self.logger.info("相机未启用")
+            return True
+
+        if not CAMERA_AVAILABLE:
+            self.logger.warning("相机模块不可用，请检查 camera/CameraManager.py 是否存在")
+            return False
+
+        try:
+            self.logger.info("正在初始化相机管理器...")
+
+            # 创建相机管理器实例
+            self.camera_manager = CameraManager(self.camera_config)
+
+            # 启动相机
+            if not self.camera_manager.start():
+                self.logger.error("相机启动失败")
+                self.camera_manager = None
+                return False
+
+            self.logger.info("相机管理器初始化成功")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"初始化相机管理器失败: {e}")
+            if self.camera_manager:
+                try:
+                    self.camera_manager.stop()
+                except:
+                    pass
+                self.camera_manager = None
+            return False
+
+    def _shutdown_camera(self):
+        """关闭相机"""
+        try:
+            if self.camera_manager:
+                self.logger.info("正在关闭相机...")
+                self.camera_manager.stop()
+                self.camera_manager = None
+                self.logger.info("相机已关闭")
+        except Exception as e:
+            self.logger.error(f"关闭相机时发生错误: {e}")
+
+    def get_camera_statistics(self) -> Dict[str, Any]:
+        """
+        获取相机统计信息
+
+        Returns:
+            Dict: 相机统计信息，如果相机不可用则返回空字典
+        """
+        if self.camera_manager:
+            return self.camera_manager.get_statistics()
+        return {}
 
     def _environment_monitor_loop(self, read_interval: float):
         """

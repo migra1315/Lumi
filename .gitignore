@@ -24,3 +24,8 @@ docs/command_id修复方案.md
 logs
 docs/日志系统使用指南.md
 tmpclaude-1782-cwd
+docs/clientUpload通信流优化_任务分析和规划大纲.md
+docs/相机集成规划方案.md
+utils/ffmpeg-2026-01-12-git-21a3e44fbe-full_build/*
+received_images/task_123456_station_1111_device_2222_20260114_105528_1.jpg
+received_images/task_123456_station_1111_device_2222_20260114_105528_2.jpg

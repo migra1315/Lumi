@@ -860,13 +860,48 @@ if __name__ == "__main__":
             "baudrate": 4800,        # 波特率
             "address": 0x01,         # 设备地址
             "read_interval": 5       # 读取间隔（秒）
+        },
+
+        # 相机配置
+        "camera_config": {
+            # 基础配置
+            "camera_enabled": True,           # 是否启用相机
+            "camera_type": "orbbec",          # 相机类型：orbbec, mock
+
+            # 分辨率配置
+            "resolution": {
+                "width": 1280,
+                "height": 720
+            },
+            "fps": 30,                        # 采集帧率
+
+            # 抓拍配置
+            "capture_count": 2,               # 每次拍照采集图像数量
+            "capture_interval": 0.5,          # 两次拍摄间隔（秒）
+            "capture_quality": 95,            # JPEG压缩质量 (1-100)
+
+            # RTMP推流配置
+            "stream_config": {
+                "enabled": True,              # 是否启用推流
+                "rtmp_url": "rtmp://127.0.0.1/live/robot_123456",  # 推流地址
+                "bitrate": "2000k",           # 视频比特率
+                "maxrate": "2500k",           # 最大比特率
+                "bufsize": "5000k",           # 缓冲区大小
+                "preset": "ultrafast",        # 编码预设
+                "reconnect_interval": 5,      # 断线重连间隔（秒）
+                "max_reconnect_attempts": 10  # 最大重连次数
+            },
+
+            # 高级配置
+            "frame_buffer_size": 3,           # 帧缓冲区大小
+            "warmup_frames": 10               # 启动预热帧数
         }
 
     }
     
     robot_system = RobotControlSystem(config, 
-                                    use_mock=True,
-                                    report=True)
+                                    use_mock = False,
+                                    report = True)
     try:
         # 启动系统
         robot_system.start()
