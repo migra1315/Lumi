@@ -14,6 +14,7 @@ import time
 import threading
 import subprocess
 import base64
+import sys
 from enum import Enum
 from typing import Dict, Any, Optional, List
 import cv2
@@ -96,7 +97,10 @@ class CameraManager:
 
         # FFmpeg进程
         self._ffmpeg_process: Optional[subprocess.Popen] = None
+        self._ffmpeg_monitor_thread: Optional[threading.Thread] = None
+        self._ffmpeg_healthy = False
         self._reconnect_count = 0
+        self._last_ffmpeg_error = ""
 
         # 统计
         self._stats = {
@@ -536,21 +540,23 @@ class CameraManager:
         self.logger.info("RTMP推流已停止")
 
     def _start_ffmpeg(self) -> bool:
-        """启动FFmpeg推流进程"""
+        """启动FFmpeg推流进程 - 增强版，带进程守护"""
         try:
             width = self.resolution['width']
             height = self.resolution['height']
             fps = self.fps
 
-            # 构建FFmpeg命令
+            # 构建FFmpeg命令 - 增强参数
             ffmpeg_cmd = [
                 'ffmpeg',
                 '-y',  # 覆盖输出
+                '-loglevel', 'warning',  # 设置日志级别，减少冗余输出但保留警告和错误
                 '-f', 'rawvideo',
                 '-vcodec', 'rawvideo',
                 '-pix_fmt', 'bgr24',
                 '-s', f'{width}x{height}',
                 '-r', str(fps),
+                '-thread_queue_size', '512',  # 增加输入队列大小
                 '-i', '-',  # 从stdin读取
                 '-c:v', 'libx264',
                 '-preset', self.stream_preset,
@@ -561,26 +567,46 @@ class CameraManager:
                 '-maxrate', self.stream_maxrate,
                 '-bufsize', self.stream_bufsize,
                 '-f', 'flv',
+                '-flvflags', 'no_duration_filesize',  # 避免FLV duration问题
                 self.rtmp_url
             ]
 
             self.logger.debug(f"FFmpeg命令: {' '.join(ffmpeg_cmd)}")
 
+            # Windows平台使用CREATE_NO_WINDOW避免弹出控制台
+            creation_flags = 0
+            if sys.platform == 'win32':
+                creation_flags = subprocess.CREATE_NO_WINDOW
+
             self._ffmpeg_process = subprocess.Popen(
                 ffmpeg_cmd,
                 stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=creation_flags
             )
 
-            # 检查是否启动成功
-            time.sleep(0.5)
+            # 重置健康状态
+            self._ffmpeg_healthy = False
+            self._last_ffmpeg_error = ""
+
+            # 启动stderr监控线程
+            self._ffmpeg_monitor_thread = threading.Thread(
+                target=self._monitor_ffmpeg_output,
+                daemon=True,
+                name="FFmpegMonitorThread"
+            )
+            self._ffmpeg_monitor_thread.start()
+
+            # 检查是否启动成功（等待更长时间确认）
+            time.sleep(1.0)
             if self._ffmpeg_process.poll() is not None:
-                stderr = self._ffmpeg_process.stderr.read().decode('utf-8', errors='ignore')
-                self.logger.error(f"FFmpeg启动失败: {stderr[:500]}")
+                exit_code = self._ffmpeg_process.returncode
+                self.logger.error(f"FFmpeg启动失败，退出码: {exit_code}, 最后错误: {self._last_ffmpeg_error}")
                 return False
 
-            self.logger.info("FFmpeg进程已启动")
+            self._ffmpeg_healthy = True
+            self.logger.info(f"FFmpeg进程已启动 (PID: {self._ffmpeg_process.pid})")
             return True
 
         except FileNotFoundError:
@@ -590,30 +616,97 @@ class CameraManager:
             self.logger.error(f"启动FFmpeg失败: {e}")
             return False
 
+    def _monitor_ffmpeg_output(self):
+        """监控FFmpeg的stderr输出（独立线程）"""
+        self.logger.debug("FFmpeg输出监控线程已启动")
+
+        try:
+            while self._ffmpeg_process and self._ffmpeg_process.poll() is None:
+                if self._ffmpeg_process.stderr:
+                    line = self._ffmpeg_process.stderr.readline()
+                    if line:
+                        decoded_line = line.decode('utf-8', errors='ignore').strip()
+                        if decoded_line:
+                            # 记录最后的错误信息
+                            self._last_ffmpeg_error = decoded_line
+
+                            # 根据内容级别输出日志
+                            if 'error' in decoded_line.lower() or 'failed' in decoded_line.lower():
+                                self.logger.error(f"FFmpeg: {decoded_line}")
+                            elif 'warning' in decoded_line.lower():
+                                self.logger.warning(f"FFmpeg: {decoded_line}")
+                            else:
+                                self.logger.debug(f"FFmpeg: {decoded_line}")
+                else:
+                    time.sleep(0.1)
+
+            # 进程已退出，获取退出码
+            if self._ffmpeg_process:
+                exit_code = self._ffmpeg_process.poll()
+                if exit_code is not None and exit_code != 0:
+                    # 读取剩余的stderr内容
+                    remaining = self._ffmpeg_process.stderr.read() if self._ffmpeg_process.stderr else b''
+                    if remaining:
+                        remaining_str = remaining.decode('utf-8', errors='ignore').strip()
+                        if remaining_str:
+                            self._last_ffmpeg_error = remaining_str
+                            self.logger.debug(f"FFmpeg剩余输出: {remaining_str[:500]}")
+
+                    self.logger.warning(f"FFmpeg进程已退出，退出码: {exit_code}")
+                    self._ffmpeg_healthy = False
+
+        except Exception as e:
+            self.logger.debug(f"FFmpeg监控线程异常: {e}")
+
+        self.logger.debug("FFmpeg输出监控线程已退出")
+
     def _stop_ffmpeg(self):
         """停止FFmpeg进程"""
         if self._ffmpeg_process:
             try:
+                # 先关闭stdin，让FFmpeg知道输入结束
                 if self._ffmpeg_process.stdin:
-                    self._ffmpeg_process.stdin.close()
+                    try:
+                        self._ffmpeg_process.stdin.close()
+                    except Exception:
+                        pass
+
+                # 优雅终止
                 self._ffmpeg_process.terminate()
-                self._ffmpeg_process.wait(timeout=3.0)
+
+                # 等待进程结束
+                try:
+                    self._ffmpeg_process.wait(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    self.logger.warning("FFmpeg未能正常终止，强制结束")
+                    self._ffmpeg_process.kill()
+                    self._ffmpeg_process.wait(timeout=1.0)
+
             except Exception as e:
                 self.logger.warning(f"停止FFmpeg时发生错误: {e}")
                 try:
                     self._ffmpeg_process.kill()
-                except:
+                except Exception:
                     pass
             finally:
+                self._ffmpeg_healthy = False
                 self._ffmpeg_process = None
                 self.logger.info("FFmpeg进程已停止")
 
+        # 等待监控线程结束
+        if self._ffmpeg_monitor_thread and self._ffmpeg_monitor_thread.is_alive():
+            self._ffmpeg_monitor_thread.join(timeout=1.0)
+
     def _stream_loop(self):
-        """推流循环（独立线程）"""
+        """推流循环（独立线程）- 增强版，带进程守护"""
         self.logger.info("推流线程已启动")
 
         frame_interval = 1.0 / self.fps
         last_frame_time = time.time()
+        last_health_check = time.time()
+        health_check_interval = 5.0  # 每5秒进行一次健康检查
+        consecutive_write_errors = 0
+        max_consecutive_errors = 3
 
         while not self._stop_stream:
             try:
@@ -622,8 +715,17 @@ class CameraManager:
                     time.sleep(0.01)
                     continue
 
-                # 控制帧率
+                # 定期健康检查
                 current_time = time.time()
+                if current_time - last_health_check >= health_check_interval:
+                    if not self._check_ffmpeg_health():
+                        self.logger.warning("FFmpeg健康检查失败，尝试重连")
+                        if not self._try_reconnect():
+                            break
+                        consecutive_write_errors = 0
+                    last_health_check = current_time
+
+                # 控制帧率
                 elapsed = current_time - last_frame_time
                 if elapsed < frame_interval:
                     time.sleep(frame_interval - elapsed)
@@ -638,14 +740,25 @@ class CameraManager:
                 if self._ffmpeg_process and self._ffmpeg_process.poll() is None:
                     try:
                         self._ffmpeg_process.stdin.write(frame.tobytes())
+                        self._ffmpeg_process.stdin.flush()  # 立即刷新缓冲区
                         self._stats['frames_streamed'] += 1
-                    except BrokenPipeError:
-                        self.logger.error("FFmpeg进程意外退出")
-                        if not self._try_reconnect():
-                            break
+                        consecutive_write_errors = 0  # 重置错误计数
+                    except (BrokenPipeError, OSError) as e:
+                        consecutive_write_errors += 1
+                        self.logger.error(f"FFmpeg写入错误 ({consecutive_write_errors}/{max_consecutive_errors}): {e}")
+
+                        if consecutive_write_errors >= max_consecutive_errors:
+                            self.logger.error("连续写入错误过多，尝试重连")
+                            if not self._try_reconnect():
+                                break
+                            consecutive_write_errors = 0
                 else:
+                    # FFmpeg进程不存在或已退出
+                    exit_code = self._ffmpeg_process.poll() if self._ffmpeg_process else None
+                    self.logger.error(f"FFmpeg进程已退出 (退出码: {exit_code}), 最后错误: {self._last_ffmpeg_error}")
                     if not self._try_reconnect():
                         break
+                    consecutive_write_errors = 0
 
                 last_frame_time = time.time()
 
@@ -656,23 +769,56 @@ class CameraManager:
 
         self.logger.info("推流线程已退出")
 
+    def _check_ffmpeg_health(self) -> bool:
+        """检查FFmpeg进程健康状态"""
+        if not self._ffmpeg_process:
+            self.logger.debug("FFmpeg进程不存在")
+            return False
+
+        poll_result = self._ffmpeg_process.poll()
+        if poll_result is not None:
+            self.logger.debug(f"FFmpeg进程已退出，退出码: {poll_result}")
+            return False
+
+        if not self._ffmpeg_healthy:
+            self.logger.debug("FFmpeg健康标志为False")
+            return False
+
+        return True
+
     def _try_reconnect(self) -> bool:
-        """尝试重连FFmpeg"""
+        """尝试重连FFmpeg - 增强版，带指数退避"""
         if self._reconnect_count >= self.max_reconnect_attempts:
             self.logger.error(f"推流重连失败次数超过限制({self.max_reconnect_attempts})")
+            self._set_state(CameraState.ERROR)
             return False
 
         self._reconnect_count += 1
-        self.logger.warning(f"正在尝试重连FFmpeg (第{self._reconnect_count}次)...")
 
+        # 指数退避：每次重连等待时间递增
+        wait_time = min(self.reconnect_interval * (1.5 ** (self._reconnect_count - 1)), 30)
+        self.logger.warning(f"正在尝试重连FFmpeg (第{self._reconnect_count}/{self.max_reconnect_attempts}次)，等待{wait_time:.1f}秒...")
+
+        # 停止当前FFmpeg进程
         self._stop_ffmpeg()
-        time.sleep(self.reconnect_interval)
 
+        # 等待指定时间
+        time.sleep(wait_time)
+
+        # 如果已请求停止，不再重连
+        if self._stop_stream:
+            self.logger.info("收到停止信号，取消重连")
+            return False
+
+        # 尝试启动新的FFmpeg进程
         if self._start_ffmpeg():
-            self.logger.info("FFmpeg重连成功")
+            self.logger.info(f"FFmpeg重连成功 (第{self._reconnect_count}次尝试)")
+            # 重连成功后逐渐降低重连计数（允许一定容错）
+            if self._reconnect_count > 1:
+                self._reconnect_count = max(0, self._reconnect_count - 1)
             return True
         else:
-            self.logger.error("FFmpeg重连失败")
+            self.logger.error(f"FFmpeg重连失败 (第{self._reconnect_count}次尝试)，原因: {self._last_ffmpeg_error}")
             return False
 
     def _is_streaming(self) -> bool:
@@ -712,6 +858,13 @@ class CameraManager:
         """获取统计信息"""
         uptime = time.time() - self._stats['start_time'] if self._stats['start_time'] > 0 else 0
 
+        # FFmpeg进程状态
+        ffmpeg_pid = None
+        ffmpeg_running = False
+        if self._ffmpeg_process:
+            ffmpeg_pid = self._ffmpeg_process.pid
+            ffmpeg_running = self._ffmpeg_process.poll() is None
+
         return {
             'state': self.get_state().value,
             'camera_type': self.camera_type,
@@ -724,7 +877,13 @@ class CameraManager:
             'stream_errors': self._stats['stream_errors'],
             'is_streaming': self._is_streaming(),
             'rtmp_url': self.rtmp_url if self.stream_enabled else None,
-            'uptime_seconds': round(uptime, 2)
+            'uptime_seconds': round(uptime, 2),
+            # FFmpeg状态信息
+            'ffmpeg_pid': ffmpeg_pid,
+            'ffmpeg_running': ffmpeg_running,
+            'ffmpeg_healthy': self._ffmpeg_healthy,
+            'ffmpeg_reconnect_count': self._reconnect_count,
+            'ffmpeg_last_error': self._last_ffmpeg_error[:200] if self._last_ffmpeg_error else None
         }
 
     # ==================== 深度图像（可选功能） ====================

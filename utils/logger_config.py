@@ -117,6 +117,7 @@ class ContextFilter(logging.Filter):
 def setup_logging(
     level: str = "INFO",
     log_file: Optional[str] = None,
+    log_name_prefix: Optional[str] = None,
     log_dir: str = "logs",
     use_color: bool = True,
     enable_file_logging: bool = True,
@@ -130,6 +131,7 @@ def setup_logging(
     Args:
         level: 日志级别 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         log_file: 日志文件名（如果为None，自动生成）
+        log_name_prefix: 日志文件名前缀（用于自动生成文件名时）
         log_dir: 日志目录
         use_color: 是否在控制台使用彩色输出
         enable_file_logging: 是否启用文件日志
@@ -172,7 +174,8 @@ def setup_logging(
         # 生成日志文件名
         if log_file is None:
             timestamp = datetime.now().strftime('%Y%m%d')
-            log_file = f"robot_system_{timestamp}.log"
+            prefix = log_name_prefix if log_name_prefix else "robot_system"
+            log_file = f"{prefix}_{timestamp}.log"
 
         log_path = os.path.join(log_dir, log_file)
 

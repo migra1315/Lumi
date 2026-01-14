@@ -197,16 +197,30 @@ class RobotControlSystem:
         if not self.is_running:
             self.logger.warning("机器人控制系统未在运行")
             return
-        
+
         self.logger.info("停止机器人控制系统...")
         self.is_running = False
-        
-        '''停止通信接收'''
-        self.logger.info("正在关闭客户端...")
+
+        # 1. 先停止定时上报线程（避免继续尝试发送消息）
+        self.logger.info("正在停止定时上报线程...")
+        self._stop_reporting = True
+        if self._report_thread and self._report_thread.is_alive():
+            self._report_thread.join(timeout=3)
+            if self._report_thread.is_alive():
+                self.logger.warning("定时上报线程未能在超时时间内停止")
+            else:
+                self.logger.info("定时上报线程已停止")
+
+        # 2. 停止任务管理器（会自动关闭机器人系统）
+        self.logger.info("正在关闭任务管理器...")
+        self.task_manager.shutdown()
+
+        # 3. 停止 gRPC 通信
+        self.logger.info("正在关闭gRPC客户端...")
 
         if self.client_upload_manager:
             self.client_upload_manager.stop_stream()
-            
+
         if self.server_command_manager:
             self.server_command_manager.stop_stream()
 
@@ -219,9 +233,6 @@ class RobotControlSystem:
 
         self.is_connected = False
         self.logger.info(f"客户端已关闭 - 发送: {self.sent_count} 条消息, 接收: {self.received_count} 条响应")
-
-        '''停止任务管理器（会自动关闭机器人系统）'''
-        self.task_manager.shutdown()
 
         self.logger.info("机器人控制系统已停止")
     
@@ -823,6 +834,7 @@ if __name__ == "__main__":
     # 配置日志（使用统一配置）
     setup_logging(
         level="INFO",
+        log_name_prefix="robot_control_system",
         use_color=True,
         enable_file_logging=True,
         robot_id=123456

@@ -67,7 +67,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         try:
             # 接收客户端消息
             for request in request_iterator:
-                self._handle_client_message(request, client_id)
+                # self._handle_client_message(request, client_id)
                 # 发送响应
                 response = robot_service_pb2.RobotUploadResponse(
                     msg_id=request.msg_id,
@@ -562,7 +562,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             except ValueError:
                 command_type = f"未知类型({request.command_type})"
 
-            logger.info(f"【serverCommand】接收客户端消息: {command_type} (command_id: {request.command_id}, client: {client_id})")
+            # logger.info(f"【serverCommand】接收客户端消息: {command_type} (command_id: {request.command_id}, client: {client_id})")
 
             # 根据消息类型处理
             if request.command_type == robot_service_pb2.ClientMessageType.HEARTBEAT:
@@ -1005,6 +1005,7 @@ if __name__ == '__main__':
     # 配置统一日志系统
     setup_logging(
         level="INFO",
+        log_name_prefix="grpc_test_server",
         use_color=True,
         enable_file_logging=True
     )
