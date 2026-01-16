@@ -17,10 +17,13 @@ from robot.ArmController import ArmController
 try:
     from camera.CameraManager import CameraManager, CameraState
     CAMERA_AVAILABLE = True
-except ImportError as e:
+except Exception as e:
+    # 捕获所有异常，包括ImportError、ModuleNotFoundError和其他可能的错误
     CAMERA_AVAILABLE = False
     CameraManager = None
     CameraState = None
+    import logging
+    logging.getLogger("RobotController").warning(f"相机模块导入失败: {e}")
 
 # 导入环境传感器
 try:
@@ -1015,7 +1018,7 @@ class RobotController():
 
     def _setup_camera(self) -> bool:
         """
-        初始化相机管理器
+        初始化相机管理器（带超时保护）
 
         Returns:
             bool: 初始化是否成功
@@ -1025,32 +1028,56 @@ class RobotController():
             return True
 
         if not CAMERA_AVAILABLE:
-            self.logger.warning("相机模块不可用，请检查 camera/CameraManager.py 是否存在")
+            self.logger.warning("相机模块不可用，请检查 camera/CameraManager.py 是否存在或依赖是否安装(cv2, numpy)")
             return False
 
-        try:
-            self.logger.info("正在初始化相机管理器...")
+        import concurrent.futures
 
-            # 创建相机管理器实例
-            self.camera_manager = CameraManager(self.camera_config)
+        def _init_camera_internal():
+            """在线程中初始化相机"""
+            try:
+                self.logger.info("正在初始化相机管理器...")
 
-            # 启动相机
-            if not self.camera_manager.start():
-                self.logger.error("相机启动失败")
-                self.camera_manager = None
+                # 创建相机管理器实例
+                self.camera_manager = CameraManager(self.camera_config)
+
+                # 启动相机
+                if not self.camera_manager.start():
+                    self.logger.error("相机启动失败")
+                    self.camera_manager = None
+                    return False
+
+                self.logger.info("相机管理器初始化成功")
+                return True
+
+            except Exception as e:
+                self.logger.error(f"初始化相机管理器失败: {e}")
+                if self.camera_manager:
+                    try:
+                        self.camera_manager.stop()
+                    except Exception:
+                        pass
+                    self.camera_manager = None
                 return False
 
-            self.logger.info("相机管理器初始化成功")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"初始化相机管理器失败: {e}")
-            if self.camera_manager:
+        # 使用线程池执行，设置30秒超时保护
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_init_camera_internal)
                 try:
-                    self.camera_manager.stop()
-                except:
-                    pass
-                self.camera_manager = None
+                    return future.result(timeout=30.0)
+                except concurrent.futures.TimeoutError:
+                    self.logger.error("相机初始化超时（30秒），跳过相机功能")
+                    if self.camera_manager:
+                        try:
+                            self.camera_manager.stop()
+                        except Exception:
+                            pass
+                        self.camera_manager = None
+                    return False
+        except Exception as e:
+            self.logger.error(f"相机初始化过程异常: {e}")
+            self.camera_manager = None
             return False
 
     def _shutdown_camera(self):

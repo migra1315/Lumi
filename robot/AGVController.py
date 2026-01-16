@@ -138,9 +138,13 @@ class AGVController:
                 当以”location”调用移动接口时, 此字段值为空
                 当调用巡游接口时，此字段为当前正在前往的点位名称
                 '''
-                if response and response.get('results', {}).get('move_status') == "succeeded":
-                    is_done = True
-                    self.logger.info(f"AGV已到达标记点 {point_name}")
+                if response:
+                    if response.get('results', {}).get('move_status') == "succeeded":
+                        is_done = True
+                        self.logger.info(f"AGV已到达标记点 {point_name}")
+                    elif response.get('results', {}).get('move_status') == "failed":
+                        self.logger.error(f"AGV移动到标记点 {point_name} 失败")
+                        return False
 
             except Exception as e:
                 # TODO: 输出其他状态的idle/suceeded/failed/canceld对应响应
