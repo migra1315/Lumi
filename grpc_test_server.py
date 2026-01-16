@@ -67,7 +67,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         try:
             # 接收客户端消息
             for request in request_iterator:
-                # self._handle_client_message(request, client_id)
+                self._handle_client_message(request, client_id)
                 # 发送响应
                 response = robot_service_pb2.RobotUploadResponse(
                     msg_id=request.msg_id,
@@ -135,7 +135,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             command_type_counter = 0
             
             # 上次发送命令的时间
-            last_send_time = time.time()
+            last_send_time = time.time()-600
 
             # 主循环：定期发送命令并检查客户端消息
             while True:
@@ -151,18 +151,18 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                     pass
 
                 # 如果没有手动命令且启用了自动发送，则定期自动发送
-                if request is None and self.auto_send_enabled and (current_time - last_send_time >= 20):
+                if request is None and self.auto_send_enabled and (current_time - last_send_time >= 600):
                     # 根据计数器决定发送哪种类型的命令
                     command_type = command_type_counter % 4  # 0-3: charge, robot_mode, task, joy_control
 
-                    if command_type == 0:
-                        request = self.create_charge_command()
-                    elif command_type == 1:
-                        request = self.create_robot_mode_command()
-                    elif command_type == 2:
-                        request = self.create_task(log_prefix="【自动发送】")
-                    else:
-                        request = self.create_joy_control_command()
+                    # if command_type == 0:
+                        # request = self.create_charge_command()
+                    # elif command_type == 1:
+                    #     request = self.create_robot_mode_command()
+                    # elif command_type == 2:
+                    request = self.create_task(log_prefix="【自动发送】")
+                    # else:
+                    #     request = self.create_joy_control_command()
 
                     # 更新发送时间和命令类型计数器
                     last_send_time = current_time
@@ -387,17 +387,28 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         if station_list is None:
             station_list = []
             # 创建4个默认测试站点
-            agv_marker_list = ["marker_1", "marker_2", "marker_3","charge_point_1F_6010"]
-            ext_pos_list = [[10, 0, 0, 0], [20, 0, 0, 0], [30, 0, 0, 0], [10, 0, 0, 0]]
+            agv_marker_list = ["marker_1", "marker_2", "marker_3","marker_4","marker_5","charge_point_1F_6010"]
+            ext_pos_list = [[10, 0, 0, 0], 
+                            [20, 0, 0, 0], 
+                            [30, 0, 0, 0], 
+                            [40, 0, 0, 0], 
+                            [50, 0, 0, 0], 
+                            [10, 0, 0, 0]
+                            ]
             robot_pos_list=[[0, 30, 100, 0, 60, -90],
                             [0, 40, 90, 0, 60, -90],
                             [0, 50, 80, 0, 60, -90],
-                            [0, 50, 80, 0, 0, -90]]
+                            [0, 50, 80, 0, 0, -90],
+                            [0, 50, 80, 0, 0, -90],
+                            [0, 50, 80, 0, 0, -90],
+                            ]
             operation_mode_list = [robot_service_pb2.OperationMode.OPERATION_MODE_CAPTURE, 
+                                   robot_service_pb2.OperationMode.OPERATION_MODE_CAPTURE, 
+                                   robot_service_pb2.OperationMode.OPERATION_MODE_CAPTURE, 
                                    robot_service_pb2.OperationMode.OPERATION_MODE_SERVICE, 
                                    robot_service_pb2.OperationMode.OPERATION_MODE_NONE, 
                                    robot_service_pb2.OperationMode.OPERATION_MODE_SERVICE]
-            for i in range(4):
+            for i in range(6):
                 station = self.create_station(
                     station_id=1111 + i,
                     sort=i + 1,
