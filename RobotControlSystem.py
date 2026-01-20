@@ -54,16 +54,6 @@ class RobotControlSystem:
         # 初始化日志
         self.logger = get_logger(__name__)
 
-        # 初始化任务管理器（TaskManager完全管理robot_controller）
-        self.task_manager = TaskManager(self.config, use_mock=use_mock)
-
-        # 注册TaskManager系统回调（统一回调路径：TaskScheduler → TaskManager → RobotControlSystem）
-
-        # 注册新的系统回调
-        self.task_manager.register_system_callback("on_command_status_change", self._handle_command_status_callback)
-        self.task_manager.register_system_callback("on_task_progress", self._handle_task_progress_callback)
-        self.task_manager.register_system_callback("on_operation_result", self._handle_operation_result_callback)
-
         # gRPC相关配置（从config读取，如果没有则使用默认值）
         grpc_config = self.config.get('grpc_config', {})
         self.server_host = grpc_config.get('server_host', 'localhost')
@@ -133,8 +123,8 @@ class RobotControlSystem:
 
             # 启动持久化流
             client_upload_started = self.client_upload_manager.start_stream()
-            # server_command_started = self.server_command_manager.start_with_heartbeat()
-            server_command_started = self.server_command_manager.start_stream()
+            server_command_started = self.server_command_manager.start_with_heartbeat()
+            # server_command_started = self.server_command_manager.start_stream()
             
             if client_upload_started and server_command_started:
                 self.is_connected = True
@@ -175,7 +165,15 @@ class RobotControlSystem:
             return
         
         self.logger.info("启动机器人控制系统...")
-        
+                # 初始化任务管理器（TaskManager完全管理robot_controller）
+        self.task_manager = TaskManager(self.config, use_mock=self.use_mock)
+
+
+        # 注册新的系统回调
+        self.task_manager.register_system_callback("on_command_status_change", self._handle_command_status_callback)
+        self.task_manager.register_system_callback("on_task_progress", self._handle_task_progress_callback)
+        self.task_manager.register_system_callback("on_operation_result", self._handle_operation_result_callback)
+
         
         # 启动通信接收
         if not self._init_grpc_client():
@@ -268,7 +266,8 @@ class RobotControlSystem:
 
             # 触发命令接收回调
             self._trigger_callback("on_command_received", command_envelope.to_dict())
-
+            if cmd_type == CmdType.RESPONSE_CMD:
+                return
             # 特殊处理：模式命令直接更新系统状态
             if cmd_type == CmdType.ROBOT_MODE_CMD:
                 mode_cmd = command_envelope.data_json.get('robot_mode_cmd', {})
@@ -845,7 +844,7 @@ if __name__ == "__main__":
 
     # 创建机器人控制系统
     config = {
-        'robot_id': 123456,
+        'robot_id': 12345,
         'robot_config': {
             'success_rate': 0.95,
             'latency': 10,
@@ -858,9 +857,8 @@ if __name__ == "__main__":
 
         # gRPC 配置
         'grpc_config': {
-            'server_host': 'localhost',      # gRPC 服务器地址
-            'server_port': 50051,            # gRPC 服务器端口
-            # 'server_address': 'localhost:50051',  # 可选：直接指定完整地址
+            'server_host': '192.168.8.93',      # gRPC 服务器地址
+            'server_port': 9898,            # gRPC 服务器端口
             'connection_timeout': 10,        # 连接超时时间（秒）
             'stream_keep_alive_check': 30     # 流保持活跃检查间隔（秒）
         },
@@ -895,7 +893,7 @@ if __name__ == "__main__":
             # RTMP推流配置
             "stream_config": {
                 "enabled": True,              # 是否启用推流
-                "rtmp_url": "rtmp://127.0.0.1/live/robot_123456",  # 推流地址
+                "rtmp_url": "rtmp://192.168.8.93/live/test",  # 推流地址
                 "bitrate": "2000k",           # 视频比特率
                 "maxrate": "2500k",           # 最大比特率
                 "bufsize": "5000k",           # 缓冲区大小
@@ -913,7 +911,7 @@ if __name__ == "__main__":
     
     robot_system = RobotControlSystem(config, 
                                     use_mock = False,
-                                    report = True)
+                                    report = False)
     try:
         # 启动系统
         robot_system.start()

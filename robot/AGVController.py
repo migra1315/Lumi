@@ -3,6 +3,8 @@ import time
 import json
 import socket
 import threading
+import sys 
+sys.path.append('D:\WorkSpace\Lumi')
 from utils.logger_config import get_logger
 import uuid
 
@@ -451,3 +453,12 @@ class AGVController:
 
         self.logger.info("AGV数据接收已停止")
         return True
+    
+if __name__ == '__main__':
+    system_config={
+        "agv_ip": "192.168.10.10",
+        "agv_port": 31001,
+    }
+    agv_controller = AGVController(system_config)
+    status = agv_controller.agv_get_status()
+    print(status)

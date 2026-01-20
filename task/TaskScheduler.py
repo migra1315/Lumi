@@ -706,7 +706,7 @@ class TaskScheduler:
         try:
             data_json = command.data
             set_marker_cmd = data_json.get('set_marker_cmd', {})
-            marker_id = set_marker_cmd.get('marker_id', '')
+            marker_id = set_marker_cmd.get('marker_name', '')
 
             if marker_id:
                 self.logger.info(f"执行设置标记命令: {marker_id}")

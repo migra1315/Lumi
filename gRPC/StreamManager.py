@@ -179,7 +179,7 @@ class BaseStreamManager(ABC):
         try:
             self.request_queue.put(request)
             #TODO 此处仅是放入队列，实际发送由请求生成器负责
-            # self._log_request_info(request)
+            self._log_request_info(request)
             return True
 
         except Exception as e:
