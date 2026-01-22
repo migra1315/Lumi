@@ -15,24 +15,38 @@ compose_dir = os.path.dirname(current_dir)
 # 将compose目录添加到sys.path
 sys.path.append(compose_dir)
 try:
-    # 方法1：直接导入.so文件
+    # 方法1：直接导入
     import sys
     import os
-    
-    # 将JAKA_SDK_LINUX目录添加到系统路径
-    sdk_path = os.path.join(compose_dir, './utils/JAKA_SDK_WINDOWS')
+
+    # 将JAKA_SDK_WINDOWS目录添加到系统路径
+    sdk_path = os.path.join(compose_dir, 'utils', 'JAKA_SDK_WINDOWS')
     sys.path.append(sdk_path)
-    
-    # 尝试直接导入jkrc.so
+
+    # Python 3.8+ 在 Windows 上需要显式添加 DLL 搜索路径
+    if sys.platform == 'win32' and hasattr(os, 'add_dll_directory'):
+        os.add_dll_directory(sdk_path)
+
+    # 尝试直接导入jkrc
     import jkrc
-    print("[INFO] 成功导入jkrc.so")
+    print("[INFO] 成功导入jkrc")
 except Exception as e1:
     try:
         # 方法2：作为模块导入
+        # 先添加 DLL 目录
+        sdk_path_alt = os.path.join(compose_dir, 'utils', 'JAKA_SDK_WINDOWS')
+        if sys.platform == 'win32' and hasattr(os, 'add_dll_directory'):
+            os.add_dll_directory(sdk_path_alt)
         from utils.JAKA_SDK_WINDOWS import jkrc
         print("[INFO] 成功从JAKA_SDK_WINDOWS模块导入jkrc")
     except Exception as e2:
-        raise NameError(f"JAKA SDK path error! 无法导入jkrc模块: {str(e1)} / {str(e2)}")
+        raise NameError(
+            f"JAKA SDK path error! 无法导入jkrc模块: {str(e1)} / {str(e2)}\n"
+            f"请确保:\n"
+            f"1. SDK路径正确: {sdk_path}\n"
+            f"2. 已安装 Visual C++ Redistributable 2015-2022\n"
+            f"3. Python 版本与 SDK 编译版本匹配 (通常是 Python 3.8/3.9)"
+        )
 
 class JAKA():
     # parameters
