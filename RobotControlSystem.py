@@ -123,8 +123,8 @@ class RobotControlSystem:
 
             # 启动持久化流
             client_upload_started = self.client_upload_manager.start_stream()
-            server_command_started = self.server_command_manager.start_with_heartbeat()
-            # server_command_started = self.server_command_manager.start_stream()
+            # server_command_started = self.server_command_manager.start_with_heartbeat()
+            server_command_started = self.server_command_manager.start_stream()
             
             if client_upload_started and server_command_started:
                 self.is_connected = True
@@ -515,8 +515,17 @@ class RobotControlSystem:
             return
 
         try:
+            from dataModels.CommandModels import CmdType
+            from dataModels.UnifiedCommand import CommandStatus
+
             # 发送命令状态更新消息
             self._send_command_status_update(command)
+
+            # 特殊处理：SET_MARKER_CMD 成功时发送位置信息响应
+            if (command.cmd_type == CmdType.SET_MARKER_CMD and
+                command.status == CommandStatus.COMPLETED):
+                self._send_set_marker_response(command)
+
         except Exception as e:
             self.logger.error(f"发送命令状态更新失败: {e}")
 
@@ -609,6 +618,51 @@ class RobotControlSystem:
         except Exception as e:
             self.logger.error(f"发送命令状态更新异常: {e}")
 
+    def _send_set_marker_response(self, command):
+        """发送设置标记点响应
+
+        当 SET_MARKER_CMD 执行成功后，回传当前位置信息
+
+        Args:
+            command: UnifiedCommand对象
+        """
+        try:
+            import gRPC.RobotService_pb2 as robot_pb2
+
+            # 从 TaskManager 获取当前位置信息
+            robot_status = self.task_manager.get_robot_status()
+
+            # 构建 PositionInfo
+            position_info = robot_pb2.PositionInfo(
+                AGVPositionInfo=[
+                    robot_status.get('agv_status_x', 0.0),
+                    robot_status.get('agv_status_y', 0.0),
+                    robot_status.get('agv_status_theta', 0.0)
+                ],
+                ARMPositionInfo=robot_status.get('robot_joints', [0.0]*6),
+                EXTPositionInfo=robot_status.get('ext_axis', [0.0]*4)
+            )
+
+            # 创建 ClientStreamMessage（先创建基础字段）
+            client_msg = robot_pb2.ClientStreamMessage(
+                command_id=int(command.command_id) if command.command_id.isdigit() else abs(hash(command.command_id)) % (2**31),
+                command_time=int(time.time() * 1000),
+                command_type=robot_pb2.ClientMessageType.SET_MARKER_RESPONSE,
+                robot_id=self.robot_id
+            )
+
+            # 使用 CopyFrom 设置 oneof 字段中的嵌套消息
+            client_msg.position_info.CopyFrom(position_info)
+
+            # 通过 serverCommand 流发送
+            if self.server_command_manager and self.server_command_manager.is_stream_active:
+                self.server_command_manager.send_message(client_msg)
+                self.logger.info(f"SET_MARKER_RESPONSE 已发送: command_id={command.command_id}")
+            else:
+                self.logger.warning("serverCommand流未激活，无法发送SET_MARKER_RESPONSE")
+
+        except Exception as e:
+            self.logger.error(f"发送SET_MARKER_RESPONSE异常: {e}")
 
     def _send_task_progress_update(self):
         """发送任务进度更新（简化版 - 从TaskManager获取快照）"""
@@ -857,14 +911,16 @@ if __name__ == "__main__":
 
         # gRPC 配置
         'grpc_config': {
-            'server_host': '192.168.8.93',      # gRPC 服务器地址
-            'server_port': 9898,            # gRPC 服务器端口
+            # 'server_host': '192.168.8.93',      # gRPC 服务器地址
+            # 'server_port': 9898,            # gRPC 服务器端口
+            'server_host': 'localhost',      # gRPC 服务器地址
+            'server_port': 50051,            # gRPC 服务器端口
             'connection_timeout': 10,        # 连接超时时间（秒）
             'stream_keep_alive_check': 30     # 流保持活跃检查间隔（秒）
         },
 
         # 环境传感器配置
-        "env_sensor_enabled": True,  # 设置为 False，避免没有传感器时报错
+        "env_sensor_enabled": False,  # 设置为 False，避免没有传感器时报错
         "env_sensor_config": {
             "port": "COM4",          # 串口
             "baudrate": 4800,        # 波特率
@@ -875,7 +931,7 @@ if __name__ == "__main__":
         # 相机配置
         "camera_config": {
             # 基础配置
-            "camera_enabled": True,           # 是否启用相机
+            "camera_enabled": False,           # 是否启用相机
             "camera_type": "orbbec",          # 相机类型：orbbec, mock
 
             # 分辨率配置

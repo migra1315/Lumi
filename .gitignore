@@ -20,3 +20,10 @@ tmpclaude-1782-cwd
 utils/ffmpeg-2026-01-12-git-21a3e44fbe-full_build/*
 received_images/*
 utils/mediamtx_v1.15.6_windows_amd64/*
+deploy/install_service.bat
+deploy/install.bat
+deploy/LumiRobot.xml
+deploy/README.txt
+deploy/start.bat
+deploy/status.bat
+deploy/uninstall_service.bat

@@ -279,6 +279,25 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         logger.info(f"【手动触发】创建摇杆控制命令: {self.command_counter}")
         return request
 
+    def create_set_marker_command(self, marker_name: str="test"):
+        """创建设置导航点命令"""
+        current_time = time.time()
+        self.command_counter += 1
+
+        set_marker_cmd = robot_service_pb2.SetMarkerCommand(
+            marker_name=marker_name
+        )
+
+        request = robot_service_pb2.ServerStreamMessage(
+            command_id=self.command_counter,
+            command_time=int(current_time * 1000),
+            command_type=robot_service_pb2.CmdType.SET_MARKER_CMD,
+            robot_id=12345
+        )
+        request.set_marker_cmd.CopyFrom(set_marker_cmd)
+
+        logger.info(f"【手动触发】创建设置导航点命令: {self.command_counter}, marker={marker_name}")
+        return request
     # ==================== Station和Task创建方法 ====================
 
     def create_station(self,
@@ -586,6 +605,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             elif request.command_type == robot_service_pb2.ClientMessageType.SET_MARKER_RESPONSE:
                 if request.HasField('position_info'):
                     logger.info(f"【serverCommand】收到设置标记点响应")
+                    print(request.position_info)
 
             elif request.command_type == robot_service_pb2.ClientMessageType.COMMAND_STATUS_UPDATE:
                 if request.HasField('command_status'):
@@ -874,6 +894,11 @@ def keyboard_input_handler(servicer, stop_event):
             elif key == '5':
                 logger.info("【键盘输入】触发: 位置校正控制命令 (POSITION_ADJUST_CMD)")
                 cmd = servicer.create_position_adjust_command()
+                servicer.manual_command_queue.put(cmd)
+
+            elif key == '6':
+                logger.info("【键盘输入】触发: 设置标记命令 (SET_MARKER_CMD)")
+                cmd = servicer.create_set_marker_command()
                 servicer.manual_command_queue.put(cmd)
 
             elif key == 'a':
