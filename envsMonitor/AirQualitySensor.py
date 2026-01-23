@@ -90,7 +90,7 @@ class AirQualitySensor:
         
         # 发送请求
         self.ser.write(request)
-        time.sleep(0.1)  # 等待设备响应
+        time.sleep(0.2)  # 等待设备响应
         
         # 接收响应
         response = self.ser.read(1024)

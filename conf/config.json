@@ -1,0 +1,57 @@
+{
+    "robot_id": 12345,
+    "robot_config": {
+        "success_rate": 0.95,
+        "latency": 10,
+        "max_error_rate": 0.0,
+        "robot_ip": "192.168.10.90",
+        "ext_base_url": "http://192.168.10.90:5000/api/extaxis",
+        "agv_ip": "192.168.10.10",
+        "agv_port": 31001
+    },
+    "grpc_config": {
+        "server_host": "localhost",
+        "server_port": 50051,
+        "connection_timeout": 10,
+        "stream_keep_alive_check": 30
+    },
+    "env_sensor_enabled": true,
+    "env_sensor_config": {
+        "port": "COM4",
+        "baudrate": 4800,
+        "address": 1,
+        "read_interval": 5
+    },
+    "camera_config": {
+        "camera_enabled": false,
+        "camera_type": "orbbec",
+        "resolution": {
+            "width": 1280,
+            "height": 720
+        },
+        "fps": 30,
+        "capture_count": 2,
+        "capture_interval": 0.5,
+        "capture_quality": 95,
+        "stream_config": {
+            "enabled": true,
+            "rtmp_url": "rtmp://192.168.8.93/live/test",
+            "bitrate": "2000k",
+            "maxrate": "2500k",
+            "bufsize": "5000k",
+            "preset": "ultrafast",
+            "reconnect_interval": 5,
+            "max_reconnect_attempts": 10
+        },
+        "frame_buffer_size": 3,
+        "warmup_frames": 10
+    },
+    "use_mock": false,
+    "report": true,
+    "log_config": {
+        "level": "INFO",
+        "log_name_prefix": "robot_control_system",
+        "use_color": true,
+        "enable_file_logging": true
+    }
+}

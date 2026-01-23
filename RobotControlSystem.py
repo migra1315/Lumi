@@ -27,11 +27,6 @@ from dataModels.MessageModels import BatteryInfo, EnvironmentInfo, MessageEnvelo
 from dataModels.CommandModels import CmdType, CommandEnvelope, TaskCmd,create_cmd_envelope
 from dataModels.TaskModels import OperationConfig, OperationMode, StationConfig, Station
 
-# 只在不使用mock时导入真实控制器
-RobotController = None
-
-DBG = True
-
 class RobotControlSystem:
     """机器人控制系统主类"""
     
@@ -1000,101 +995,68 @@ class RobotControlSystem:
         self.stop()
         self.logger.info("机器人控制系统已关闭")
 
-# 测试代码
+def load_config(config_path: str) -> Dict[str, Any]:
+    """从JSON文件加载配置
+
+    Args:
+        config_path: 配置文件路径
+
+    Returns:
+        配置字典
+
+    Raises:
+        FileNotFoundError: 配置文件不存在
+        json.JSONDecodeError: 配置文件格式错误
+    """
+    import os
+
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"配置文件不存在: {config_path}")
+
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+
+    return config
+
+
 if __name__ == "__main__":
+    import os
+
+    # 配置文件路径
+    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "conf", "config.json")
+
+    # 加载配置
+    config = load_config(CONFIG_PATH)
+
     # 导入并配置统一日志系统
     from utils.logger_config import setup_logging, log_system_info
 
-    # 配置日志（使用统一配置）
+    # 从配置读取日志设置
+    log_config = config.get('log_config', {})
     setup_logging(
-        level="INFO",
-        log_name_prefix="robot_control_system",
-        use_color=True,
-        enable_file_logging=True,
-        robot_id=123456
+        level=log_config.get('level', 'INFO'),
+        log_name_prefix=log_config.get('log_name_prefix', 'robot_control_system'),
+        use_color=log_config.get('use_color', True),
+        enable_file_logging=log_config.get('enable_file_logging', True),
+        robot_id=config.get('robot_id', 123456)
     )
 
     # 记录系统信息
     log_system_info()
 
     # 创建机器人控制系统
-    config = {
-        'robot_id': 12345,
-        'robot_config': {
-            'success_rate': 0.95,
-            'latency': 10,
-            'max_error_rate': 0.0,
-            "robot_ip": "192.168.10.90",
-            "ext_base_url": "http://192.168.10.90:5000/api/extaxis",
-            "agv_ip": "192.168.10.10",
-            "agv_port": 31001,
-        },
+    robot_system = RobotControlSystem(
+        config=config,
+        use_mock=config.get('use_mock', True),
+        report=config.get('report', True)
+    )
 
-        # gRPC 配置
-        'grpc_config': {
-            # 'server_host': '192.168.8.93',      # gRPC 服务器地址
-            # 'server_port': 9898,            # gRPC 服务器端口
-            'server_host': 'localhost',      # gRPC 服务器地址
-            'server_port': 50051,            # gRPC 服务器端口
-            'connection_timeout': 10,        # 连接超时时间（秒）
-            'stream_keep_alive_check': 30     # 流保持活跃检查间隔（秒）
-        },
-
-        # 环境传感器配置
-        "env_sensor_enabled": True,  # 设置为 False，避免没有传感器时报错
-        "env_sensor_config": {
-            "port": "COM4",          # 串口
-            "baudrate": 4800,        # 波特率
-            "address": 0x01,         # 设备地址
-            "read_interval": 5       # 读取间隔（秒）
-        },
-
-        # 相机配置
-        "camera_config": {
-            # 基础配置
-            "camera_enabled": False,           # 是否启用相机
-            "camera_type": "orbbec",          # 相机类型：orbbec, mock
-
-            # 分辨率配置
-            "resolution": {
-                "width": 1280,
-                "height": 720
-            },
-            "fps": 30,                        # 采集帧率
-
-            # 抓拍配置
-            "capture_count": 2,               # 每次拍照采集图像数量
-            "capture_interval": 0.5,          # 两次拍摄间隔（秒）
-            "capture_quality": 95,            # JPEG压缩质量 (1-100)
-
-            # RTMP推流配置
-            "stream_config": {
-                "enabled": True,              # 是否启用推流
-                "rtmp_url": "rtmp://192.168.8.93/live/test",  # 推流地址
-                "bitrate": "2000k",           # 视频比特率
-                "maxrate": "2500k",           # 最大比特率
-                "bufsize": "5000k",           # 缓冲区大小
-                "preset": "ultrafast",        # 编码预设
-                "reconnect_interval": 5,      # 断线重连间隔（秒）
-                "max_reconnect_attempts": 10  # 最大重连次数
-            },
-
-            # 高级配置
-            "frame_buffer_size": 3,           # 帧缓冲区大小
-            "warmup_frames": 10               # 启动预热帧数
-        }
-
-    }
-    
-    robot_system = RobotControlSystem(config, 
-                                    use_mock = False,
-                                    report = True)
     try:
         # 启动系统
         robot_system.start()
         # 运行一段时间
         time.sleep(6000)
-        
+
     except KeyboardInterrupt:
         print("\n收到中断信号，关闭系统...")
     finally:
