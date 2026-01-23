@@ -286,8 +286,7 @@ class TaskScheduler:
             else:
                 command.error_message = f"任务部分失败: {success_count}/{total} 个站点成功"
 
-        # 更新数据库中的任务状态
-        self.database.update_task_status(task.task_id, task_status)
+        # 任务状态已在 unified_commands 表中通过 _command_execution_done 回调更新
 
         # 触发任务完成或失败回调
         if task_status in [TaskStatus.COMPLETED, TaskStatus.PARTIAL_COMPLETED]:
@@ -371,8 +370,6 @@ class TaskScheduler:
             if attempt > 0:
                 station.retry_count = attempt
                 station.status = StationTaskStatus.RETRYING
-                self.database.add_station_retry_count(station_id)
-                self.database.update_station_task_status(station_id, StationTaskStatus.RETRYING)
 
                 # 记录重试日志
                 self.database.log_task_action(
@@ -419,13 +416,6 @@ class TaskScheduler:
         station.completed_at = datetime.now()
         station.error_message = reason
 
-        # 更新数据库状态
-        self.database.update_station_task_status(
-            station_id,
-            StationTaskStatus.FAILED,
-            reason
-        )
-
         # 记录失败日志
         self.database.log_task_action(
             self.current_task.task_id,
@@ -450,7 +440,6 @@ class TaskScheduler:
             station.status = StationTaskStatus.RUNNING
             station.execution_phase = StationExecutionPhase.PENDING
             station.started_at = datetime.now()
-            self.database.update_station_task_status(station_id, StationTaskStatus.RUNNING)
 
             # 记录执行日志
             self.database.log_task_action(
@@ -562,7 +551,6 @@ class TaskScheduler:
             station.status = StationTaskStatus.COMPLETED
             station.progress_detail = "站点任务完成"
             station.completed_at = datetime.now()
-            self.database.update_station_task_status(station_id, StationTaskStatus.COMPLETED)
 
             # 记录执行日志
             self.database.log_task_action(

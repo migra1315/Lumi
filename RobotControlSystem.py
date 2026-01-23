@@ -491,12 +491,35 @@ class RobotControlSystem:
 
 
     def _handle_clientUpload_response(self, response):
-        """处理从gRPC服务器收到的响应/命令"""
+        """处理从gRPC服务器收到的响应/命令（clientUpload流的响应）"""
         try:
-            # TODO: 这里需要根据实际的响应格式来解析命令
-            # 目前只是记录日志
-            self.logger.info(f"处理gRPC响应: {response}")
-            
+            # 保存响应到数据库
+            msg_id = str(uuid.uuid4())
+            msg_time = int(time.time() * 1000)
+
+            # 根据响应类型提取数据
+            response_data = {}
+            msg_type = "UPLOAD_RESPONSE"
+
+            # 尝试从 protobuf 响应中提取信息
+            if hasattr(response, 'code'):
+                response_data['code'] = response.code
+            if hasattr(response, 'info'):
+                response_data['info'] = response.info
+            if hasattr(response, 'msg_id'):
+                response_data['msg_id'] = response.msg_id
+
+            # 保存到 client_upload_received 表
+            self.task_manager.database.save_client_upload_received(
+                msg_id=msg_id,
+                msg_time=msg_time,
+                msg_type=msg_type,
+                robot_id=str(self.robot_id),
+                data_json=json.dumps(response_data, ensure_ascii=False)
+            )
+
+            self.logger.debug(f"处理gRPC响应: {response}")
+
         except Exception as e:
             self.logger.error(f"处理gRPC响应失败: {e}")
 
@@ -556,6 +579,28 @@ class RobotControlSystem:
 
     # ==================== 新增消息发送方法 ====================
 
+    def _save_server_command_message(self, msg_id: str, msg_time: int, msg_type: str, data: dict, command_id: str = None):
+        """保存通过 serverCommand 流发送的消息到数据库
+
+        Args:
+            msg_id: 消息唯一标识
+            msg_time: 消息时间戳（毫秒）
+            msg_type: 消息类型
+            data: 消息数据字典
+            command_id: 关联的命令ID（可选）
+        """
+        try:
+            self.task_manager.database.save_sent_message(
+                msg_id=msg_id,
+                msg_time=msg_time,
+                msg_type=msg_type,
+                robot_id=str(self.robot_id),
+                data_json=json.dumps(data, ensure_ascii=False),
+                status='sent'
+            )
+        except Exception as e:
+            self.logger.error(f"保存 serverCommand 消息到数据库失败: {e}")
+
     def _send_command_status_update(self, command):
         """发送命令状态更新
 
@@ -612,6 +657,23 @@ class RobotControlSystem:
             if self.server_command_manager and self.server_command_manager.is_stream_active:
                 self.server_command_manager.send_message(client_msg)
                 self.logger.info(f"命令状态更新已发送: {command.command_id} -> {command.status.value}")
+
+                # 保存发送的消息到数据库
+                msg_id = str(uuid.uuid4())
+                msg_time = int(time.time() * 1000)
+                self._save_server_command_message(
+                    msg_id=msg_id,
+                    msg_time=msg_time,
+                    msg_type="COMMAND_STATUS_UPDATE",
+                    data={
+                        "command_id": command.command_id,
+                        "command_type": command.cmd_type.value,
+                        "status": command.status.value,
+                        "message": command.error_message or f"命令状态: {command.status.value}",
+                        "retry_count": command.retry_count
+                    },
+                    command_id=command.command_id
+                )
             else:
                 self.logger.warning("serverCommand流未激活，无法发送命令状态更新")
 
@@ -658,6 +720,26 @@ class RobotControlSystem:
             if self.server_command_manager and self.server_command_manager.is_stream_active:
                 self.server_command_manager.send_message(client_msg)
                 self.logger.info(f"SET_MARKER_RESPONSE 已发送: command_id={command.command_id}")
+
+                # 保存发送的消息到数据库
+                msg_id = str(uuid.uuid4())
+                msg_time = int(time.time() * 1000)
+                self._save_server_command_message(
+                    msg_id=msg_id,
+                    msg_time=msg_time,
+                    msg_type="SET_MARKER_RESPONSE",
+                    data={
+                        "command_id": command.command_id,
+                        "agv_position": [
+                            robot_status.get('agv_status_x', 0.0),
+                            robot_status.get('agv_status_y', 0.0),
+                            robot_status.get('agv_status_theta', 0.0)
+                        ],
+                        "arm_position": robot_status.get('robot_joints', [0.0]*6),
+                        "ext_position": robot_status.get('ext_axis', [0.0]*4)
+                    },
+                    command_id=command.command_id
+                )
             else:
                 self.logger.warning("serverCommand流未激活，无法发送SET_MARKER_RESPONSE")
 
@@ -751,6 +833,25 @@ class RobotControlSystem:
             if self.server_command_manager and self.server_command_manager.is_stream_active:
                 self.server_command_manager.send_message(client_msg)
                 self.logger.info(f"任务进度更新已发送: {task.task_id} - {completed_stations}/{total_stations}")
+
+                # 保存发送的消息到数据库
+                msg_id = str(uuid.uuid4())
+                msg_time = int(time.time() * 1000)
+                self._save_server_command_message(
+                    msg_id=msg_id,
+                    msg_time=msg_time,
+                    msg_type="TASK_PROGRESS_UPDATE",
+                    data={
+                        "task_id": task.task_id,
+                        "task_name": task.task_name,
+                        "task_status": task.status.value,
+                        "total_stations": total_stations,
+                        "completed_stations": completed_stations,
+                        "failed_stations": failed_stations,
+                        "current_station": current_station_info
+                    },
+                    command_id=command_id
+                )
             else:
                 self.logger.warning("serverCommand流未激活，无法发送任务进度更新")
 
@@ -839,6 +940,26 @@ class RobotControlSystem:
             if self.server_command_manager and self.server_command_manager.is_stream_active:
                 self.server_command_manager.send_message(client_msg)
                 self.logger.info(f"操作结果已发送: {operation_mode.value} -> {result.get('success')}")
+
+                # 保存发送的消息到数据库
+                msg_id = str(uuid.uuid4())
+                msg_time = int(time.time() * 1000)
+                self._save_server_command_message(
+                    msg_id=msg_id,
+                    msg_time=msg_time,
+                    msg_type="OPERATION_RESULT",
+                    data={
+                        "task_id": task_id,
+                        "station_id": station_id,
+                        "operation_mode": operation_mode.value if operation_mode else "NONE",
+                        "success": result.get('success', False),
+                        "message": result.get('message', ''),
+                        "device_id": device_id,
+                        "door_ip": door_ip,
+                        "duration": result.get('duration', 0.0)
+                    },
+                    command_id=msg_command_id
+                )
             else:
                 self.logger.warning("serverCommand流未激活，无法发送操作结果")
 
@@ -920,7 +1041,7 @@ if __name__ == "__main__":
         },
 
         # 环境传感器配置
-        "env_sensor_enabled": False,  # 设置为 False，避免没有传感器时报错
+        "env_sensor_enabled": True,  # 设置为 False，避免没有传感器时报错
         "env_sensor_config": {
             "port": "COM4",          # 串口
             "baudrate": 4800,        # 波特率
@@ -967,7 +1088,7 @@ if __name__ == "__main__":
     
     robot_system = RobotControlSystem(config, 
                                     use_mock = False,
-                                    report = False)
+                                    report = True)
     try:
         # 启动系统
         robot_system.start()

@@ -20,41 +20,6 @@ class TaskDatabase:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
-            # 创建任务主表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS tasks (
-                    task_id TEXT PRIMARY KEY,
-                    task_name TEXT NOT NULL,
-                    robot_mode TEXT NOT NULL,
-                    status TEXT DEFAULT 'pending',
-                    generate_time TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    started_at TIMESTAMP,
-                    completed_at TIMESTAMP,
-                    error_message TEXT,
-                    metadata_json TEXT DEFAULT '{}'
-                )
-            ''')
-            
-            # 创建站点任务表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS station_tasks (
-                    station_id TEXT PRIMARY KEY,
-                    task_id TEXT NOT NULL,
-                    station_config_json TEXT NOT NULL,
-                    status TEXT DEFAULT 'pending',
-                    sort INTEGER NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    started_at TIMESTAMP,
-                    completed_at TIMESTAMP,
-                    retry_count INTEGER DEFAULT 0,
-                    max_retries INTEGER DEFAULT 3,
-                    error_message TEXT,
-                    metadata_json TEXT DEFAULT '{}',
-                    FOREIGN KEY (task_id) REFERENCES tasks (task_id)
-                )
-            ''')
-            
             # 创建任务执行历史表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS task_history (
@@ -69,9 +34,37 @@ class TaskDatabase:
                 )
             ''')
             
-            # 创建机器人接收消息表
+            # ==================== 四表消息架构 ====================
+
+            # 1. client_upload_sent - clientUpload 流发送的消息（机器人上传的状态、环境数据）
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS robot_received_messages (
+                CREATE TABLE IF NOT EXISTS client_upload_sent (
+                    msg_id TEXT PRIMARY KEY,
+                    msg_time INTEGER NOT NULL,
+                    msg_type TEXT NOT NULL,
+                    robot_id TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    status TEXT DEFAULT 'sent',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 2. client_upload_received - clientUpload 流接收的响应（服务器对上传的响应）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS client_upload_received (
+                    msg_id TEXT PRIMARY KEY,
+                    msg_time INTEGER NOT NULL,
+                    msg_type TEXT NOT NULL,
+                    robot_id TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    processed BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 3. server_command_received - serverCommand 流接收的命令（服务器下发的命令）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS server_command_received (
                     msg_id TEXT PRIMARY KEY,
                     msg_time INTEGER NOT NULL,
                     cmd_type TEXT NOT NULL,
@@ -81,16 +74,17 @@ class TaskDatabase:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
-            # 创建机器人发送消息表
+
+            # 4. server_command_sent - serverCommand 流发送的响应（机器人发送的命令响应）
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS robot_sent_messages (
+                CREATE TABLE IF NOT EXISTS server_command_sent (
                     msg_id TEXT PRIMARY KEY,
                     msg_time INTEGER NOT NULL,
                     msg_type TEXT NOT NULL,
                     robot_id TEXT NOT NULL,
+                    command_id TEXT,
                     data_json TEXT NOT NULL,
-                    status TEXT DEFAULT 'pending',
+                    status TEXT DEFAULT 'sent',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -170,22 +164,42 @@ class TaskDatabase:
                 )
             ''')
 
-            # 为现有表添加索引（优化）
+            # 四表消息架构索引
             cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_task_status
-                ON tasks(status)
+                CREATE INDEX IF NOT EXISTS idx_client_upload_sent_time
+                ON client_upload_sent(msg_time)
             ''')
             cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_task_created
-                ON tasks(created_at)
+                CREATE INDEX IF NOT EXISTS idx_client_upload_sent_type
+                ON client_upload_sent(msg_type)
             ''')
             cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_received_processed
-                ON robot_received_messages(processed, msg_time)
+                CREATE INDEX IF NOT EXISTS idx_client_upload_received_time
+                ON client_upload_received(msg_time)
             ''')
             cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_sent_status
-                ON robot_sent_messages(status, msg_time)
+                CREATE INDEX IF NOT EXISTS idx_client_upload_received_processed
+                ON client_upload_received(processed)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_server_command_received_time
+                ON server_command_received(msg_time)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_server_command_received_processed
+                ON server_command_received(processed)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_server_command_sent_time
+                ON server_command_sent(msg_time)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_server_command_sent_type
+                ON server_command_sent(msg_type)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_server_command_sent_command_id
+                ON server_command_sent(command_id)
             ''')
 
             conn.commit()
@@ -204,121 +218,6 @@ class TaskDatabase:
         finally:
             conn.close()
     
-    def save_task(self, task: Task):
-        """保存任务到数据库"""
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                
-                # 保存任务主表
-                cursor.execute('''
-                    INSERT OR REPLACE INTO tasks 
-                    (task_id, task_name, robot_mode, status, generate_time, 
-                     created_at, started_at, completed_at, error_message, metadata_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    task.task_id,
-                    task.task_name,
-                    task.robot_mode.value,
-                    task.status.value,
-                    task.generate_time,
-                    task.created_at,
-                    task.started_at,
-                    task.completed_at,
-                    task.error_message,
-                    json.dumps(task.metadata)
-                ))
-                
-                # 保存站点任务
-                for station in task.station_list:
-                    cursor.execute('''
-                        INSERT OR REPLACE INTO station_tasks 
-                        (station_id, task_id, station_config_json, status, sort, 
-                         created_at, started_at, completed_at, retry_count, max_retries, 
-                         error_message, metadata_json)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        f"{task.task_id}_{station.station_config.station_id}",
-                        task.task_id,
-                        json.dumps(station.station_config.to_dict()),
-                        station.status.value,
-                        station.station_config.sort,
-                        station.created_at,
-                        station.started_at,
-                        station.completed_at,
-                        station.retry_count,
-                        station.max_retries,
-                        station.error_message,
-                        json.dumps(station.metadata)
-                    ))
-        except Exception as e:
-            self.logger.error(f"保存任务失败: {e}")
-            raise
-    
-    def update_task_status(self, task_id: str, status: TaskStatus, error_message: str = None):
-        """更新任务状态"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            update_fields = ["status = ?"]
-            params = [status.value]
-            
-            if status == TaskStatus.RUNNING:
-                update_fields.append("started_at = ?")
-                params.append(datetime.now())
-            elif status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED]:
-                update_fields.append("completed_at = ?")
-                params.append(datetime.now())
-            
-            if error_message:
-                update_fields.append("error_message = ?")
-                params.append(error_message)
-            
-            params.append(task_id)
-            
-            cursor.execute(f'''
-                UPDATE tasks 
-                SET {', '.join(update_fields)}
-                WHERE task_id = ?
-            ''', params)
-    
-    def update_station_task_status(self, station_id: str, status: StationTaskStatus, error_message: str = None):
-        """更新站点任务状态"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            update_fields = ["status = ?"]
-            params = [status.value]
-            
-            if status == StationTaskStatus.RUNNING:
-                update_fields.append("started_at = ?")
-                params.append(datetime.now())
-            elif status in [StationTaskStatus.COMPLETED, StationTaskStatus.FAILED, StationTaskStatus.SKIPPED]:
-                update_fields.append("completed_at = ?")
-                params.append(datetime.now())
-            
-            if error_message:
-                update_fields.append("error_message = ?")
-                params.append(error_message)
-            
-            params.append(station_id)
-            
-            cursor.execute(f'''
-                UPDATE station_tasks 
-                SET {', '.join(update_fields)}
-                WHERE station_id = ?
-            ''', params)
-    
-    def add_station_retry_count(self, station_id: str):
-        """增加站点任务重试次数"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE station_tasks 
-                SET retry_count = retry_count + 1 
-                WHERE station_id = ?
-            ''', (station_id,))
-    
     def log_task_action(self, task_id: str, station_id: str, 
                        action: str, status: str, details: str = None):
         """记录任务执行日志"""
@@ -329,149 +228,251 @@ class TaskDatabase:
                 (task_id, station_id, action, status, details)
                 VALUES (?, ?, ?, ?, ?)
             ''', (task_id, station_id, action, status, details))
-    
-    def get_pending_tasks(self) -> List[Dict[str, Any]]:
-        """获取待处理任务"""
+
+    # ==================== 四表消息架构方法 ====================
+
+    # ---------- client_upload_sent 相关方法 ----------
+
+    def save_client_upload_sent(self, msg_id: str, msg_time: int, msg_type: str,
+                                 robot_id: str, data_json: str, status: str = 'sent'):
+        """保存 clientUpload 流发送的消息（机器人上传的状态、环境数据）"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT * FROM tasks 
-                WHERE status IN ('pending')
-                ORDER BY created_at ASC
-            ''')
-            return [dict(row) for row in cursor.fetchall()]
-    
-    def get_task_by_id(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """根据ID获取任务"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM tasks 
-                WHERE task_id = ?
-            ''', (task_id,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
-    
-    def get_station_tasks(self, task_id: str) -> List[Dict[str, Any]]:
-        """获取任务的所有站点任务"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM station_tasks 
-                WHERE task_id = ?
-                ORDER BY sort ASC
-            ''', (task_id,))
-            return [dict(row) for row in cursor.fetchall()]
-    
-    # ==================== 机器人消息相关方法 ====================
-    def save_received_message(self, msg_id: str, msg_time: int, cmd_type: str, robot_id: str, data_json: str):
-        """保存机器人接收的消息"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO robot_received_messages 
-                (msg_id, msg_time, cmd_type, robot_id, data_json)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (msg_id, msg_time, cmd_type, robot_id, data_json))
-    
-    def mark_message_processed(self, msg_id: str):
-        """标记消息已处理"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE robot_received_messages 
-                SET processed = TRUE 
-                WHERE msg_id = ?
-            ''', (msg_id,))
-    
-    def get_unprocessed_messages(self) -> List[Dict[str, Any]]:
-        """获取未处理的消息"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM robot_received_messages 
-                WHERE processed = FALSE
-                ORDER BY msg_time ASC
-            ''')
-            return [dict(row) for row in cursor.fetchall()]
-    
-    def save_sent_message(self, msg_id: str, msg_time: int, msg_type: str, robot_id: str, data_json: str, status: str = 'pending'):
-        """保存机器人发送的消息"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO robot_sent_messages 
+                INSERT OR REPLACE INTO client_upload_sent
                 (msg_id, msg_time, msg_type, robot_id, data_json, status)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (msg_id, msg_time, msg_type, robot_id, data_json, status))
-    
-    def update_sent_message_status(self, msg_id: str, status: str):
-        """更新发送消息的状态"""
+
+    def get_client_upload_sent(self, msg_type: str = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """获取 clientUpload 流发送的消息"""
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
+                query = 'SELECT * FROM client_upload_sent'
+                params = []
+
+                if msg_type is not None:
+                    query += ' WHERE msg_type = ?'
+                    params.append(msg_type)
+
+                query += ' ORDER BY msg_time DESC LIMIT ?'
+                params.append(limit)
+
+                cursor.execute(query, params)
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"获取 clientUpload 发送消息失败: {e}")
+            raise
+
+    # ---------- client_upload_received 相关方法 ----------
+
+    def save_client_upload_received(self, msg_id: str, msg_time: int, msg_type: str,
+                                     robot_id: str, data_json: str):
+        """保存 clientUpload 流接收的响应（服务器对上传的响应）"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO client_upload_received
+                (msg_id, msg_time, msg_type, robot_id, data_json)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (msg_id, msg_time, msg_type, robot_id, data_json))
+
+    def get_client_upload_received(self, processed: bool = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """获取 clientUpload 流接收的响应"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                query = 'SELECT * FROM client_upload_received'
+                params = []
+
+                if processed is not None:
+                    query += ' WHERE processed = ?'
+                    params.append(processed)
+
+                query += ' ORDER BY msg_time DESC LIMIT ?'
+                params.append(limit)
+
+                cursor.execute(query, params)
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"获取 clientUpload 接收消息失败: {e}")
+            raise
+
+    # ---------- server_command_received 相关方法 ----------
+
+    def save_server_command_received(self, msg_id: str, msg_time: int, cmd_type: str,
+                                      robot_id: str, data_json: str):
+        """保存 serverCommand 流接收的命令（服务器下发的命令）"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO server_command_received
+                (msg_id, msg_time, cmd_type, robot_id, data_json)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (msg_id, msg_time, cmd_type, robot_id, data_json))
+
+    def mark_server_command_processed(self, msg_id: str):
+        """标记 serverCommand 命令已处理"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE server_command_received
+                SET processed = TRUE
+                WHERE msg_id = ?
+            ''', (msg_id,))
+
+    def get_server_command_received(self, processed: bool = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """获取 serverCommand 流接收的命令"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                query = 'SELECT * FROM server_command_received'
+                params = []
+
+                if processed is not None:
+                    query += ' WHERE processed = ?'
+                    params.append(processed)
+
+                query += ' ORDER BY msg_time DESC LIMIT ?'
+                params.append(limit)
+
+                cursor.execute(query, params)
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"获取 serverCommand 接收消息失败: {e}")
+            raise
+
+    # ---------- server_command_sent 相关方法 ----------
+
+    def save_server_command_sent(self, msg_id: str, msg_time: int, msg_type: str,
+                                  robot_id: str, data_json: str, command_id: str = None,
+                                  status: str = 'sent'):
+        """保存 serverCommand 流发送的响应（机器人发送的命令响应）"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO server_command_sent
+                (msg_id, msg_time, msg_type, robot_id, command_id, data_json, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (msg_id, msg_time, msg_type, robot_id, command_id, data_json, status))
+
+    def get_server_command_sent(self, command_id: str = None, msg_type: str = None,
+                                 limit: int = 100) -> List[Dict[str, Any]]:
+        """获取 serverCommand 流发送的响应"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                query = 'SELECT * FROM server_command_sent'
+                params = []
+                conditions = []
+
+                if command_id is not None:
+                    conditions.append('command_id = ?')
+                    params.append(command_id)
+
+                if msg_type is not None:
+                    conditions.append('msg_type = ?')
+                    params.append(msg_type)
+
+                if conditions:
+                    query += ' WHERE ' + ' AND '.join(conditions)
+
+                query += ' ORDER BY msg_time DESC LIMIT ?'
+                params.append(limit)
+
+                cursor.execute(query, params)
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"获取 serverCommand 发送消息失败: {e}")
+            raise
+
+    # ---------- 向后兼容方法（映射到新表） ----------
+
+    def save_received_message(self, msg_id: str, msg_time: int, cmd_type: str,
+                               robot_id: str, data_json: str):
+        """保存机器人接收的消息（向后兼容，映射到 server_command_received）"""
+        self.save_server_command_received(msg_id, msg_time, cmd_type, robot_id, data_json)
+
+    def mark_message_processed(self, msg_id: str):
+        """标记消息已处理（向后兼容，映射到 server_command_received）"""
+        self.mark_server_command_processed(msg_id)
+
+    def get_unprocessed_messages(self) -> List[Dict[str, Any]]:
+        """获取未处理的消息（向后兼容，映射到 server_command_received）"""
+        return self.get_server_command_received(processed=False)
+
+    def save_sent_message(self, msg_id: str, msg_time: int, msg_type: str,
+                          robot_id: str, data_json: str, status: str = 'sent'):
+        """保存机器人发送的消息（向后兼容，自动判断存储到哪个表）
+
+        根据 msg_type 自动判断：
+        - robot_status/environment_data -> client_upload_sent
+        - 其他（COMMAND_STATUS_UPDATE等）-> server_command_sent
+        """
+        # 注意：MsgType 枚举值是小写的，如 "robot_status", "environment_data"
+        client_upload_types = ['robot_status', 'environment_data', 'ROBOT_STATUS', 'ENVIRONMENT_DATA']
+        if msg_type in client_upload_types:
+            self.save_client_upload_sent(msg_id, msg_time, msg_type, robot_id, data_json, status)
+        else:
+            self.save_server_command_sent(msg_id, msg_time, msg_type, robot_id, data_json, status=status)
+
+    def update_sent_message_status(self, msg_id: str, status: str):
+        """更新发送消息的状态（向后兼容，尝试更新两个表）"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                # 尝试更新 client_upload_sent
                 cursor.execute('''
-                    UPDATE robot_sent_messages 
-                    SET status = ? 
+                    UPDATE client_upload_sent
+                    SET status = ?
+                    WHERE msg_id = ?
+                ''', (status, msg_id))
+                # 尝试更新 server_command_sent
+                cursor.execute('''
+                    UPDATE server_command_sent
+                    SET status = ?
                     WHERE msg_id = ?
                 ''', (status, msg_id))
         except Exception as e:
             self.logger.error(f"更新发送消息状态失败: {e}")
             raise
-    
+
     def get_received_messages(self, processed: bool = None, limit: int = 100) -> List[Dict[str, Any]]:
-        """获取接收到的消息"""
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                
-                query = '''
-                    SELECT * FROM robot_received_messages 
-                '''
-                params = []
-                
-                if processed is not None:
-                    query += '''
-                        WHERE processed = ?
-                    '''
-                    params.append(processed)
-                
-                query += '''
-                    ORDER BY msg_time DESC 
-                    LIMIT ?
-                '''
-                params.append(limit)
-                
-                cursor.execute(query, params)
-                return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
-            self.logger.error(f"获取接收到的消息失败: {e}")
-            raise
-    
+        """获取接收到的消息（向后兼容，映射到 server_command_received）"""
+        return self.get_server_command_received(processed=processed, limit=limit)
+
     def get_sent_messages(self, status: str = None, limit: int = 100) -> List[Dict[str, Any]]:
-        """获取发送的消息"""
+        """获取发送的消息（向后兼容，合并两个发送表的数据）"""
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
-                query = '''
-                    SELECT * FROM robot_sent_messages 
-                '''
-                params = []
-                
+
+                # 获取 client_upload_sent
+                query1 = 'SELECT msg_id, msg_time, msg_type, robot_id, data_json, status, created_at FROM client_upload_sent'
+                params1 = []
                 if status is not None:
-                    query += '''
-                        WHERE status = ?
-                    '''
-                    params.append(status)
-                
-                query += '''
-                    ORDER BY msg_time DESC 
-                    LIMIT ?
+                    query1 += ' WHERE status = ?'
+                    params1.append(status)
+
+                # 获取 server_command_sent
+                query2 = 'SELECT msg_id, msg_time, msg_type, robot_id, data_json, status, created_at FROM server_command_sent'
+                params2 = []
+                if status is not None:
+                    query2 += ' WHERE status = ?'
+                    params2.append(status)
+
+                # 合并查询
+                combined_query = f'''
+                    SELECT * FROM (
+                        {query1}
+                        UNION ALL
+                        {query2}
+                    ) ORDER BY msg_time DESC LIMIT ?
                 '''
-                params.append(limit)
-                
-                cursor.execute(query, params)
+                params = params1 + params2 + [limit]
+
+                cursor.execute(combined_query, params)
                 return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             self.logger.error(f"获取发送的消息失败: {e}")
