@@ -152,7 +152,7 @@ class CameraManager:
 
         while self._stats['frames_captured'] < warmup_frames:
             if time.time() - start_time > warmup_timeout:
-                self.logger.warning(f"预热超时，已采集 {self._stats['frames_captured']} 帧")
+                self.logger.error(f"预热超时，已采集 {self._stats['frames_captured']} 帧")
                 break
             time.sleep(0.1)
 
@@ -571,7 +571,7 @@ class CameraManager:
                 self.rtmp_url
             ]
 
-            self.logger.debug(f"FFmpeg命令: {' '.join(ffmpeg_cmd)}")
+            self.logger.debug(f"FFmpeg启动: 输入=stdin, 分辨率={width}x{height}, FPS={fps}, 输出={self.rtmp_url}")
 
             # Windows平台使用CREATE_NO_WINDOW避免弹出控制台
             creation_flags = 0
@@ -797,7 +797,7 @@ class CameraManager:
 
         # 指数退避：每次重连等待时间递增
         wait_time = min(self.reconnect_interval * (1.5 ** (self._reconnect_count - 1)), 30)
-        self.logger.warning(f"正在尝试重连FFmpeg (第{self._reconnect_count}/{self.max_reconnect_attempts}次)，等待{wait_time:.1f}秒...")
+        self.logger.warning(f"正在尝试重连FFmpeg (第{self._reconnect_count}/{self.max_reconnect_attempts}次)，原因: {self._last_ffmpeg_error or '未知'}，等待{wait_time:.1f}秒...")
 
         # 停止当前FFmpeg进程
         self._stop_ffmpeg()

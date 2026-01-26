@@ -166,6 +166,10 @@ class JAKA():
             return -1
 
     def get_joints(self):
+        # '''
+        # :return: 成功：(0, joint_pos)，joint_pos 是一个包含 6 位元素的元组 (j1, j2, j3,	j4, j5, j6)，
+        #                                 j1, j2, j3, j4, j5, j6 分别代表关节 1 到关节 6 的弧度值
+        # '''
         ret = self.robot.get_joint_position()
         if ret[0] == 0:
             return ret[1]

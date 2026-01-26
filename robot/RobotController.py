@@ -116,10 +116,10 @@ class RobotController():
             # 从完整配置中提取robot_config部分传递给子控制器
             robot_config = self.system_config.get('robot_config', {})
 
-            self.logger.info("正在初始化AGV控制器...")
+            self.logger.debug("正在初始化AGV控制器...")
             self.agv_controller = AGVController(robot_config, debug=self.debug)
 
-            self.logger.info("正在初始化机械臂控制器...")
+            self.logger.debug("正在初始化机械臂控制器...")
             # 注意：ArmController同时包含机械臂和外部轴控制
             self.arm_controller = ArmController(
                 system_config=robot_config,
@@ -248,7 +248,7 @@ class RobotController():
             return status_dict
 
         except Exception as e:
-            self.logger.error(f"获取状态失败: {e}")
+            self.logger.error(f"获取状态失败: {type(e).__name__}: {e}")
             return {
                 "status": self.system_status.value,
                 "error": str(e),
@@ -263,7 +263,7 @@ class RobotController():
             bool: 操作是否成功
         """
         try:
-            self.logger.warning("执行紧急停止!")
+            self.logger.error("执行紧急停止!")
             
             # 停止AGV
             agv_stopped = False
@@ -338,7 +338,7 @@ class RobotController():
             return False
         
         try:
-            self.logger.info(f"移动AGV到标记点: {marker_id}")
+            self.logger.debug(f"移动AGV到标记点: {marker_id}")
             self.system_status = SystemStatus.MOVING
             
             # 调用AGV控制器的移动方法

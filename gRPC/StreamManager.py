@@ -44,7 +44,7 @@ class BaseStreamManager(ABC):
     def start_stream(self) -> bool:
         """启动流"""
         if self.is_stream_active:
-            self.logger.warning("流已经处于活动状态")
+            self.logger.debug("流已经处于活动状态")
             return False
 
         try:
@@ -120,7 +120,7 @@ class BaseStreamManager(ABC):
         """记录请求信息"""
         if hasattr(request, 'msg_id'):
             msg_type_str = robot_pb2.MsgType.Name(request.msg_type) if hasattr(robot_pb2.MsgType, 'Name') else request.msg_type
-            self.logger.info(f"发送消息: msg_id={request.msg_id}, type={msg_type_str}")
+            self.logger.debug(f"发送消息: msg_id={request.msg_id}, type={msg_type_str}")
         elif hasattr(request, 'command_id'):
             cmd_type_str = robot_pb2.ClientMessageType.Name(request.command_type) if hasattr(robot_pb2.ClientMessageType, 'Name') else request.command_type
             self.logger.info(f"发送客户端消息: command_id={request.command_id}, type={cmd_type_str}")
@@ -165,7 +165,7 @@ class BaseStreamManager(ABC):
         """记录响应信息"""
         if hasattr(response, 'msg_id'):
             msg_type_str = robot_pb2.MsgType.Name(response.msg_type) if hasattr(robot_pb2.MsgType, 'Name') else response.msg_type
-            self.logger.info(f"收到服务器响应: msg_id={response.msg_id}, type={msg_type_str}")
+            self.logger.debug(f"收到服务器响应: msg_id={response.msg_id}, type={msg_type_str}")
         elif hasattr(response, 'command_id'):
             cmd_type_str = robot_pb2.CmdType.Name(response.command_type) if hasattr(robot_pb2.CmdType, 'Name') else response.command_type
             self.logger.info(f"收到服务器命令: command_id={response.command_id}, type={cmd_type_str}")

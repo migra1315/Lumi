@@ -72,7 +72,7 @@ class TaskScheduler:
         # 触发命令状态变化回调（QUEUED）
         self._trigger_callback("on_command_status_change", command)
 
-        self.logger.info(f"命令 {command.command_id} (类型: {command.cmd_type.value}) 已添加到队列，优先级: {command.priority}")
+        self.logger.debug(f"命令 {command.command_id} (类型: {command.cmd_type.value}) 已添加到队列，优先级: {command.priority}")
 
     def _scheduler_loop(self):
         """调度器主循环（支持统一命令队列）"""
@@ -191,7 +191,7 @@ class TaskScheduler:
                     # 触发命令状态变化回调（RETRYING）
                     self._trigger_callback("on_command_status_change", command)
 
-                    self.logger.info(f"命令 {command.command_id} 将进行第 {command.retry_count} 次重试")
+                    self.logger.warning(f"命令 {command.command_id} 将进行第 {command.retry_count} 次重试")
                     time.sleep(1)
                     # 重新加入队列
                     self.command_queue.put(command)
@@ -324,7 +324,7 @@ class TaskScheduler:
             # 顺序执行所有站点任务（失败后继续）
             for i, station in enumerate(sorted_stations, 1):
                 station_id = station.station_config.station_id
-                self.logger.info(f"执行站点 {i}/{total_stations}, 当前站点ID {station_id}")
+                self.logger.info(f"执行站点 {i}/{total_stations}: {station_id}")
 
                 # 执行站点（包含重试逻辑）
                 if self._execute_station_task_with_retry(station):
@@ -383,7 +383,7 @@ class TaskScheduler:
                 # 触发站点重试回调
                 self._trigger_callback("on_station_retry", station)
 
-                self.logger.info(f"站点 {station_id} 第 {attempt} 次重试")
+                self.logger.warning(f"站点 {station_id} 第 {attempt}/{station.max_retries} 次重试")
                 time.sleep(1)  # 重试间隔
 
             # 执行站点任务
@@ -456,7 +456,7 @@ class TaskScheduler:
             # === 阶段 1: 移动 AGV ===
             station.execution_phase = StationExecutionPhase.AGV_MOVING
             station.progress_detail = f"AGV 移动到标记点 {station.station_config.agv_marker}"
-            self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
+            self.logger.debug(f"[站点 {station_id}] 阶段: AGV_MOVING - {station.progress_detail}")
 
             # 触发进度更新回调
             self._trigger_callback(
@@ -477,7 +477,7 @@ class TaskScheduler:
             # === 阶段 2: 移动机械臂 ===
             station.execution_phase = StationExecutionPhase.ARM_POSITIONING
             station.progress_detail = f"机械臂移动到归位位置 {station.station_config.robot_pos}"
-            self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
+            self.logger.debug(f"[站点 {station_id}] 阶段: ARM_POSITIONING - {station.progress_detail}")
 
             # 触发进度更新回调
             self._trigger_callback(
@@ -498,7 +498,7 @@ class TaskScheduler:
             # === 阶段 3: 移动外部轴 ===
             station.execution_phase = StationExecutionPhase.EXT_POSITIONING
             station.progress_detail = f"外部轴移动到归位位置 {station.station_config.ext_pos}"
-            self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
+            self.logger.debug(f"[站点 {station_id}] 阶段: EXT_POSITIONING - {station.progress_detail}")
 
             # 触发进度更新回调
             self._trigger_callback(
@@ -521,7 +521,7 @@ class TaskScheduler:
                 operation_mode = station.station_config.operation_config.operation_mode
                 station.execution_phase = StationExecutionPhase.OPERATING
                 station.progress_detail = f"执行操作: {operation_mode.value}"
-                self.logger.info(f"[站点 {station_id}] {station.progress_detail}")
+                self.logger.debug(f"[站点 {station_id}] 阶段: OPERATING - {station.progress_detail}")
 
                 # 触发进度更新回调
                 self._trigger_callback(

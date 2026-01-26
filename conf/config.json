@@ -10,8 +10,8 @@
         "agv_port": 31001
     },
     "grpc_config": {
-        "server_host": "localhost",
-        "server_port": 50051,
+        "server_host": "192.168.8.93",
+        "server_port": 9898,
         "connection_timeout": 10,
         "stream_keep_alive_check": 30
     },
@@ -23,7 +23,7 @@
         "read_interval": 5
     },
     "camera_config": {
-        "camera_enabled": false,
+        "camera_enabled": true,
         "camera_type": "orbbec",
         "resolution": {
             "width": 1280,

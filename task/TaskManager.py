@@ -358,7 +358,7 @@ class TaskManager:
         """
         if event in self.system_callbacks:
             self.system_callbacks[event] = callback
-            self.logger.info(f"已注册系统回调: {event}")
+            self.logger.debug(f"已注册系统回调: {event}")
         else:
             self.logger.warning(f"未知系统回调事件: {event}")
 
@@ -555,7 +555,12 @@ class TaskManager:
         result = operation_data.get('result', {})
         success = result.get('success', False)
 
-        self.logger.info(f"操作结果: {operation_mode} - {'成功' if success else '失败'}")
+        # 从快照获取设备ID
+        snapshot = self.get_progress_snapshot()
+        station = snapshot.get('station') if snapshot else None
+        device_id = station.station_config.operation_config.device_id if station and station.station_config.operation_config else 'unknown'
+        error_detail = f" - {result.get('message', '')}" if not success else ""
+        self.logger.info(f"操作 {operation_mode} (设备 {device_id}): {'成功' if success else f'失败{error_detail}'}")
 
         # 触发系统级回调，通知 RobotControlSystem
         # operation_data 只包含操作特定数据（operation_mode, result）

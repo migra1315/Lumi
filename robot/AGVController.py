@@ -68,10 +68,7 @@ class AGVController:
                 
                 # 发送命令并记录日志
                 sock.sendall(to_send_command.encode('utf-8'))
-                if not command.startswith('/api/robot_status'):
-                    self.logger.info(to_send_command)
-                else:
-                    self.logger.debug(to_send_command)
+                self.logger.debug(to_send_command)
                 
                 # 等待接收响应
                 receiveResponse = False

@@ -113,7 +113,8 @@ class MockRobotController(RobotControllerBase):
         """设置错误场景"""
         if scenario in self.error_scenarios:
             self.error_scenarios[scenario] = enabled
-            self.logger.info(f"错误场景 {scenario} 已{'启用' if enabled else '禁用'}")
+            status_str = "启用" if enabled else "禁用"
+            self.logger.debug(f"错误场景 {scenario} 已{status_str}")
         else:
             self.logger.warning(f"未知错误场景: {scenario}")
     

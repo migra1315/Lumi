@@ -172,12 +172,14 @@ class ArmController(JAKA):
                     break
             
             if all_in_target_state:
-                self.logger.info(f"外部轴已{'使能' if enable else '禁用'}")
+                status_str = "使能" if enable else "禁用"
+                self.logger.debug(f"外部轴已{status_str}")
                 return True
-            
+
             # 发送使能/禁用请求
             retry_count += 1
-            self.logger.info(f"外部轴未{'使能' if enable else '禁用'}，尝试第{retry_count}次{'使能' if enable else '禁用'}")
+            status_str = "使能" if enable else "禁用"
+            self.logger.warning(f"外部轴未{status_str}，尝试第{retry_count}次{status_str}")
             
             try:
                 # 先重置外部轴
@@ -329,26 +331,26 @@ class ArmController(JAKA):
     def rob_moveto(self, jpos, vel=None):
         """
         TODO: 机械臂返回数值偶发为-1，需要检查是否为异常值
-        控制机器人移动到指定关节角度(度数)
+        控制机器人移动到指定关节角度(弧度)
         
-        将输入的关节角度(度数)转换为弧度，然后执行关节运动
-        :param jpos: 目标关节角度 [J1, J2, J3, J4, J5, J6]，单位为度
+        然后执行关节运动
+        :param jpos: 目标关节角度 [J1, J2, J3, J4, J5, J6]，单位为弧度
         :param vel: 关节速度，默认90度/秒
         :return: 运动结果
         """
         import math
         
         vel = vel if vel is not None else self.DEFAULT_ROB_VEL
-        self.logger.info(f"输入的关节角度(度): {jpos}")
+        # self.logger.info(f"输入的关节角度(度): {jpos}")
         
-        # 将角度转换为弧度 - 使用math.radians更精确
-        joint_pos = [math.radians(angle) for angle in jpos]
-        self.logger.debug(f"转换后的关节角度(弧度): {joint_pos}")
+        # # 将角度转换为弧度 - 使用math.radians更精确
+        # joint_pos = [math.radians(angle) for angle in jpos]
+        # self.logger.debug(f"转换后的关节角度(弧度): {joint_pos}")
         
         # 执行关节运动
         # 注意参数顺序: joints, sp, move_mode
         # move_mode=0 表示绝对运动模式
         self.logger.info(f"开始执行关节运动, 速度: {vel}, 模式: 绝对运动(0)")
-        ret = self.joint_move_origin(joint_pos, vel, 0)
+        ret = self.joint_move_origin(jpos, vel, 0)
         self.logger.info(f"关节运动结果: {ret}")
         return ret 

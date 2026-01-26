@@ -118,8 +118,9 @@ class RobotControlSystem:
 
             # 启动持久化流
             client_upload_started = self.client_upload_manager.start_stream()
-            # server_command_started = self.server_command_manager.start_with_heartbeat()
-            server_command_started = self.server_command_manager.start_stream()
+            server_command_started = self.server_command_manager.start_with_heartbeat()
+            # server_command_started = self.server_command_manager.start_st
+            # ream()
             
             if client_upload_started and server_command_started:
                 self.is_connected = True
@@ -240,7 +241,7 @@ class RobotControlSystem:
             response: ServerStreamMessage
         """
         command_envelope = convert_server_message_to_command_envelope(response)
-        self.logger.debug(f"收到命令: {command_envelope.to_json()}")
+        self.logger.info(f"收到命令: {command_envelope.to_json()}")
 
         try:
             # 保存接收到的消息到数据库
