@@ -164,6 +164,30 @@ class TaskDatabase:
                 )
             ''')
 
+            # 创建离线消息缓存表（用于 gRPC 断线重连时的消息持久化）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS offline_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    msg_id TEXT NOT NULL UNIQUE,
+                    stream_type TEXT NOT NULL,
+                    msg_time INTEGER NOT NULL,
+                    msg_type TEXT NOT NULL,
+                    robot_id TEXT NOT NULL,
+                    payload_blob BLOB NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 离线消息表索引
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_offline_stream_time
+                ON offline_messages(stream_type, msg_time)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_offline_created
+                ON offline_messages(created_at)
+            ''')
+
             # 四表消息架构索引
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_client_upload_sent_time
@@ -831,4 +855,165 @@ class TaskDatabase:
 
         except Exception as e:
             self.logger.error(f"获取所有系统配置失败: {e}")
+            raise
+
+    # ==================== 离线消息缓存相关方法 ====================
+
+    def save_offline_message(
+        self,
+        msg_id: str,
+        stream_type: str,
+        msg_time: int,
+        msg_type: str,
+        robot_id: str,
+        payload_blob: bytes
+    ):
+        """保存离线消息到缓存表
+
+        Args:
+            msg_id: 消息唯一标识
+            stream_type: 流类型 ('client_upload' 或 'server_command')
+            msg_time: 消息时间戳（毫秒）
+            msg_type: 消息类型名称（protobuf类名）
+            robot_id: 机器人ID
+            payload_blob: protobuf序列化后的二进制数据
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO offline_messages
+                    (msg_id, stream_type, msg_time, msg_type, robot_id, payload_blob)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (msg_id, stream_type, msg_time, msg_type, robot_id, payload_blob))
+                self.logger.debug(f"离线消息已保存: msg_id={msg_id}, stream_type={stream_type}, msg_type={msg_type}")
+        except Exception as e:
+            self.logger.error(f"保存离线消息失败: {e}")
+            raise
+
+    def get_offline_messages(
+        self,
+        stream_type: str = None,
+        limit: int = 1000
+    ) -> List[Dict[str, Any]]:
+        """获取离线消息（按时间排序，先进先出）
+
+        Args:
+            stream_type: 流类型过滤（可选）
+            limit: 返回记录数限制
+
+        Returns:
+            List[Dict[str, Any]]: 离线消息列表，按 msg_time ASC 排序
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+
+                query = 'SELECT * FROM offline_messages'
+                params = []
+
+                if stream_type:
+                    query += ' WHERE stream_type = ?'
+                    params.append(stream_type)
+
+                query += ' ORDER BY msg_time ASC LIMIT ?'
+                params.append(limit)
+
+                cursor.execute(query, params)
+                return [dict(row) for row in cursor.fetchall()]
+
+        except Exception as e:
+            self.logger.error(f"获取离线消息失败: {e}")
+            raise
+
+    def delete_offline_message(self, msg_id: str):
+        """删除单条离线消息
+
+        Args:
+            msg_id: 消息唯一标识
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    DELETE FROM offline_messages
+                    WHERE msg_id = ?
+                ''', (msg_id,))
+                self.logger.debug(f"离线消息已删除: msg_id={msg_id}")
+        except Exception as e:
+            self.logger.error(f"删除离线消息失败: {e}")
+            raise
+
+    def delete_offline_messages_batch(self, msg_ids: List[str]):
+        """批量删除离线消息
+
+        Args:
+            msg_ids: 消息ID列表
+        """
+        if not msg_ids:
+            return
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                placeholders = ','.join(['?' for _ in msg_ids])
+                cursor.execute(f'''
+                    DELETE FROM offline_messages
+                    WHERE msg_id IN ({placeholders})
+                ''', msg_ids)
+                self.logger.debug(f"批量删除离线消息: count={len(msg_ids)}")
+        except Exception as e:
+            self.logger.error(f"批量删除离线消息失败: {e}")
+            raise
+
+    def cleanup_old_offline_messages(self, ttl_hours: int = 24) -> int:
+        """清理过期的离线消息
+
+        Args:
+            ttl_hours: 消息存活时间（小时），默认24小时
+
+        Returns:
+            int: 删除的消息数量
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    DELETE FROM offline_messages
+                    WHERE created_at < datetime('now', ?)
+                ''', (f'-{ttl_hours} hours',))
+                deleted_count = cursor.rowcount
+                if deleted_count > 0:
+                    self.logger.info(f"清理过期离线消息: count={deleted_count}, ttl_hours={ttl_hours}")
+                return deleted_count
+        except Exception as e:
+            self.logger.error(f"清理过期离线消息失败: {e}")
+            raise
+
+    def get_offline_message_count(self, stream_type: str = None) -> int:
+        """获取离线消息数量
+
+        Args:
+            stream_type: 流类型过滤（可选）
+
+        Returns:
+            int: 消息数量
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+
+                if stream_type:
+                    cursor.execute('''
+                        SELECT COUNT(*) as count FROM offline_messages
+                        WHERE stream_type = ?
+                    ''', (stream_type,))
+                else:
+                    cursor.execute('SELECT COUNT(*) as count FROM offline_messages')
+
+                row = cursor.fetchone()
+                return row['count'] if row else 0
+
+        except Exception as e:
+            self.logger.error(f"获取离线消息数量失败: {e}")
             raise

@@ -31,7 +31,13 @@ class BaseStreamManager(ABC):
         self.response_handler: Optional[Callable] = None
         self.stream_thread: Optional[threading.Thread] = None
         self.shutdown_event = threading.Event()
-        
+
+        # 断线和发送失败回调（用于重连机制）
+        # on_stream_broken: Callable[[str], None] - 流断开时调用，参数为断开原因
+        # on_message_send_failed: Callable[[Any, str], None] - 发送失败时调用，参数为消息和原因
+        self.on_stream_broken: Optional[Callable[[str], None]] = None
+        self.on_message_send_failed: Optional[Callable[[Any, str], None]] = None
+
         # 统计信息
         self.stats = {
             'messages_sent': 0,
@@ -151,15 +157,29 @@ class BaseStreamManager(ABC):
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.CANCELLED:
                 self.logger.info("RPC调用被取消")
+                disconnect_reason = "cancelled"
             else:
                 self.logger.error(f"RPC错误: {e}")
                 self.stats['errors'] += 1
+                disconnect_reason = f"rpc_error: {e.code().name}"
         except Exception as e:
             self.logger.error(f"响应处理错误: {e}")
             self.stats['errors'] += 1
+            disconnect_reason = f"exception: {str(e)}"
+        else:
+            disconnect_reason = "stream_ended"
         finally:
+            was_active = self.is_stream_active
             self.is_stream_active = False
             self.logger.info("响应处理线程结束")
+
+            # 如果流之前是活跃的且有断线回调，触发回调
+            # 排除正常关闭（shutdown_event已设置）的情况
+            if was_active and self.on_stream_broken and not self.shutdown_event.is_set():
+                try:
+                    self.on_stream_broken(disconnect_reason)
+                except Exception as callback_error:
+                    self.logger.error(f"断线回调执行错误: {callback_error}")
 
     def _log_response_info(self, response):
         """记录响应信息"""
@@ -171,26 +191,60 @@ class BaseStreamManager(ABC):
             self.logger.info(f"收到服务器命令: command_id={response.command_id}, type={cmd_type_str}")
 
     def send_message(self, request) -> bool:
-        """通过持久化流发送消息"""
+        """通过持久化流发送消息
+
+        当流未激活时，会调用 on_message_send_failed 回调（如果已设置），
+        允许上层（如 RobotControlSystem）将消息缓存到离线队列。
+        """
         if not self.is_stream_active:
-            self.logger.error("流未激活，无法发送消息")
+            self.logger.warning("流未激活，无法发送消息")
+            # 触发发送失败回调，让上层处理离线缓存
+            if self.on_message_send_failed:
+                try:
+                    self.on_message_send_failed(request, "stream_inactive")
+                except Exception as callback_error:
+                    self.logger.error(f"发送失败回调执行错误: {callback_error}")
             return False
 
         try:
             self.request_queue.put(request)
-            #TODO 此处仅是放入队列，实际发送由请求生成器负责
+            # 此处仅是放入队列，实际发送由请求生成器负责
             self._log_request_info(request)
             return True
 
         except Exception as e:
             self.logger.error(f"发送消息到队列失败: {e}")
             self.stats['errors'] += 1
+            # 队列操作失败也触发回调
+            if self.on_message_send_failed:
+                try:
+                    self.on_message_send_failed(request, f"queue_error: {str(e)}")
+                except Exception as callback_error:
+                    self.logger.error(f"发送失败回调执行错误: {callback_error}")
             return False
 
     def set_response_handler(self, handler: Callable):
         """设置响应处理函数"""
         self.response_handler = handler
         self.logger.debug(f"设置响应处理函数: {handler.__name__ if hasattr(handler, '__name__') else handler}")
+
+    def set_stream_broken_callback(self, callback: Callable[[str], None]):
+        """设置流断开回调
+
+        Args:
+            callback: 回调函数，参数为断开原因字符串
+        """
+        self.on_stream_broken = callback
+        self.logger.debug(f"设置流断开回调: {callback.__name__ if hasattr(callback, '__name__') else callback}")
+
+    def set_message_send_failed_callback(self, callback: Callable[[Any, str], None]):
+        """设置消息发送失败回调
+
+        Args:
+            callback: 回调函数，参数为(消息对象, 失败原因字符串)
+        """
+        self.on_message_send_failed = callback
+        self.logger.debug(f"设置消息发送失败回调: {callback.__name__ if hasattr(callback, '__name__') else callback}")
 
     def get_stats(self) -> dict:
         """获取流统计信息"""

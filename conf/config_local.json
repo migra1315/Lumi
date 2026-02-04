@@ -10,8 +10,8 @@
         "agv_port": 31001
     },
     "grpc_config": {
-        "server_host": "192.168.8.93",
-        "server_port": 9898,
+        "server_host": "localhost",
+        "server_port": 50001,
         "connection_timeout": 10,
         "stream_keep_alive_check": 30,
         "reconnect": {
@@ -24,7 +24,7 @@
             "offline_message_ttl_hours": 24
         }
     },
-    "env_sensor_enabled": true,
+    "env_sensor_enabled": false,
     "env_sensor_config": {
         "port": "COM4",
         "baudrate": 4800,
@@ -32,7 +32,7 @@
         "read_interval": 5
     },
     "camera_config": {
-        "camera_enabled": true,
+        "camera_enabled": false,
         "camera_type": "orbbec",
         "resolution": {
             "width": 1280,
@@ -55,7 +55,7 @@
         "frame_buffer_size": 3,
         "warmup_frames": 10
     },
-    "use_mock": false,
+    "use_mock": true,
     "report": true,
     "log_config": {
         "level": "INFO",

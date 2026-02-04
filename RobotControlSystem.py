@@ -11,8 +11,16 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from enum import Enum
 from typing import Dict, Any, Optional, Callable, Generator
 from utils.logger_config import get_logger
+from utils.offline_message_handler import (
+    serialize_message,
+    deserialize_message,
+    get_stream_type_for_message,
+    STREAM_TYPE_CLIENT_UPLOAD,
+    STREAM_TYPE_SERVER_COMMAND
+)
 
 import grpc
 import gRPC.RobotService_pb2 as robot_pb2
@@ -26,6 +34,64 @@ from task.TaskManager import TaskManager
 from dataModels.MessageModels import BatteryInfo, EnvironmentInfo, MessageEnvelope, MsgType, PositionInfo, SystemStatus, TaskListInfo,create_message_envelope
 from dataModels.CommandModels import CmdType, CommandEnvelope, TaskCmd,create_cmd_envelope
 from dataModels.TaskModels import OperationConfig, OperationMode, StationConfig, Station
+
+
+class ConnectionState(Enum):
+    """gRPC连接状态枚举"""
+    DISCONNECTED = "disconnected"    # 断开连接
+    CONNECTING = "connecting"        # 正在连接
+    CONNECTED = "connected"          # 已连接
+    RECONNECTING = "reconnecting"    # 正在重连
+
+
+class ReconnectStatistics:
+    """重连统计信息"""
+
+    def __init__(self):
+        self.total_reconnect_attempts = 0
+        self.successful_reconnects = 0
+        self.failed_reconnects = 0
+        self.last_disconnect_time: Optional[float] = None
+        self.last_reconnect_time: Optional[float] = None
+        self.current_reconnect_attempt = 0
+        self.offline_messages_cached = 0
+        self.offline_messages_sent = 0
+        self.offline_messages_failed = 0
+
+    def record_disconnect(self):
+        """记录断线"""
+        self.last_disconnect_time = time.time()
+        self.current_reconnect_attempt = 0
+
+    def record_reconnect_attempt(self):
+        """记录重连尝试"""
+        self.total_reconnect_attempts += 1
+        self.current_reconnect_attempt += 1
+
+    def record_reconnect_success(self):
+        """记录重连成功"""
+        self.successful_reconnects += 1
+        self.last_reconnect_time = time.time()
+        self.current_reconnect_attempt = 0
+
+    def record_reconnect_failure(self):
+        """记录重连失败"""
+        self.failed_reconnects += 1
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "total_reconnect_attempts": self.total_reconnect_attempts,
+            "successful_reconnects": self.successful_reconnects,
+            "failed_reconnects": self.failed_reconnects,
+            "last_disconnect_time": self.last_disconnect_time,
+            "last_reconnect_time": self.last_reconnect_time,
+            "current_reconnect_attempt": self.current_reconnect_attempt,
+            "offline_messages_cached": self.offline_messages_cached,
+            "offline_messages_sent": self.offline_messages_sent,
+            "offline_messages_failed": self.offline_messages_failed
+        }
+
 
 class RobotControlSystem:
     """机器人控制系统主类"""
@@ -57,10 +123,30 @@ class RobotControlSystem:
         self.connection_timeout = grpc_config.get('connection_timeout', 10.0)
         self.stream_keep_alive_check = grpc_config.get('stream_keep_alive_check', 30.0)
 
-        # 连接状态
+        # 重连配置（从config读取，如果没有则使用默认值）
+        reconnect_config = grpc_config.get('reconnect', {})
+        self._reconnect_base_delay = reconnect_config.get('base_delay', 2)
+        self._reconnect_max_delay = reconnect_config.get('max_delay', 30)
+        self._heartbeat_timeout = reconnect_config.get('heartbeat_timeout', 60)
+        self._reconnect_batch_size = reconnect_config.get('batch_size', 10)
+        self._reconnect_batch_interval = reconnect_config.get('batch_interval', 0.1)
+        self._max_offline_messages = reconnect_config.get('max_offline_messages', 10000)
+        self._offline_message_ttl_hours = reconnect_config.get('offline_message_ttl_hours', 24)
+
+        # 连接状态（使用状态机管理）
+        self._connection_state = ConnectionState.DISCONNECTED
+        self._connection_lock = threading.Lock()
         self.channel = None
         self.stub = None
-        self.is_connected = False
+        self.is_connected = False  # 保留用于向后兼容
+
+        # 重连相关
+        self._reconnect_trigger = threading.Event()  # 用于触发重连
+        self._shutdown_event = threading.Event()     # 用于优雅关闭
+        self._heartbeat_monitor_thread: Optional[threading.Thread] = None
+        self._reconnect_manager_thread: Optional[threading.Thread] = None
+        self._reconnect_stats = ReconnectStatistics()
+
         # 流管理
         self.client_upload_manager = None
         self.server_command_manager = None
@@ -116,24 +202,407 @@ class RobotControlSystem:
             self.client_upload_manager = ClientUploadStreamManager(self.stub, self.robot_id)
             self.server_command_manager = ServerCommandStreamManager(self.stub, self.robot_id)
 
+            # 注册流回调（断线感知和离线缓存）
+            self._register_stream_callbacks()
+
             # 启动持久化流
             client_upload_started = self.client_upload_manager.start_stream()
             server_command_started = self.server_command_manager.start_with_heartbeat()
-            # server_command_started = self.server_command_manager.start_st
-            # ream()
-            
-            if client_upload_started and server_command_started:
-                self.is_connected = True
-                self.logger.info(f"成功建立双向持久化连接，robot_id: {self.robot_id}")
-                return True
-            else:
-                self.logger.error(f"流初始化失败: client_upload={client_upload_started}, server_command={server_command_started}")
+
+            if not (client_upload_started and server_command_started):
+                self.logger.error(f"流启动失败: client_upload={client_upload_started}, server_command={server_command_started}")
                 return False
+
+            # 等待一小段时间让流实际建立连接，然后验证流是否仍然活跃
+            # 这是为了处理 start_stream() 异步返回的情况：
+            # start_stream() 会立即返回 True，但实际连接失败会在响应处理线程中异步发生
+            time.sleep(0.5)
+
+            # 验证流是否仍然活跃（如果服务器不可用，此时流应该已经断开）
+            if not self.client_upload_manager.is_stream_active:
+                self.logger.error("clientUpload流连接失败（流在启动后立即断开）")
+                return False
+
+            if not self.server_command_manager.is_stream_active:
+                self.logger.error("serverCommand流连接失败（流在启动后立即断开）")
+                return False
+
+            self.is_connected = True
+            self._set_connection_state(ConnectionState.CONNECTED)
+            self.logger.info(f"成功建立双向持久化连接，robot_id: {self.robot_id}")
+            return True
 
         except Exception as e:
             self.logger.error(f"连接失败: {e}")
             return False
-    
+
+    # ==================== 连接状态管理方法 ====================
+
+    def _get_connection_state(self) -> ConnectionState:
+        """获取当前连接状态（线程安全）"""
+        with self._connection_lock:
+            return self._connection_state
+
+    def _set_connection_state(self, state: ConnectionState):
+        """设置连接状态（线程安全）
+
+        当状态变为 DISCONNECTED 时，会触发重连事件
+        """
+        with self._connection_lock:
+            old_state = self._connection_state
+            self._connection_state = state
+            self.is_connected = (state == ConnectionState.CONNECTED)
+
+            if old_state != state:
+                self.logger.info(f"连接状态变更: {old_state.value} -> {state.value}")
+
+        # 如果变为断开状态，触发重连（在锁外触发，避免死锁）
+        # 从 CONNECTED 或 CONNECTING 变为 DISCONNECTED 都应该触发重连
+        if state == ConnectionState.DISCONNECTED and old_state in (ConnectionState.CONNECTED, ConnectionState.CONNECTING):
+            self._reconnect_trigger.set()
+
+    def _register_stream_callbacks(self):
+        """注册流的断线和发送失败回调"""
+        if self.client_upload_manager:
+            self.client_upload_manager.set_stream_broken_callback(
+                lambda reason: self._on_stream_broken(STREAM_TYPE_CLIENT_UPLOAD, reason)
+            )
+            self.client_upload_manager.set_message_send_failed_callback(
+                lambda msg, reason: self._on_message_send_failed(msg, STREAM_TYPE_CLIENT_UPLOAD, reason)
+            )
+
+        if self.server_command_manager:
+            self.server_command_manager.set_stream_broken_callback(
+                lambda reason: self._on_stream_broken(STREAM_TYPE_SERVER_COMMAND, reason)
+            )
+            self.server_command_manager.set_message_send_failed_callback(
+                lambda msg, reason: self._on_message_send_failed(msg, STREAM_TYPE_SERVER_COMMAND, reason)
+            )
+
+    def _on_stream_broken(self, stream_type: str, reason: str):
+        """流断开回调
+
+        Args:
+            stream_type: 流类型 ('client_upload' 或 'server_command')
+            reason: 断开原因
+        """
+        self.logger.warning(f"流断开: stream_type={stream_type}, reason={reason}")
+
+        current_state = self._get_connection_state()
+
+        # 只在 CONNECTED 状态下记录断线和触发重连
+        # CONNECTING 状态下的断线由 _init_grpc_client() 处理
+        # RECONNECTING 状态下的断线由 _try_reconnect() 处理
+        if current_state == ConnectionState.CONNECTED:
+            self._reconnect_stats.record_disconnect()
+            self._set_connection_state(ConnectionState.DISCONNECTED)
+
+    def _on_message_send_failed(self, message, stream_type: str, reason: str):
+        """消息发送失败回调 - 将消息缓存到离线队列
+
+        Args:
+            message: 发送失败的 protobuf 消息
+            stream_type: 流类型
+            reason: 失败原因
+        """
+        try:
+            # 检查离线消息数量限制
+            current_count = self.task_manager.database.get_offline_message_count(stream_type)
+            if current_count >= self._max_offline_messages:
+                self.logger.warning(f"离线消息数量已达上限({self._max_offline_messages})，丢弃消息")
+                return
+
+            # 序列化消息
+            msg_type_name, payload_bytes = serialize_message(message)
+
+            # 生成唯一消息ID
+            msg_id = str(uuid.uuid4())
+            msg_time = int(time.time() * 1000)
+
+            # 保存到数据库
+            self.task_manager.database.save_offline_message(
+                msg_id=msg_id,
+                stream_type=stream_type,
+                msg_time=msg_time,
+                msg_type=msg_type_name,
+                robot_id=str(self.robot_id),
+                payload_blob=payload_bytes
+            )
+
+            self._reconnect_stats.offline_messages_cached += 1
+            self.logger.debug(f"消息已缓存到离线队列: msg_id={msg_id}, stream_type={stream_type}, reason={reason}")
+
+        except Exception as e:
+            self.logger.error(f"缓存离线消息失败: {e}")
+
+    # ==================== 心跳监控方法 ====================
+
+    def _start_heartbeat_monitor(self):
+        """启动心跳监控线程"""
+        self._heartbeat_monitor_thread = threading.Thread(
+            target=self._heartbeat_monitor_loop,
+            daemon=True,
+            name="HeartbeatMonitor"
+        )
+        self._heartbeat_monitor_thread.start()
+        self.logger.info("心跳监控线程已启动")
+
+    def _heartbeat_monitor_loop(self):
+        """心跳监控循环 - 检测连接是否超时"""
+        self.logger.debug("心跳监控循环开始")
+
+        while not self._shutdown_event.is_set():
+            try:
+                # 使用可中断的等待
+                if self._shutdown_event.wait(timeout=5.0):
+                    break  # shutdown_event 被设置，退出循环
+
+                # 只在已连接状态下检查心跳超时
+                if self._get_connection_state() != ConnectionState.CONNECTED:
+                    continue
+
+                # 检查两个流的最后活动时间
+                current_time = time.time()
+                heartbeat_timeout_detected = False
+
+                if self.client_upload_manager:
+                    last_activity = self.client_upload_manager.stats.get('last_activity')
+                    if last_activity and (current_time - last_activity) > self._heartbeat_timeout:
+                        self.logger.warning(f"clientUpload流心跳超时: {current_time - last_activity:.1f}s")
+                        heartbeat_timeout_detected = True
+
+                if self.server_command_manager:
+                    last_activity = self.server_command_manager.stats.get('last_activity')
+                    if last_activity and (current_time - last_activity) > self._heartbeat_timeout:
+                        self.logger.warning(f"serverCommand流心跳超时: {current_time - last_activity:.1f}s")
+                        heartbeat_timeout_detected = True
+
+                # 如果检测到心跳超时，触发断线处理
+                if heartbeat_timeout_detected:
+                    self.logger.warning("检测到心跳超时，触发断线处理")
+                    self._set_connection_state(ConnectionState.DISCONNECTED)
+
+            except Exception as e:
+                self.logger.error(f"心跳监控异常: {e}")
+
+        self.logger.debug("心跳监控循环结束")
+
+    # ==================== 重连管理方法 ====================
+
+    def _start_reconnect_manager(self):
+        """启动重连管理线程"""
+        self._reconnect_manager_thread = threading.Thread(
+            target=self._reconnect_manager_loop,
+            daemon=True,
+            name="ReconnectManager"
+        )
+        self._reconnect_manager_thread.start()
+        self.logger.info("重连管理线程已启动")
+
+    def _reconnect_manager_loop(self):
+        """重连管理循环 - 处理断线重连"""
+        self.logger.debug("重连管理循环开始")
+
+        while not self._shutdown_event.is_set():
+            try:
+                # 等待重连触发事件（可被 shutdown_event 中断）
+                triggered = self._reconnect_trigger.wait(timeout=1.0)
+
+                if self._shutdown_event.is_set():
+                    break
+
+                if not triggered:
+                    continue
+
+                # 清除触发事件
+                self._reconnect_trigger.clear()
+
+                # 执行重连
+                self._set_connection_state(ConnectionState.RECONNECTING)
+                self._execute_reconnect_with_backoff()
+
+            except Exception as e:
+                self.logger.error(f"重连管理异常: {e}")
+
+        self.logger.debug("重连管理循环结束")
+
+    def _execute_reconnect_with_backoff(self):
+        """执行指数退避重连"""
+        attempt = 0
+
+        while not self._shutdown_event.is_set():
+            attempt += 1
+            self._reconnect_stats.record_reconnect_attempt()
+
+            # 计算退避延迟
+            delay = min(
+                self._reconnect_base_delay * (2 ** (attempt - 1)),
+                self._reconnect_max_delay
+            )
+
+            self.logger.info(f"第 {attempt} 次重连尝试，延迟 {delay} 秒")
+
+            # 可中断的等待
+            if self._shutdown_event.wait(timeout=delay):
+                self.logger.info("重连被中断（系统关闭）")
+                return
+
+            # 尝试重连
+            if self._try_reconnect():
+                self._reconnect_stats.record_reconnect_success()
+                self.logger.info(f"重连成功，共尝试 {attempt} 次")
+
+                # 重连成功后刷新离线消息
+                self._flush_offline_messages()
+                return
+            else:
+                self._reconnect_stats.record_reconnect_failure()
+                self.logger.warning(f"第 {attempt} 次重连失败")
+
+    def _try_reconnect(self) -> bool:
+        """尝试重连
+
+        Returns:
+            bool: 重连是否成功
+        """
+        try:
+            # 清理旧连接
+            self._cleanup_old_connection()
+
+            # 重新初始化连接
+            if self._init_grpc_client():
+                # 重新设置响应处理器
+                self.set_client_upload_response_handler(self._handle_clientUpload_response)
+                self.set_server_command_response_handler(self._handle_serverCommand)
+                return True
+
+            return False
+
+        except Exception as e:
+            self.logger.error(f"重连异常: {e}")
+            return False
+
+    def _cleanup_old_connection(self):
+        """清理旧的连接资源"""
+        try:
+            # 停止旧的流管理器
+            if self.client_upload_manager:
+                try:
+                    self.client_upload_manager.stop_stream()
+                except Exception as e:
+                    self.logger.debug(f"停止clientUpload流时出错: {e}")
+                self.client_upload_manager = None
+
+            if self.server_command_manager:
+                try:
+                    self.server_command_manager.stop_stream()
+                except Exception as e:
+                    self.logger.debug(f"停止serverCommand流时出错: {e}")
+                self.server_command_manager = None
+
+            # 关闭旧的通道
+            if self.channel:
+                try:
+                    self.channel.close()
+                except Exception as e:
+                    self.logger.debug(f"关闭gRPC通道时出错: {e}")
+                self.channel = None
+                self.stub = None
+
+            self.is_connected = False
+            self.logger.debug("旧连接资源已清理")
+
+        except Exception as e:
+            self.logger.error(f"清理旧连接时出错: {e}")
+
+    def _flush_offline_messages(self):
+        """刷新离线消息队列 - 将缓存的消息重新发送"""
+        try:
+            # 先清理过期消息
+            self.task_manager.database.cleanup_old_offline_messages(self._offline_message_ttl_hours)
+
+            # 记录本次刷新的发送和失败数量（避免重复计数）
+            flush_sent = 0
+            flush_failed = 0
+            stream_inactive = False  # 标记流是否不活跃
+
+            # 分批处理
+            while not self._shutdown_event.is_set() and not stream_inactive:
+                # 获取一批待发送的消息
+                messages = self.task_manager.database.get_offline_messages(limit=self._reconnect_batch_size)
+
+                if not messages:
+                    self.logger.info("离线消息队列已清空")
+                    break
+
+                sent_msg_ids = []
+
+                for msg_record in messages:
+                    if self._shutdown_event.is_set():
+                        break
+
+                    msg_id = msg_record['msg_id']
+                    stream_type = msg_record['stream_type']
+                    msg_type = msg_record['msg_type']
+                    payload_blob = msg_record['payload_blob']
+
+                    try:
+                        # 反序列化消息
+                        message = deserialize_message(msg_type, payload_blob)
+                        if not message:
+                            self.logger.warning(f"反序列化消息失败: msg_id={msg_id}")
+                            sent_msg_ids.append(msg_id)  # 删除无法反序列化的消息
+                            flush_failed += 1
+                            continue
+
+                        # 根据流类型发送消息（直接放入队列，不触发离线缓存回调）
+                        success = False
+                        if stream_type == STREAM_TYPE_CLIENT_UPLOAD and self.client_upload_manager:
+                            if self.client_upload_manager.is_stream_active:
+                                self.client_upload_manager.request_queue.put(message)
+                                success = True
+                        elif stream_type == STREAM_TYPE_SERVER_COMMAND and self.server_command_manager:
+                            if self.server_command_manager.is_stream_active:
+                                self.server_command_manager.request_queue.put(message)
+                                success = True
+
+                        if success:
+                            sent_msg_ids.append(msg_id)
+                            flush_sent += 1
+                            self.logger.debug(f"离线消息已重发: msg_id={msg_id}")
+                        else:
+                            # 流不活跃，设置标记并退出内层循环
+                            self.logger.warning("流不活跃，停止刷新离线消息")
+                            stream_inactive = True
+                            break
+
+                    except Exception as e:
+                        self.logger.error(f"重发离线消息失败: msg_id={msg_id}, error={e}")
+                        # 异常时不删除消息（保留重试机会），也不计入失败（避免重复计数）
+
+                # 批量删除已发送的消息
+                if sent_msg_ids:
+                    self.task_manager.database.delete_offline_messages_batch(sent_msg_ids)
+
+                # 批次间隔（仅在继续处理时等待）
+                if self._reconnect_batch_interval > 0 and not stream_inactive:
+                    time.sleep(self._reconnect_batch_interval)
+
+            # 更新统计信息
+            self._reconnect_stats.offline_messages_sent += flush_sent
+            self._reconnect_stats.offline_messages_failed += flush_failed
+
+            self.logger.info(f"离线消息刷新完成: sent={flush_sent}, failed={flush_failed}, "
+                           f"total_sent={self._reconnect_stats.offline_messages_sent}, "
+                           f"total_failed={self._reconnect_stats.offline_messages_failed}")
+
+        except Exception as e:
+            self.logger.error(f"刷新离线消息异常: {e}")
+
+    def get_reconnect_statistics(self) -> Dict[str, Any]:
+        """获取重连统计信息"""
+        return self._reconnect_stats.to_dict()
+
     def set_client_upload_response_handler(self, handler):
         """设置clientUpload流的专用响应处理器"""
         if self.client_upload_manager:
@@ -159,30 +628,42 @@ class RobotControlSystem:
         if self.is_running:
             self.logger.warning("机器人控制系统已在运行")
             return
-        
-        self.logger.info("启动机器人控制系统...")
-                # 初始化任务管理器（TaskManager完全管理robot_controller）
-        self.task_manager = TaskManager(self.config, use_mock=self.use_mock)
 
+        self.logger.info("启动机器人控制系统...")
+
+        # 清除关闭事件（确保新启动时事件是清除状态）
+        self._shutdown_event.clear()
+        self._reconnect_trigger.clear()
+
+        # 初始化任务管理器（TaskManager完全管理robot_controller）
+        self.task_manager = TaskManager(self.config, use_mock=self.use_mock)
 
         # 注册新的系统回调
         self.task_manager.register_system_callback("on_command_status_change", self._handle_command_status_callback)
         self.task_manager.register_system_callback("on_task_progress", self._handle_task_progress_callback)
         self.task_manager.register_system_callback("on_operation_result", self._handle_operation_result_callback)
 
-        
-        # 启动通信接收
-        if not self._init_grpc_client():
-            self.logger.error("gRPC客户端初始化失败")
-            return
-        
-        self.set_client_upload_response_handler(self._handle_clientUpload_response)
-        self.set_server_command_response_handler(self._handle_serverCommand)
-        
+        # 启动心跳监控线程（始终运行）
+        self._start_heartbeat_monitor()
+
+        # 启动重连管理线程（始终运行）
+        self._start_reconnect_manager()
+
+        # 尝试初始化 gRPC 连接
+        self._set_connection_state(ConnectionState.CONNECTING)
+        if self._init_grpc_client():
+            self.set_client_upload_response_handler(self._handle_clientUpload_response)
+            self.set_server_command_response_handler(self._handle_serverCommand)
+            self.logger.info("gRPC客户端初始化成功")
+        else:
+            # 初始连接失败，触发重连机制（不再直接返回）
+            self.logger.warning("gRPC客户端初始化失败，将由重连管理器处理")
+            self._set_connection_state(ConnectionState.DISCONNECTED)
+
         # 启动定时上报
         if self.report:
             self._start_reporting()
-        
+
         self.logger.info("机器人控制系统已启动")
         self.is_running = True
 
@@ -195,7 +676,29 @@ class RobotControlSystem:
         self.logger.info("停止机器人控制系统...")
         self.is_running = False
 
-        # 1. 先停止定时上报线程（避免继续尝试发送消息）
+        # 0. 首先设置关闭事件（通知所有后台线程停止）
+        self.logger.info("正在设置关闭事件...")
+        self._shutdown_event.set()
+
+        # 1. 停止心跳监控线程
+        self.logger.info("正在停止心跳监控线程...")
+        if self._heartbeat_monitor_thread and self._heartbeat_monitor_thread.is_alive():
+            self._heartbeat_monitor_thread.join(timeout=3)
+            if self._heartbeat_monitor_thread.is_alive():
+                self.logger.warning("心跳监控线程未能在超时时间内停止")
+            else:
+                self.logger.info("心跳监控线程已停止")
+
+        # 2. 停止重连管理线程
+        self.logger.info("正在停止重连管理线程...")
+        if self._reconnect_manager_thread and self._reconnect_manager_thread.is_alive():
+            self._reconnect_manager_thread.join(timeout=5)
+            if self._reconnect_manager_thread.is_alive():
+                self.logger.warning("重连管理线程未能在超时时间内停止")
+            else:
+                self.logger.info("重连管理线程已停止")
+
+        # 3. 停止定时上报线程
         self.logger.info("正在停止定时上报线程...")
         self._stop_reporting = True
         if self._report_thread and self._report_thread.is_alive():
@@ -205,11 +708,11 @@ class RobotControlSystem:
             else:
                 self.logger.info("定时上报线程已停止")
 
-        # 2. 停止任务管理器（会自动关闭机器人系统）
+        # 4. 停止任务管理器（会自动关闭机器人系统）
         self.logger.info("正在关闭任务管理器...")
         self.task_manager.shutdown()
 
-        # 3. 停止 gRPC 通信
+        # 5. 停止 gRPC 通信
         self.logger.info("正在关闭gRPC客户端...")
 
         if self.client_upload_manager:
@@ -226,7 +729,12 @@ class RobotControlSystem:
                 self.logger.error(f"关闭通道时出错: {e}")
 
         self.is_connected = False
+        self._set_connection_state(ConnectionState.DISCONNECTED)
+
+        # 记录重连统计信息
+        stats = self.get_reconnect_statistics()
         self.logger.info(f"客户端已关闭 - 发送: {self.sent_count} 条消息, 接收: {self.received_count} 条响应")
+        self.logger.info(f"重连统计: {stats}")
 
         self.logger.info("机器人控制系统已停止")
     
@@ -462,14 +970,21 @@ class RobotControlSystem:
 
     def _send_message(self, msg_envelope: MessageEnvelope):
         """发送消息到后台 - 使用gRPC双向流
-        
+
+        当流不可用时，消息会通过 on_message_send_failed 回调缓存到离线队列
+
         Args:
             msg_envelope: 消息信封
         """
-        # 实际项目中使用gRPC发送消息
         # 将MessageEnvelope转换为gRPC RobotUploadRequest
         grpc_msg = convert_message_envelope_to_robot_upload_request(msg_envelope)
-        self.client_upload_manager.send_message(grpc_msg)
+
+        # 尝试发送消息（如果流不可用，send_message会触发离线缓存回调）
+        if self.client_upload_manager:
+            self.client_upload_manager.send_message(grpc_msg)
+        else:
+            # 流管理器不存在时，直接触发离线缓存
+            self._on_message_send_failed(grpc_msg, STREAM_TYPE_CLIENT_UPLOAD, "manager_not_initialized")
         
         # 保存发送的消息到数据库
         try:
@@ -649,29 +1164,31 @@ class RobotControlSystem:
                 command_status=status_update
             )
 
-            # 通过serverCommand流发送
-            if self.server_command_manager and self.server_command_manager.is_stream_active:
+            # 通过serverCommand流发送（如果流不可用，send_message会触发离线缓存回调）
+            if self.server_command_manager:
                 self.server_command_manager.send_message(client_msg)
                 self.logger.info(f"命令状态更新已发送: {command.command_id} -> {command.status.value}")
-
-                # 保存发送的消息到数据库
-                msg_id = str(uuid.uuid4())
-                msg_time = int(time.time() * 1000)
-                self._save_server_command_message(
-                    msg_id=msg_id,
-                    msg_time=msg_time,
-                    msg_type="COMMAND_STATUS_UPDATE",
-                    data={
-                        "command_id": command.command_id,
-                        "command_type": command.cmd_type.value,
-                        "status": command.status.value,
-                        "message": command.error_message or f"命令状态: {command.status.value}",
-                        "retry_count": command.retry_count
-                    },
-                    command_id=command.command_id
-                )
             else:
-                self.logger.warning("serverCommand流未激活，无法发送命令状态更新")
+                # 流管理器不存在时，直接触发离线缓存
+                self._on_message_send_failed(client_msg, STREAM_TYPE_SERVER_COMMAND, "manager_not_initialized")
+                self.logger.warning("serverCommand流管理器不存在，消息已缓存到离线队列")
+
+            # 保存发送的消息到数据库
+            msg_id = str(uuid.uuid4())
+            msg_time = int(time.time() * 1000)
+            self._save_server_command_message(
+                msg_id=msg_id,
+                msg_time=msg_time,
+                msg_type="COMMAND_STATUS_UPDATE",
+                data={
+                    "command_id": command.command_id,
+                    "command_type": command.cmd_type.value,
+                    "status": command.status.value,
+                    "message": command.error_message or f"命令状态: {command.status.value}",
+                    "retry_count": command.retry_count
+                },
+                command_id=command.command_id
+            )
 
         except Exception as e:
             self.logger.error(f"发送命令状态更新异常: {e}")
@@ -712,32 +1229,34 @@ class RobotControlSystem:
             # 使用 CopyFrom 设置 oneof 字段中的嵌套消息
             client_msg.position_info.CopyFrom(position_info)
 
-            # 通过 serverCommand 流发送
-            if self.server_command_manager and self.server_command_manager.is_stream_active:
+            # 通过 serverCommand 流发送（如果流不可用，send_message会触发离线缓存回调）
+            if self.server_command_manager:
                 self.server_command_manager.send_message(client_msg)
                 self.logger.info(f"SET_MARKER_RESPONSE 已发送: command_id={command.command_id}")
-
-                # 保存发送的消息到数据库
-                msg_id = str(uuid.uuid4())
-                msg_time = int(time.time() * 1000)
-                self._save_server_command_message(
-                    msg_id=msg_id,
-                    msg_time=msg_time,
-                    msg_type="SET_MARKER_RESPONSE",
-                    data={
-                        "command_id": command.command_id,
-                        "agv_position": [
-                            robot_status.get('agv_status_x', 0.0),
-                            robot_status.get('agv_status_y', 0.0),
-                            robot_status.get('agv_status_theta', 0.0)
-                        ],
-                        "arm_position": robot_status.get('robot_joints', [0.0]*6),
-                        "ext_position": robot_status.get('ext_axis', [0.0]*4)
-                    },
-                    command_id=command.command_id
-                )
             else:
-                self.logger.warning("serverCommand流未激活，无法发送SET_MARKER_RESPONSE")
+                # 流管理器不存在时，直接触发离线缓存
+                self._on_message_send_failed(client_msg, STREAM_TYPE_SERVER_COMMAND, "manager_not_initialized")
+                self.logger.warning("serverCommand流管理器不存在，消息已缓存到离线队列")
+
+            # 保存发送的消息到数据库
+            msg_id = str(uuid.uuid4())
+            msg_time = int(time.time() * 1000)
+            self._save_server_command_message(
+                msg_id=msg_id,
+                msg_time=msg_time,
+                msg_type="SET_MARKER_RESPONSE",
+                data={
+                    "command_id": command.command_id,
+                    "agv_position": [
+                        robot_status.get('agv_status_x', 0.0),
+                        robot_status.get('agv_status_y', 0.0),
+                        robot_status.get('agv_status_theta', 0.0)
+                    ],
+                    "arm_position": robot_status.get('robot_joints', [0.0]*6),
+                    "ext_position": robot_status.get('ext_axis', [0.0]*4)
+                },
+                command_id=command.command_id
+            )
 
         except Exception as e:
             self.logger.error(f"发送SET_MARKER_RESPONSE异常: {e}")
@@ -825,31 +1344,33 @@ class RobotControlSystem:
                 task_progress=progress_update
             )
 
-            # 通过serverCommand流发送
-            if self.server_command_manager and self.server_command_manager.is_stream_active:
+            # 通过serverCommand流发送（如果流不可用，send_message会触发离线缓存回调）
+            if self.server_command_manager:
                 self.server_command_manager.send_message(client_msg)
                 self.logger.info(f"任务进度更新已发送: {task.task_id} - {completed_stations}/{total_stations}")
-
-                # 保存发送的消息到数据库
-                msg_id = str(uuid.uuid4())
-                msg_time = int(time.time() * 1000)
-                self._save_server_command_message(
-                    msg_id=msg_id,
-                    msg_time=msg_time,
-                    msg_type="TASK_PROGRESS_UPDATE",
-                    data={
-                        "task_id": task.task_id,
-                        "task_name": task.task_name,
-                        "task_status": task.status.value,
-                        "total_stations": total_stations,
-                        "completed_stations": completed_stations,
-                        "failed_stations": failed_stations,
-                        "current_station": current_station_info
-                    },
-                    command_id=command_id
-                )
             else:
-                self.logger.warning("serverCommand流未激活，无法发送任务进度更新")
+                # 流管理器不存在时，直接触发离线缓存
+                self._on_message_send_failed(client_msg, STREAM_TYPE_SERVER_COMMAND, "manager_not_initialized")
+                self.logger.warning("serverCommand流管理器不存在，消息已缓存到离线队列")
+
+            # 保存发送的消息到数据库
+            msg_id = str(uuid.uuid4())
+            msg_time = int(time.time() * 1000)
+            self._save_server_command_message(
+                msg_id=msg_id,
+                msg_time=msg_time,
+                msg_type="TASK_PROGRESS_UPDATE",
+                data={
+                    "task_id": task.task_id,
+                    "task_name": task.task_name,
+                    "task_status": task.status.value,
+                    "total_stations": total_stations,
+                    "completed_stations": completed_stations,
+                    "failed_stations": failed_stations,
+                    "current_station": current_station_info
+                },
+                command_id=command_id
+            )
 
         except Exception as e:
             self.logger.error(f"发送任务进度更新异常: {e}")
@@ -932,32 +1453,34 @@ class RobotControlSystem:
                 operation_result=operation_result
             )
 
-            # 通过serverCommand流发送
-            if self.server_command_manager and self.server_command_manager.is_stream_active:
+            # 通过serverCommand流发送（如果流不可用，send_message会触发离线缓存回调）
+            if self.server_command_manager:
                 self.server_command_manager.send_message(client_msg)
                 self.logger.info(f"操作结果已发送: {operation_mode.value} -> {result.get('success')}")
-
-                # 保存发送的消息到数据库
-                msg_id = str(uuid.uuid4())
-                msg_time = int(time.time() * 1000)
-                self._save_server_command_message(
-                    msg_id=msg_id,
-                    msg_time=msg_time,
-                    msg_type="OPERATION_RESULT",
-                    data={
-                        "task_id": task_id,
-                        "station_id": station_id,
-                        "operation_mode": operation_mode.value if operation_mode else "NONE",
-                        "success": result.get('success', False),
-                        "message": result.get('message', ''),
-                        "device_id": device_id,
-                        "door_ip": door_ip,
-                        "duration": result.get('duration', 0.0)
-                    },
-                    command_id=msg_command_id
-                )
             else:
-                self.logger.warning("serverCommand流未激活，无法发送操作结果")
+                # 流管理器不存在时，直接触发离线缓存
+                self._on_message_send_failed(client_msg, STREAM_TYPE_SERVER_COMMAND, "manager_not_initialized")
+                self.logger.warning("serverCommand流管理器不存在，消息已缓存到离线队列")
+
+            # 保存发送的消息到数据库
+            msg_id = str(uuid.uuid4())
+            msg_time = int(time.time() * 1000)
+            self._save_server_command_message(
+                msg_id=msg_id,
+                msg_time=msg_time,
+                msg_type="OPERATION_RESULT",
+                data={
+                    "task_id": task_id,
+                    "station_id": station_id,
+                    "operation_mode": operation_mode.value if operation_mode else "NONE",
+                    "success": result.get('success', False),
+                    "message": result.get('message', ''),
+                    "device_id": device_id,
+                    "door_ip": door_ip,
+                    "duration": result.get('duration', 0.0)
+                },
+                command_id=msg_command_id
+            )
 
         except Exception as e:
             self.logger.error(f"发送操作结果异常: {e}")
@@ -1024,7 +1547,7 @@ if __name__ == "__main__":
     import os
 
     # 配置文件路径
-    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "conf", "config.json")
+    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "conf", "config_local.json")
 
     # 加载配置
     config = load_config(CONFIG_PATH)
