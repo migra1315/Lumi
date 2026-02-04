@@ -2,12 +2,14 @@
 """JAKA Integrated Control System
 集成JAKA机器人、外部轴和AGV的控制功能
 """
+import math
 import os
 from doctest import FAIL_FAST
 import time
 import requests
 import json
 from utils.logger_config import get_logger
+from utils.voice_player import VoicePlayer
 from robot.jaka import JAKA
 
 
@@ -51,6 +53,11 @@ class ArmController(JAKA):
         
         # 加载外部轴关节限制
         self.ext_axis_limits = ext_axis_limits
+        self.WELCOME_JOINTS_1 = [-5.0,50,23,0.0,36,0]
+        self.WELCOME_JOINTS_2 = [5.0,70,40,0.0,36,0]
+
+        # 语音播报器
+        self.voice_player = VoicePlayer()
     
     def _load_ext_axis_limits(self):
         """加载外部轴关节限制参数"""
@@ -62,6 +69,7 @@ class ArmController(JAKA):
             "joint3": {"min": -180, "max": 180, "desc": "头部旋转，单位度"},
             "joint4": {"min": -5, "max": 35, "desc": "头部俯仰，单位度"}
         }
+    
     def _adjust_to_joint_limits(self, point):
         """
         调整关节位置以确保在限制范围内
@@ -298,7 +306,15 @@ class ArmController(JAKA):
             if ext_ok:
                 ext_ok = ext_ok and self.ext_reset()
                 ext_ok = ext_ok and self.ext_enable(True)
-                
+        
+
+        # 语音播报 + 欢迎动作（语音播放在独立线程中，不阻塞欢迎动作执行）
+        self.voice_player.play("你的实验室助手已上线.mp3")
+        time.sleep(1)
+        for i in range(2):
+            self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_1])
+            self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_2])
+        
         return robot_ok and ext_ok
     
     def shutdown_system(self):
