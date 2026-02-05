@@ -15,17 +15,27 @@ from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus, CommandCate
 class TaskManager:
     """任务管理器 - 主控制器，负责任务的接收、解析和调度"""
 
-    def __init__(self, config: Dict[str, Any] = None, use_mock: bool = True, auto_start_hardware: bool = True):
+    def __init__(self, config: Dict[str, Any] = None, use_mock: bool = True,
+                 auto_start_on_boot: bool = True,
+                 auto_start_robot: bool = True,
+                 auto_start_camera: bool = True,
+                 auto_start_env_sensor: bool = True):
         """初始化任务管理器
 
         Args:
             config: 系统配置字典
             use_mock: 是否使用Mock机器人控制器
-            auto_start_hardware: 是否自动启动硬件（默认True保持向后兼容）
+            auto_start_on_boot: 是否在启动时自动启动硬件（默认True保持向后兼容）
+            auto_start_robot: 是否自动启动机器人
+            auto_start_camera: 是否自动启动相机
+            auto_start_env_sensor: 是否自动启动环境传感器
         """
         self.config = config or {}
         self.use_mock = use_mock
-        self.auto_start_hardware = auto_start_hardware
+        self.auto_start_on_boot = auto_start_on_boot
+        self.auto_start_robot = auto_start_robot
+        self.auto_start_camera = auto_start_camera
+        self.auto_start_env_sensor = auto_start_env_sensor
         self.logger = get_logger(__name__)
 
         # 硬件状态管理
@@ -68,10 +78,14 @@ class TaskManager:
             "on_operation_result": None,        # 操作结果回调
         }
 
-        # 根据 auto_start_hardware 决定是否自动启动硬件
-        if auto_start_hardware:
-            self.logger.info("TaskManager: 自动启动硬件...")
-            self.start_hardware(robot=True, camera=True, env_sensor=True)
+        # 根据 auto_start_on_boot 和各模块配置决定是否自动启动硬件
+        if auto_start_on_boot:
+            self.logger.info("TaskManager: 根据配置自动启动硬件...")
+            self.start_hardware(
+                robot=self.auto_start_robot,
+                camera=self.auto_start_camera,
+                env_sensor=self.auto_start_env_sensor
+            )
         else:
             self.logger.info("TaskManager: 等待远程命令启动硬件...")
 

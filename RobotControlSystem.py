@@ -137,6 +137,15 @@ class RobotControlSystem:
         self.hardware_config = self.config.get('hardware_config', {})
         self.auto_start_on_boot = self.hardware_config.get('auto_start_on_boot', True)  # 默认True保持向后兼容
 
+        # 读取各硬件模块的 auto_start 配置
+        robot_hw_config = self.hardware_config.get('robot', {})
+        camera_hw_config = self.hardware_config.get('camera', {})
+        env_sensor_hw_config = self.hardware_config.get('env_sensor', {})
+
+        self.auto_start_robot = robot_hw_config.get('auto_start', self.hardware_config.get('auto_start_robot', True))
+        self.auto_start_camera = camera_hw_config.get('auto_start', self.hardware_config.get('auto_start_camera', True))
+        self.auto_start_env_sensor = env_sensor_hw_config.get('auto_start', self.hardware_config.get('auto_start_env_sensor', True))
+
         # 连接状态（使用状态机管理）
         self._connection_state = ConnectionState.DISCONNECTED
         self._connection_lock = threading.Lock()
@@ -640,9 +649,11 @@ class RobotControlSystem:
         self._reconnect_trigger.clear()
 
         # 确定是否自动启动硬件
-        auto_start_hardware = self.auto_start_on_boot
-        if auto_start_hardware:
-            self.logger.info(f"硬件将在启动时自动初始化 (auto_start_on_boot={auto_start_hardware})")
+        if self.auto_start_on_boot:
+            self.logger.info(f"硬件将在启动时自动初始化 (auto_start_on_boot=True)")
+            self.logger.info(f"  - 机器人: {'自动启动' if self.auto_start_robot else '不自动启动'}")
+            self.logger.info(f"  - 相机: {'自动启动' if self.auto_start_camera else '不自动启动'}")
+            self.logger.info(f"  - 环境传感器: {'自动启动' if self.auto_start_env_sensor else '不自动启动'}")
         else:
             self.logger.info("硬件将等待远程命令启动 (auto_start_on_boot=False)")
 
@@ -650,7 +661,10 @@ class RobotControlSystem:
         self.task_manager = TaskManager(
             self.config,
             use_mock=self.use_mock,
-            auto_start_hardware=auto_start_hardware
+            auto_start_on_boot=self.auto_start_on_boot,
+            auto_start_robot=self.auto_start_robot,
+            auto_start_camera=self.auto_start_camera,
+            auto_start_env_sensor=self.auto_start_env_sensor
         )
 
         # 注册新的系统回调

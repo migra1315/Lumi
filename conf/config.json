@@ -24,7 +24,21 @@
             "offline_message_ttl_hours": 24
         }
     },
-    "env_sensor_enabled": true,
+    "hardware_config": {
+        "auto_start_on_boot": true,
+        "robot": {
+            "enabled": true,
+            "auto_start": true
+        },
+        "camera": {
+            "enabled": true,
+            "auto_start": true
+        },
+        "env_sensor": {
+            "enabled": true,
+            "auto_start": true
+        }
+    },
     "env_sensor_config": {
         "port": "COM4",
         "baudrate": 4800,
@@ -32,7 +46,6 @@
         "read_interval": 5
     },
     "camera_config": {
-        "camera_enabled": true,
         "camera_type": "orbbec",
         "resolution": {
             "width": 1280,

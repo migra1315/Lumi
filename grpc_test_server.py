@@ -472,11 +472,11 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
             station_list = []
             # 创建4个默认测试站点
             agv_marker_list = ["marker_1", "marker_2", "marker_3","marker_4","marker_5","charge_point_1F_6010"]
-            ext_pos_list = [[10, 0, 0, 0], 
-                            [20, 0, 0, 0], 
-                            [30, 0, 0, 0], 
-                            [40, 0, 0, 0], 
-                            [50, 0, 0, 0], 
+            ext_pos_list = [[10, 10, 0, 0], 
+                            [20, 20, 0, 0], 
+                            [30, 30, 0, 0], 
+                            [40, 20, 0, 0], 
+                            [50, 10, 0, 0], 
                             [10, 0, 0, 0]
                             ]
             robot_pos_list=[[0, 30, 100, 0, 60, -90],

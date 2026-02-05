@@ -90,7 +90,10 @@ class RobotController():
 
         # 环境传感器相关
         self.env_sensor = None
-        self.env_sensor_enabled = system_config.get('env_sensor_enabled', False)
+        # 从 hardware_config.env_sensor.enabled 读取，兼容旧配置
+        hardware_config = system_config.get('hardware_config', {})
+        env_sensor_hw_config = hardware_config.get('env_sensor', {})
+        self.env_sensor_enabled = env_sensor_hw_config.get('enabled', system_config.get('env_sensor_enabled', False))
         self.env_sensor_config = system_config.get('env_sensor_config', {})
         self._env_data_lock = threading.Lock()
         self._env_data = {
@@ -109,6 +112,9 @@ class RobotController():
         # 相机管理器相关
         self.camera_manager = None
         self.camera_config = system_config.get('camera_config', {})
+        # 从 hardware_config.camera.enabled 读取，兼容旧配置
+        camera_hw_config = hardware_config.get('camera', {})
+        self.camera_enabled = camera_hw_config.get('enabled', self.camera_config.get('camera_enabled', False))
 
         self.logger.info("机器人控制器初始化完成")
     
@@ -775,10 +781,9 @@ class RobotController():
                 'duration': time.time() - start_time if 'start_time' in locals() else 0.0
             }
 
-    def serve(self, device_id: str) -> Dict[str, Any]:
+    def guide_serve(self) -> Dict[str, Any]:
         """
-        服务操作（如仪表读数、设备检查等）
-
+        讲解服务操作
         Args:
             device_id: 设备ID
 
@@ -792,39 +797,13 @@ class RobotController():
                 'duration': float
             }
         """
-        try:
-            self.logger.info(f"执行服务操作: {device_id}")
-            start_time = time.time()
-
-            # TODO: 实现具体的服务逻辑
-            # 例如：仪表读数、设备状态检查等
-            service_data = {
-                'device_status': 'normal',
-                'reading_value': 0.0
-            }
-
-            duration = time.time() - start_time
-
-            return {
-                'success': True,
-                'message': f'服务操作完成，耗时{duration:.2f}秒',
-                'device_id': device_id,
-                'data': service_data,
-                'timestamp': time.time(),
-                'duration': duration
-            }
-
-        except Exception as e:
-            self.logger.error(f"服务操作失败: {e}")
-            return {
-                'success': False,
-                'message': f'服务操作失败: {str(e)}',
-                'device_id': device_id,
-                'data': {},
-                'timestamp': time.time(),
-                'duration': time.time() - start_time
-            }
-
+        self.logger.info(f"执行服务操作")
+        return {
+            'success': True,
+            'message': '讲解服务操作成功',
+            'timestamp': time.time(),
+        }
+    
     def get_environment_data(self) -> Dict[str, float]:
         """
         获取环境数据（温度、湿度等）
@@ -1072,7 +1051,7 @@ class RobotController():
         Returns:
             bool: 初始化是否成功
         """
-        if not self.camera_config.get('camera_enabled', False):
+        if not self.camera_enabled:
             self.logger.info("相机未启用")
             return True
 
@@ -1087,8 +1066,9 @@ class RobotController():
             try:
                 self.logger.info("正在初始化相机管理器...")
 
-                # 创建相机管理器实例
-                self.camera_manager = CameraManager(self.camera_config)
+                # 创建相机管理器实例，传入enabled状态
+                camera_config_with_enabled = {**self.camera_config, 'enabled': self.camera_enabled}
+                self.camera_manager = CameraManager(camera_config_with_enabled)
 
                 # 启动相机
                 if not self.camera_manager.start():

@@ -55,8 +55,8 @@ class CameraManager:
         self.config = config or {}
         self.logger = get_logger("CameraManager")
 
-        # 相机配置
-        self.camera_enabled = self.config.get('camera_enabled', True)
+        # 相机配置 - 支持新格式 enabled 和旧格式 camera_enabled
+        self.camera_enabled = self.config.get('enabled', self.config.get('camera_enabled', True))
         self.camera_type = self.config.get('camera_type', 'orbbec')
         self.resolution = self.config.get('resolution', {'width': 1280, 'height': 720})
         self.fps = self.config.get('fps', 30)

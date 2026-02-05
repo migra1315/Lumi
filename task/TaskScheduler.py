@@ -583,7 +583,7 @@ class TaskScheduler:
         elif operation_mode == OperationMode.CAPTURE:
             result = self._capture(operation_config.device_id)
         elif operation_mode == OperationMode.SERVE:
-            result = self._serve(operation_config.device_id)
+            result = self._guide_serve()
         else:
             result = {
                 'success': True,
@@ -791,24 +791,17 @@ class TaskScheduler:
                 'duration': 0.0
             }
 
-    def _serve(self, device_id: str) -> Dict[str, Any]:
+    def _guide_serve(self) -> Dict[str, Any]:
         """服务操作实现（返回详细结果）"""
         try:
-            self.logger.info(f"执行服务操作: {device_id}")
-            result = self.robot_controller.serve(device_id)
-            # 触发回调：通知TaskManager到达服务站点
-            self._trigger_callback(
-                "on_arrive_service_station",
-                device_id=device_id
-            )
+            self.logger.info(f"执行服务操作")
+            result = self.robot_controller.guide_serve()
             return result
         except Exception as e:
             self.logger.error(f"服务操作失败: {e}")
             return {
                 'success': False,
-                'message': f'服务操作异常: {str(e)}',
-                'device_id': device_id,
+                'message': f'讲解服务操作异常: {str(e)}',
                 'timestamp': time.time(),
-                'duration': 0.0
             }
 
