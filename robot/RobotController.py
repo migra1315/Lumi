@@ -52,17 +52,19 @@ class SystemStatus(Enum):
 
 class RobotController():
     """机器人主控制器，整合AGV、机械臂和外部轴的控制"""
-    
-    def __init__(self, system_config: Dict[str, Any] = None, debug: bool = False):
+
+    def __init__(self, system_config: Dict[str, Any] = None, debug: bool = False, auto_setup: bool = True):
         """
         初始化机器人控制器
-        
+
         Args:
             system_config: 系统配置字典
             debug: 是否启用调试模式
+            auto_setup: 是否自动调用 setup_system()（默认True保持向后兼容）
         """
         self.system_config = system_config or {}
         self.debug = debug
+        self._auto_setup = auto_setup
         
         # 控制器状态
         self.system_status = SystemStatus.IDLE
@@ -927,6 +929,53 @@ class RobotController():
 
         except Exception as e:
             self.logger.error(f"停止AGV数据监控失败: {e}")
+            return False
+
+    # ==================== 硬件模块控制方法 ====================
+    def start_camera(self) -> bool:
+        """
+        启动相机
+
+        Returns:
+            bool: 操作是否成功
+        """
+        return self._setup_camera()
+
+    def stop_camera(self) -> bool:
+        """
+        关闭相机
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            self._shutdown_camera()
+            return True
+        except Exception as e:
+            self.logger.error(f"关闭相机失败: {e}")
+            return False
+
+    def start_env_sensor(self) -> bool:
+        """
+        启动环境传感器
+
+        Returns:
+            bool: 操作是否成功
+        """
+        return self._setup_environment_sensor()
+
+    def stop_env_sensor(self) -> bool:
+        """
+        关闭环境传感器
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            self._shutdown_environment_sensor()
+            return True
+        except Exception as e:
+            self.logger.error(f"关闭环境传感器失败: {e}")
             return False
 
     # ==================== 环境传感器相关方法 ====================

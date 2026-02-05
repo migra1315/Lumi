@@ -47,6 +47,8 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         logger.info("  3 - 发送任务命令 (TASK_CMD)")
         logger.info("  4 - 发送摇杆控制命令 (JOY_CONTROL_CMD)")
         logger.info("  5 - 发送位置校正控制命令 (POSITION_ADJUST_CMD)")
+        logger.info("  7 - 发送硬件启动命令 (HARDWARE_START_CMD)")
+        logger.info("  8 - 发送硬件关闭命令 (HARDWARE_SHUTDOWN_CMD)")
         logger.info("  a - 切换自动发送模式 (当前: 关闭)")
         logger.info("  q - 退出服务器")
     
@@ -298,6 +300,69 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
 
         logger.info(f"【手动触发】创建设置导航点命令: {self.command_counter}, marker={marker_name}")
         return request
+
+    def create_hardware_start_command(self, robot: bool = True, camera: bool = True, env_sensor: bool = True):
+        """创建硬件启动命令
+
+        Args:
+            robot: 是否启动机器人（AGV+机械臂）
+            camera: 是否启动相机
+            env_sensor: 是否启动环境传感器
+
+        Returns:
+            robot_service_pb2.ServerStreamMessage: 硬件启动命令
+        """
+        current_time = time.time()
+        self.command_counter += 1
+
+        hardware_control_cmd = robot_service_pb2.HardwareControlCommand(
+            robot=robot,
+            camera=camera,
+            env_sensor=env_sensor
+        )
+
+        request = robot_service_pb2.ServerStreamMessage(
+            command_id=self.command_counter,
+            command_time=int(current_time * 1000),
+            command_type=robot_service_pb2.CmdType.HARDWARE_START_CMD,
+            robot_id=123456
+        )
+        request.hardware_control_cmd.CopyFrom(hardware_control_cmd)
+
+        logger.info(f"【手动触发】创建硬件启动命令: {self.command_counter}, robot={robot}, camera={camera}, env_sensor={env_sensor}")
+        return request
+
+    def create_hardware_shutdown_command(self, robot: bool = True, camera: bool = True, env_sensor: bool = True):
+        """创建硬件关闭命令
+
+        Args:
+            robot: 是否关闭机器人（AGV+机械臂）
+            camera: 是否关闭相机
+            env_sensor: 是否关闭环境传感器
+
+        Returns:
+            robot_service_pb2.ServerStreamMessage: 硬件关闭命令
+        """
+        current_time = time.time()
+        self.command_counter += 1
+
+        hardware_control_cmd = robot_service_pb2.HardwareControlCommand(
+            robot=robot,
+            camera=camera,
+            env_sensor=env_sensor
+        )
+
+        request = robot_service_pb2.ServerStreamMessage(
+            command_id=self.command_counter,
+            command_time=int(current_time * 1000),
+            command_type=robot_service_pb2.CmdType.HARDWARE_SHUTDOWN_CMD,
+            robot_id=123456
+        )
+        request.hardware_control_cmd.CopyFrom(hardware_control_cmd)
+
+        logger.info(f"【手动触发】创建硬件关闭命令: {self.command_counter}, robot={robot}, camera={camera}, env_sensor={env_sensor}")
+        return request
+
     # ==================== Station和Task创建方法 ====================
 
     def create_station(self,
@@ -619,6 +684,10 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                 if request.HasField('operation_result'):
                     self._handle_operation_result(request.operation_result, client_id)
 
+            elif request.command_type == robot_service_pb2.ClientMessageType.HARDWARE_STATUS_RESPONSE:
+                if request.HasField('hardware_status'):
+                    self._handle_hardware_status_response(request.hardware_status, client_id)
+
             else:
                 logger.warning(f"【serverCommand】未知的ClientMessageType: {request.command_type}")
 
@@ -801,6 +870,23 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         except Exception as e:
             logger.error(f"【serverCommand】处理操作结果失败: {e}")
 
+    def _handle_hardware_status_response(self, hardware_status, client_id):
+        """处理硬件状态响应
+
+        Args:
+            hardware_status: HardwareStatusResponse对象
+            client_id: 客户端ID
+        """
+        try:
+            logger.info(f"【serverCommand】【硬件状态响应】")
+            logger.info(f"  ├─ 机器人: {'已启动' if hardware_status.robot_enabled else '未启动'}")
+            logger.info(f"  ├─ 相机: {'已启动' if hardware_status.camera_enabled else '未启动'}")
+            logger.info(f"  ├─ 环境传感器: {'已启动' if hardware_status.env_sensor_enabled else '未启动'}")
+            logger.info(f"  └─ 消息: {hardware_status.message}")
+
+        except Exception as e:
+            logger.error(f"【serverCommand】处理硬件状态响应失败: {e}")
+
     def _save_capture_images(self, image_base64_list, task_id, station_id, device_id):
         """保存接收到的图像到本地
 
@@ -847,7 +933,7 @@ def keyboard_input_handler(servicer, stop_event):
         stop_event: 停止事件
     """
     logger.info("【键盘监听】键盘输入监听线程已启动")
-    logger.info("【键盘监听】输入 1/2/3/4 发送命令, 'a' 切换自动发送, 'q' 退出")
+    logger.info("【键盘监听】输入 1-8 发送命令, 'a' 切换自动发送, 'q' 退出")
 
     import sys
     import select
@@ -899,6 +985,16 @@ def keyboard_input_handler(servicer, stop_event):
             elif key == '6':
                 logger.info("【键盘输入】触发: 设置标记命令 (SET_MARKER_CMD)")
                 cmd = servicer.create_set_marker_command()
+                servicer.manual_command_queue.put(cmd)
+
+            elif key == '7':
+                logger.info("【键盘输入】触发: 硬件启动命令 (HARDWARE_START_CMD)")
+                cmd = servicer.create_hardware_start_command(robot=True, camera=True, env_sensor=True)
+                servicer.manual_command_queue.put(cmd)
+
+            elif key == '8':
+                logger.info("【键盘输入】触发: 硬件关闭命令 (HARDWARE_SHUTDOWN_CMD)")
+                cmd = servicer.create_hardware_shutdown_command(robot=True, camera=True, env_sensor=True)
                 servicer.manual_command_queue.put(cmd)
 
             elif key == 'a':

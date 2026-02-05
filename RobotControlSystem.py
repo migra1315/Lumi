@@ -133,6 +133,10 @@ class RobotControlSystem:
         self._max_offline_messages = reconnect_config.get('max_offline_messages', 10000)
         self._offline_message_ttl_hours = reconnect_config.get('offline_message_ttl_hours', 24)
 
+        # 硬件配置（从config读取，如果没有则使用默认值）
+        self.hardware_config = self.config.get('hardware_config', {})
+        self.auto_start_on_boot = self.hardware_config.get('auto_start_on_boot', True)  # 默认True保持向后兼容
+
         # 连接状态（使用状态机管理）
         self._connection_state = ConnectionState.DISCONNECTED
         self._connection_lock = threading.Lock()
@@ -635,8 +639,19 @@ class RobotControlSystem:
         self._shutdown_event.clear()
         self._reconnect_trigger.clear()
 
+        # 确定是否自动启动硬件
+        auto_start_hardware = self.auto_start_on_boot
+        if auto_start_hardware:
+            self.logger.info(f"硬件将在启动时自动初始化 (auto_start_on_boot={auto_start_hardware})")
+        else:
+            self.logger.info("硬件将等待远程命令启动 (auto_start_on_boot=False)")
+
         # 初始化任务管理器（TaskManager完全管理robot_controller）
-        self.task_manager = TaskManager(self.config, use_mock=self.use_mock)
+        self.task_manager = TaskManager(
+            self.config,
+            use_mock=self.use_mock,
+            auto_start_hardware=auto_start_hardware
+        )
 
         # 注册新的系统回调
         self.task_manager.register_system_callback("on_command_status_change", self._handle_command_status_callback)
@@ -778,6 +793,16 @@ class RobotControlSystem:
                 new_mode = RobotMode(mode_cmd.get('robot_mode'))
                 self.current_mode = new_mode
                 self.logger.info(f"机器人工作模式已更新为: {new_mode}")
+
+            # 特殊处理：硬件启动命令（不通过TaskManager调度）
+            if cmd_type == CmdType.HARDWARE_START_CMD:
+                self._handle_hardware_start(command_envelope)
+                return
+
+            # 特殊处理：硬件关闭命令（不通过TaskManager调度）
+            if cmd_type == CmdType.HARDWARE_SHUTDOWN_CMD:
+                self._handle_hardware_shutdown(command_envelope)
+                return
 
             # 统一通过TaskManager处理所有命令
             command_id = self.task_manager.receive_command(command_envelope)
@@ -1486,9 +1511,169 @@ class RobotControlSystem:
             self.logger.error(f"发送操作结果异常: {e}")
 
 
+    # ==================== 硬件控制命令处理方法 ====================
+
+    def _handle_hardware_start(self, command_envelope: CommandEnvelope):
+        """处理硬件启动命令
+
+        Args:
+            command_envelope: 命令信封
+        """
+        try:
+            hw_cmd = command_envelope.data_json.get('hardware_control_cmd', {})
+            robot = hw_cmd.get('robot', False)
+            camera = hw_cmd.get('camera', False)
+            env_sensor = hw_cmd.get('env_sensor', False)
+
+            self.logger.info(f"处理硬件启动命令: robot={robot}, camera={camera}, env_sensor={env_sensor}")
+
+            # 调用TaskManager启动硬件
+            results = self.task_manager.start_hardware(
+                robot=robot,
+                camera=camera,
+                env_sensor=env_sensor
+            )
+
+            # 获取硬件状态
+            hardware_status = self.task_manager.get_hardware_status()
+
+            # 构建响应消息
+            message_parts = []
+            if robot:
+                message_parts.append(f"机器人: {results['robot']['message']}")
+            if camera:
+                message_parts.append(f"相机: {results['camera']['message']}")
+            if env_sensor:
+                message_parts.append(f"环境传感器: {results['env_sensor']['message']}")
+
+            message = "; ".join(message_parts) if message_parts else "无硬件启动请求"
+
+            # 发送硬件状态响应
+            self._send_hardware_status_response(
+                command_envelope.cmd_id,
+                hardware_status,
+                message
+            )
+
+        except Exception as e:
+            self.logger.error(f"处理硬件启动命令失败: {e}")
+            # 发送错误响应
+            self._send_hardware_status_response(
+                command_envelope.cmd_id,
+                self.task_manager.get_hardware_status(),
+                f"硬件启动失败: {str(e)}"
+            )
+
+    def _handle_hardware_shutdown(self, command_envelope: CommandEnvelope):
+        """处理硬件关闭命令
+
+        Args:
+            command_envelope: 命令信封
+        """
+        try:
+            hw_cmd = command_envelope.data_json.get('hardware_control_cmd', {})
+            robot = hw_cmd.get('robot', False)
+            camera = hw_cmd.get('camera', False)
+            env_sensor = hw_cmd.get('env_sensor', False)
+
+            self.logger.info(f"处理硬件关闭命令: robot={robot}, camera={camera}, env_sensor={env_sensor}")
+
+            # 调用TaskManager关闭硬件
+            results = self.task_manager.stop_hardware(
+                robot=robot,
+                camera=camera,
+                env_sensor=env_sensor
+            )
+
+            # 获取硬件状态
+            hardware_status = self.task_manager.get_hardware_status()
+
+            # 构建响应消息
+            message_parts = []
+            if robot:
+                message_parts.append(f"机器人: {results['robot']['message']}")
+            if camera:
+                message_parts.append(f"相机: {results['camera']['message']}")
+            if env_sensor:
+                message_parts.append(f"环境传感器: {results['env_sensor']['message']}")
+
+            message = "; ".join(message_parts) if message_parts else "无硬件关闭请求"
+
+            # 发送硬件状态响应
+            self._send_hardware_status_response(
+                command_envelope.cmd_id,
+                hardware_status,
+                message
+            )
+
+        except Exception as e:
+            self.logger.error(f"处理硬件关闭命令失败: {e}")
+            # 发送错误响应
+            self._send_hardware_status_response(
+                command_envelope.cmd_id,
+                self.task_manager.get_hardware_status(),
+                f"硬件关闭失败: {str(e)}"
+            )
+
+    def _send_hardware_status_response(self, command_id: str, hardware_status: Dict[str, bool], message: str):
+        """发送硬件状态响应
+
+        Args:
+            command_id: 命令ID
+            hardware_status: 硬件状态字典
+            message: 响应消息
+        """
+        try:
+            import gRPC.RobotService_pb2 as robot_pb2
+
+            # 创建HardwareStatusResponse消息
+            hardware_response = robot_pb2.HardwareStatusResponse(
+                robot_enabled=hardware_status.get('robot', False),
+                camera_enabled=hardware_status.get('camera', False),
+                env_sensor_enabled=hardware_status.get('env_sensor', False),
+                message=message
+            )
+
+            # 创建ClientStreamMessage
+            client_msg = robot_pb2.ClientStreamMessage(
+                command_id=int(command_id) if command_id.isdigit() else abs(hash(command_id)) % (2**31),
+                command_time=int(time.time() * 1000),
+                command_type=robot_pb2.ClientMessageType.HARDWARE_STATUS_RESPONSE,
+                robot_id=self.robot_id,
+                hardware_status=hardware_response
+            )
+
+            # 通过serverCommand流发送
+            if self.server_command_manager:
+                self.server_command_manager.send_message(client_msg)
+                self.logger.info(f"硬件状态响应已发送: command_id={command_id}, status={hardware_status}")
+            else:
+                self._on_message_send_failed(client_msg, STREAM_TYPE_SERVER_COMMAND, "manager_not_initialized")
+                self.logger.warning("serverCommand流管理器不存在，消息已缓存到离线队列")
+
+            # 保存发送的消息到数据库
+            msg_id = str(uuid.uuid4())
+            msg_time = int(time.time() * 1000)
+            self._save_server_command_message(
+                msg_id=msg_id,
+                msg_time=msg_time,
+                msg_type="HARDWARE_STATUS_RESPONSE",
+                data={
+                    "command_id": command_id,
+                    "robot_enabled": hardware_status.get('robot', False),
+                    "camera_enabled": hardware_status.get('camera', False),
+                    "env_sensor_enabled": hardware_status.get('env_sensor', False),
+                    "message": message
+                },
+                command_id=command_id
+            )
+
+        except Exception as e:
+            self.logger.error(f"发送硬件状态响应异常: {e}")
+
     def register_callback(self, event: str, callback: Callable):
         """注册回调函数
-        
+
         Args:
             event: 事件名称
             callback: 回调函数

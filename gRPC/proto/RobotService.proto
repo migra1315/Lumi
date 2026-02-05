@@ -69,6 +69,8 @@ enum CmdType {
     CHARGE_CMD = 5; // 充电命令 (Trigger信号，无需dataJson参数)
     POSITION_ADJUST_CMD = 6; // 重定位命令 (Trigger信号，无需dataJson参数)
     HEARTBEAT_CMD = 7; // 心跳确认
+    HARDWARE_START_CMD = 8; // 硬件启动命令
+    HARDWARE_SHUTDOWN_CMD = 9; // 硬件关闭命令
 }
 
 // 客户端信息类型
@@ -79,6 +81,7 @@ enum ClientMessageType {
     COMMAND_STATUS_UPDATE = 3; // 命令状态更新
     TASK_PROGRESS_UPDATE = 4; // 任务进度更新
     OPERATION_RESULT = 5; // 操作结果反馈
+    HARDWARE_STATUS_RESPONSE = 6; // 硬件状态响应
 }
 
 // 命令状态枚举
@@ -292,6 +295,13 @@ message JoyControlCmd {
     string linear_velocity = 2;  // 线速度
 }
 
+// 硬件控制命令
+message HardwareControlCommand {
+    bool robot = 1;       // 机器人（AGV+机械臂）
+    bool camera = 2;      // 相机
+    bool env_sensor = 3;  // 环境传感器
+}
+
 // === 服务端下发命令消息 ===
 
 // 服务端下发消息
@@ -307,6 +317,7 @@ message ServerStreamMessage {
         JoyControlCmd joy_control_cmd = 7;
         ServerResponse response_info = 8;
         SetMarkerCommand set_marker_cmd = 9;
+        HardwareControlCommand hardware_control_cmd = 10;
     }
 }
 
@@ -353,6 +364,14 @@ message OperationResult {
     double duration = 10;              // 操作耗时(秒)
 }
 
+// 硬件状态响应
+message HardwareStatusResponse {
+    bool robot_enabled = 1;      // 机器人启用状态
+    bool camera_enabled = 2;     // 相机启用状态
+    bool env_sensor_enabled = 3; // 环境传感器启用状态
+    string message = 4;          // 响应消息
+}
+
 // 客户端响应消息
 message ClientStreamMessage {
     int64 command_id = 1;
@@ -364,6 +383,7 @@ message ClientStreamMessage {
         PositionInfo position_info = 6;
         CommandStatusUpdate command_status = 7;
         TaskProgressUpdate task_progress = 8;
-        OperationResult operation_result = 9; // TODO
+        OperationResult operation_result = 9;
+        HardwareStatusResponse hardware_status = 10;
     }
 }

@@ -34,6 +34,8 @@ def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.Ser
         robot_pb2.CmdType.SET_MARKER_CMD: CmdType.SET_MARKER_CMD,
         robot_pb2.CmdType.CHARGE_CMD: CmdType.CHARGE_CMD,
         robot_pb2.CmdType.POSITION_ADJUST_CMD: CmdType.POSITION_ADJUST_CMD,
+        robot_pb2.CmdType.HARDWARE_START_CMD: CmdType.HARDWARE_START_CMD,
+        robot_pb2.CmdType.HARDWARE_SHUTDOWN_CMD: CmdType.HARDWARE_SHUTDOWN_CMD,
     }
     
     cmd_type = cmd_type_map.get(server_cmd_request.command_type, CmdType.RESPONSE_CMD)
@@ -172,7 +174,30 @@ def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.Ser
 
     elif cmd_type == CmdType.POSITION_ADJUST_CMD:
         data_json = {}  # Trigger 信号，无需参数
-    
+
+    # 硬件控制命令
+    elif cmd_type == CmdType.HARDWARE_START_CMD:
+        if server_cmd_request.HasField('hardware_control_cmd'):
+            hw_cmd = server_cmd_request.hardware_control_cmd
+            data_json = {
+                "hardware_control_cmd": {
+                    "robot": hw_cmd.robot,
+                    "camera": hw_cmd.camera,
+                    "env_sensor": hw_cmd.env_sensor
+                }
+            }
+
+    elif cmd_type == CmdType.HARDWARE_SHUTDOWN_CMD:
+        if server_cmd_request.HasField('hardware_control_cmd'):
+            hw_cmd = server_cmd_request.hardware_control_cmd
+            data_json = {
+                "hardware_control_cmd": {
+                    "robot": hw_cmd.robot,
+                    "camera": hw_cmd.camera,
+                    "env_sensor": hw_cmd.env_sensor
+                }
+            }
+
     # 创建命令信封
     command_envelope = CommandEnvelope(
         cmd_id=str(server_cmd_request.command_id),

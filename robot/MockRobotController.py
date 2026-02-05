@@ -12,10 +12,10 @@ from robot.RobotControllerBase import RobotControllerBase, RobotStatus, BatteryS
 
 class MockRobotController(RobotControllerBase):
     """Mock机器人控制器实现类"""
-    
-    def __init__(self, config: Dict[str, Any] = None, debug: bool = False):
-        super().__init__(config, debug)
-        
+
+    def __init__(self, config: Dict[str, Any] = None, debug: bool = False, auto_setup: bool = True):
+        super().__init__(config, debug, auto_setup)
+
         # Mock特定配置
         self.success_rate = self.config.get('success_rate', 0.95)
         self.base_latency = self.config.get('latency', 0.1)
@@ -71,14 +71,21 @@ class MockRobotController(RobotControllerBase):
         # 监控线程
         self._monitor_thread = None
         self._stop_monitoring = False
-        
-        # 启动监控
-        self.start_monitoring()
-        
+
         # 模拟环境数据更新线程
         self._env_thread = None
         self._stop_env_monitor = False
-        self.start_environment_monitoring()
+
+        # 相机和传感器启用状态
+        self._camera_enabled = False
+        self._env_sensor_enabled = False
+
+        # 根据 auto_setup 决定是否自动启动监控
+        if auto_setup:
+            self.start_monitoring()
+            self.start_environment_monitoring()
+            self._camera_enabled = True
+            self._env_sensor_enabled = True
     
     def setup_system(self) -> bool:
         """Mock系统初始化"""
@@ -446,6 +453,34 @@ class MockRobotController(RobotControllerBase):
             self.logger.error(f"位置调整失败: {e}")
             return False
     
+    # ==================== 硬件模块控制方法 ====================
+    def start_camera(self) -> bool:
+        """启动模拟相机"""
+        self.logger.info("Mock相机启动")
+        self._camera_enabled = True
+        return True
+
+    def stop_camera(self) -> bool:
+        """关闭模拟相机"""
+        self.logger.info("Mock相机关闭")
+        self._camera_enabled = False
+        return True
+
+    def start_env_sensor(self) -> bool:
+        """启动模拟环境传感器"""
+        self.logger.info("Mock环境传感器启动")
+        self._env_sensor_enabled = True
+        if self._env_thread is None or not self._env_thread.is_alive():
+            self.start_environment_monitoring()
+        return True
+
+    def stop_env_sensor(self) -> bool:
+        """关闭模拟环境传感器"""
+        self.logger.info("Mock环境传感器关闭")
+        self._env_sensor_enabled = False
+        self.stop_environment_monitoring()
+        return True
+
     # ==================== Mock特有方法 ====================
     def start_monitoring(self):
         """启动监控线程"""

@@ -1,6 +1,7 @@
 from datetime import datetime
 import json
 import uuid
+import threading
 from utils.logger_config import get_logger
 from typing import Dict, List, Any, Optional
 from utils.dataConverter import convert_data_json_to_task_cmd, convert_task_cmd_to_task
@@ -10,30 +11,41 @@ from dataModels.CommandModels import TaskCmd, CmdType, CommandEnvelope
 from dataModels.TaskModels import Task, Station, StationConfig, OperationConfig, OperationMode, RobotMode, TaskStatus, StationTaskStatus, StationExecutionPhase
 from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus, CommandCategory, create_unified_command
 
+
 class TaskManager:
     """任务管理器 - 主控制器，负责任务的接收、解析和调度"""
 
-    def __init__(self, config: Dict[str, Any] = None, use_mock: bool = True):
+    def __init__(self, config: Dict[str, Any] = None, use_mock: bool = True, auto_start_hardware: bool = True):
         """初始化任务管理器
 
         Args:
             config: 系统配置字典
             use_mock: 是否使用Mock机器人控制器
+            auto_start_hardware: 是否自动启动硬件（默认True保持向后兼容）
         """
         self.config = config or {}
         self.use_mock = use_mock
+        self.auto_start_hardware = auto_start_hardware
         self.logger = get_logger(__name__)
 
-        # 初始化机器人控制器（由TaskManager完全管理）
-        self._init_robot_controller()
+        # 硬件状态管理
+        self._hardware_status = {
+            "robot": False,
+            "camera": False,
+            "env_sensor": False
+        }
+        self._hardware_lock = threading.Lock()
+
+        # 创建机器人控制器（不自动初始化）
+        self._create_robot_controller()
 
         # 初始化数据库和调度器
         self.database = TaskDatabase()
         self.scheduler = TaskScheduler(self.robot_controller, self.database)
-        
+
         # 启动调度器
         self.scheduler.start()
-        
+
         # 注册调度器回调
         self.scheduler.register_callback("on_task_start", self._on_task_start)
         self.scheduler.register_callback("on_task_complete", self._on_task_complete)
@@ -56,27 +68,212 @@ class TaskManager:
             "on_operation_result": None,        # 操作结果回调
         }
 
-    def _init_robot_controller(self):
-        """初始化机器人控制器（内部方法，完全封装）"""
+        # 根据 auto_start_hardware 决定是否自动启动硬件
+        if auto_start_hardware:
+            self.logger.info("TaskManager: 自动启动硬件...")
+            self.start_hardware(robot=True, camera=True, env_sensor=True)
+        else:
+            self.logger.info("TaskManager: 等待远程命令启动硬件...")
+
+    def _create_robot_controller(self):
+        """创建机器人控制器实例（不调用setup_system）"""
         try:
             if self.use_mock:
-                self.logger.info("TaskManager: 使用Mock机器人控制器")
+                self.logger.info("TaskManager: 创建Mock机器人控制器")
                 from robot.MockRobotController import MockRobotController
-                self.robot_controller = MockRobotController(self.config['robot_config'])
+                self.robot_controller = MockRobotController(
+                    self.config.get('robot_config', {}),
+                    auto_setup=False  # 不自动初始化
+                )
             else:
-                self.logger.info("TaskManager: 使用真实机器人控制器")
+                self.logger.info("TaskManager: 创建真实机器人控制器")
                 from robot.RobotController import RobotController as RealRobotController
-                self.robot_controller = RealRobotController(self.config)
+                self.robot_controller = RealRobotController(
+                    self.config,
+                    auto_setup=False  # 不自动初始化
+                )
 
-            # 初始化机器人系统
-            if not self.robot_controller.setup_system():
-                raise Exception("机器人系统初始化失败")
-
-            self.logger.info("TaskManager: 机器人控制器初始化成功")
+            self.logger.info("TaskManager: 机器人控制器创建成功（未初始化）")
 
         except Exception as e:
-            self.logger.error(f"TaskManager: 初始化机器人控制器失败: {e}")
+            self.logger.error(f"TaskManager: 创建机器人控制器失败: {e}")
             raise
+
+    # ==================== 硬件控制相关方法 ====================
+    def start_hardware(self, robot: bool = False, camera: bool = False, env_sensor: bool = False) -> Dict[str, Any]:
+        """启动指定硬件模块
+
+        Args:
+            robot: 是否启动机器人（AGV+机械臂）
+            camera: 是否启动相机
+            env_sensor: 是否启动环境传感器
+
+        Returns:
+            Dict[str, Any]: 各模块启动结果
+        """
+        results = {
+            "robot": {"requested": robot, "success": False, "message": ""},
+            "camera": {"requested": camera, "success": False, "message": ""},
+            "env_sensor": {"requested": env_sensor, "success": False, "message": ""},
+        }
+
+        with self._hardware_lock:
+            # 启动机器人
+            if robot:
+                try:
+                    if not self._hardware_status["robot"]:
+                        self.logger.info("正在启动机器人模块...")
+                        if self.robot_controller.setup_system():
+                            self._hardware_status["robot"] = True
+                            results["robot"]["success"] = True
+                            results["robot"]["message"] = "机器人模块启动成功"
+                            self.logger.info("机器人模块已启动")
+                        else:
+                            results["robot"]["message"] = "机器人系统初始化失败"
+                            self.logger.error("机器人系统初始化失败")
+                    else:
+                        results["robot"]["success"] = True
+                        results["robot"]["message"] = "机器人模块已在运行中"
+                except Exception as e:
+                    results["robot"]["message"] = f"启动失败: {str(e)}"
+                    self.logger.error(f"启动机器人模块失败: {e}")
+
+            # 启动相机
+            if camera:
+                try:
+                    if not self._hardware_status["camera"]:
+                        self.logger.info("正在启动相机模块...")
+                        if self.robot_controller.start_camera():
+                            self._hardware_status["camera"] = True
+                            results["camera"]["success"] = True
+                            results["camera"]["message"] = "相机模块启动成功"
+                            self.logger.info("相机模块已启动")
+                        else:
+                            results["camera"]["message"] = "相机启动失败"
+                            self.logger.error("相机启动失败")
+                    else:
+                        results["camera"]["success"] = True
+                        results["camera"]["message"] = "相机模块已在运行中"
+                except Exception as e:
+                    results["camera"]["message"] = f"启动失败: {str(e)}"
+                    self.logger.error(f"启动相机模块失败: {e}")
+
+            # 启动环境传感器
+            if env_sensor:
+                try:
+                    if not self._hardware_status["env_sensor"]:
+                        self.logger.info("正在启动环境传感器模块...")
+                        if self.robot_controller.start_env_sensor():
+                            self._hardware_status["env_sensor"] = True
+                            results["env_sensor"]["success"] = True
+                            results["env_sensor"]["message"] = "环境传感器模块启动成功"
+                            self.logger.info("环境传感器模块已启动")
+                        else:
+                            results["env_sensor"]["message"] = "环境传感器启动失败"
+                            self.logger.error("环境传感器启动失败")
+                    else:
+                        results["env_sensor"]["success"] = True
+                        results["env_sensor"]["message"] = "环境传感器模块已在运行中"
+                except Exception as e:
+                    results["env_sensor"]["message"] = f"启动失败: {str(e)}"
+                    self.logger.error(f"启动环境传感器模块失败: {e}")
+
+        return results
+
+    def stop_hardware(self, robot: bool = False, camera: bool = False, env_sensor: bool = False) -> Dict[str, Any]:
+        """关闭指定硬件模块
+
+        Args:
+            robot: 是否关闭机器人（AGV+机械臂）
+            camera: 是否关闭相机
+            env_sensor: 是否关闭环境传感器
+
+        Returns:
+            Dict[str, Any]: 各模块关闭结果
+        """
+        results = {
+            "robot": {"requested": robot, "success": False, "message": ""},
+            "camera": {"requested": camera, "success": False, "message": ""},
+            "env_sensor": {"requested": env_sensor, "success": False, "message": ""},
+        }
+
+        with self._hardware_lock:
+            # 关闭机器人
+            if robot:
+                try:
+                    if self._hardware_status["robot"]:
+                        self.logger.info("正在关闭机器人模块...")
+                        self.robot_controller.shutdown_system()
+                        self._hardware_status["robot"] = False
+                        results["robot"]["success"] = True
+                        results["robot"]["message"] = "机器人模块已关闭"
+                        self.logger.info("机器人模块已关闭")
+                    else:
+                        results["robot"]["success"] = True
+                        results["robot"]["message"] = "机器人模块未运行"
+                except Exception as e:
+                    results["robot"]["message"] = f"关闭失败: {str(e)}"
+                    self.logger.error(f"关闭机器人模块失败: {e}")
+
+            # 关闭相机
+            if camera:
+                try:
+                    if self._hardware_status["camera"]:
+                        self.logger.info("正在关闭相机模块...")
+                        if self.robot_controller.stop_camera():
+                            self._hardware_status["camera"] = False
+                            results["camera"]["success"] = True
+                            results["camera"]["message"] = "相机模块已关闭"
+                            self.logger.info("相机模块已关闭")
+                        else:
+                            results["camera"]["message"] = "相机关闭失败"
+                            self.logger.error("相机关闭失败")
+                    else:
+                        results["camera"]["success"] = True
+                        results["camera"]["message"] = "相机模块未运行"
+                except Exception as e:
+                    results["camera"]["message"] = f"关闭失败: {str(e)}"
+                    self.logger.error(f"关闭相机模块失败: {e}")
+
+            # 关闭环境传感器
+            if env_sensor:
+                try:
+                    if self._hardware_status["env_sensor"]:
+                        self.logger.info("正在关闭环境传感器模块...")
+                        if self.robot_controller.stop_env_sensor():
+                            self._hardware_status["env_sensor"] = False
+                            results["env_sensor"]["success"] = True
+                            results["env_sensor"]["message"] = "环境传感器模块已关闭"
+                            self.logger.info("环境传感器模块已关闭")
+                        else:
+                            results["env_sensor"]["message"] = "环境传感器关闭失败"
+                            self.logger.error("环境传感器关闭失败")
+                    else:
+                        results["env_sensor"]["success"] = True
+                        results["env_sensor"]["message"] = "环境传感器模块未运行"
+                except Exception as e:
+                    results["env_sensor"]["message"] = f"关闭失败: {str(e)}"
+                    self.logger.error(f"关闭环境传感器模块失败: {e}")
+
+        return results
+
+    def get_hardware_status(self) -> Dict[str, bool]:
+        """获取硬件状态
+
+        Returns:
+            Dict[str, bool]: 各模块运行状态
+        """
+        with self._hardware_lock:
+            return self._hardware_status.copy()
+
+    def is_robot_ready(self) -> bool:
+        """检查机器人是否就绪
+
+        Returns:
+            bool: 机器人模块是否已启动且初始化完成
+        """
+        with self._hardware_lock:
+            return self._hardware_status["robot"]
 
     # ==================== 状态查询相关方法 ====================
     def get_robot_status(self) -> Dict[str, Any]:
