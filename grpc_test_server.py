@@ -12,6 +12,7 @@ import os
 import base64
 from datetime import datetime
 from concurrent import futures
+import math
 
 import gRPC.RobotService_pb2 as robot_service_pb2
 import gRPC.RobotService_pb2_grpc as robot_service_pb2_grpc
@@ -471,7 +472,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         if station_list is None:
             station_list = []
             # 创建4个默认测试站点
-            agv_marker_list = ["marker_1", "marker_2", "marker_3","marker_4","marker_5","charge_point_1F_6010"]
+            agv_marker_list = ["marker_2", "charge_point_1F_6010", "marker_3","marker_4","marker_5","charge_point_1F_6010"]
             ext_pos_list = [[10, 10, 0, 0], 
                             [20, 20, 0, 0], 
                             [30, 30, 0, 0], 
@@ -479,12 +480,11 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                             [50, 10, 0, 0], 
                             [10, 0, 0, 0]
                             ]
-            robot_pos_list=[[0, 30, 100, 0, 60, -90],
-                            [0, 40, 90, 0, 60, -90],
-                            [0, 50, 80, 0, 60, -90],
-                            [0, 50, 80, 0, 0, -90],
-                            [0, 50, 80, 0, 0, -90],
-                            [0, 50, 80, 0, 0, -90],
+            robot_pos_list=[[math.radians(angle) for angle in [-170,90.0,0,20,90,60]],
+                            [math.radians(angle) for angle in [-150,90.0,0,20,60,60]],
+                            [math.radians(angle) for angle in [-140,90.0,0,20,90,60]],
+                            [math.radians(angle) for angle in [-150,90.0,0,20,90,60]],
+                            [math.radians(angle) for angle in [-170,90.0,0,20,90,60]]
                             ]
             operation_mode_list = [robot_service_pb2.OperationMode.OPERATION_MODE_CAPTURE, 
                                    robot_service_pb2.OperationMode.OPERATION_MODE_CAPTURE, 
@@ -492,7 +492,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
                                    robot_service_pb2.OperationMode.OPERATION_MODE_SERVICE, 
                                    robot_service_pb2.OperationMode.OPERATION_MODE_NONE, 
                                    robot_service_pb2.OperationMode.OPERATION_MODE_SERVICE]
-            for i in range(6):
+            for i in range(2):
                 station = self.create_station(
                     station_id=1111 + i,
                     sort=i + 1,
