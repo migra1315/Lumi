@@ -55,6 +55,7 @@ class ArmController(JAKA):
         self.ext_axis_limits = ext_axis_limits
         self.WELCOME_JOINTS_1 = [-5.0,50,23,0.0,36,0]
         self.WELCOME_JOINTS_2 = [5.0,70,40,0.0,36,0]
+        self.WELCOME_JOINTS_3 = [-170.0,90.0,0.0,20.0,90.0,55.0]
 
         # 语音播报器
         self.voice_player = VoicePlayer()
@@ -314,6 +315,8 @@ class ArmController(JAKA):
         for i in range(2):
             self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_1])
             self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_2])
+        
+        self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_3])
         
         return robot_ok and ext_ok
     
