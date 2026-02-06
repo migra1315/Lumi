@@ -17,25 +17,25 @@ class TaskManager:
 
     def __init__(self, config: Dict[str, Any] = None, use_mock: bool = True,
                  auto_start_on_boot: bool = True,
-                 auto_start_robot: bool = True,
-                 auto_start_camera: bool = True,
-                 auto_start_env_sensor: bool = True):
+                 robot_enabled: bool = True,
+                 camera_enabled: bool = True,
+                 env_sensor_enabled: bool = True):
         """初始化任务管理器
 
         Args:
             config: 系统配置字典
             use_mock: 是否使用Mock机器人控制器
             auto_start_on_boot: 是否在启动时自动启动硬件（默认True保持向后兼容）
-            auto_start_robot: 是否自动启动机器人
-            auto_start_camera: 是否自动启动相机
-            auto_start_env_sensor: 是否自动启动环境传感器
+            robot_enabled: 机器人模块是否启用
+            camera_enabled: 相机模块是否启用
+            env_sensor_enabled: 环境传感器模块是否启用
         """
         self.config = config or {}
         self.use_mock = use_mock
         self.auto_start_on_boot = auto_start_on_boot
-        self.auto_start_robot = auto_start_robot
-        self.auto_start_camera = auto_start_camera
-        self.auto_start_env_sensor = auto_start_env_sensor
+        self.robot_enabled = robot_enabled
+        self.camera_enabled = camera_enabled
+        self.env_sensor_enabled = env_sensor_enabled
         self.logger = get_logger(__name__)
 
         # 硬件状态管理
@@ -78,13 +78,13 @@ class TaskManager:
             "on_operation_result": None,        # 操作结果回调
         }
 
-        # 根据 auto_start_on_boot 和各模块配置决定是否自动启动硬件
+        # 根据 auto_start_on_boot 和各模块 enabled 配置决定是否自动启动硬件
         if auto_start_on_boot:
             self.logger.info("TaskManager: 根据配置自动启动硬件...")
             self.start_hardware(
-                robot=self.auto_start_robot,
-                camera=self.auto_start_camera,
-                env_sensor=self.auto_start_env_sensor
+                robot=self.robot_enabled,
+                camera=self.camera_enabled,
+                env_sensor=self.env_sensor_enabled
             )
         else:
             self.logger.info("TaskManager: 等待远程命令启动硬件...")

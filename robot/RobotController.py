@@ -90,10 +90,6 @@ class RobotController():
 
         # 环境传感器相关
         self.env_sensor = None
-        # 从 hardware_config.env_sensor.enabled 读取，兼容旧配置
-        hardware_config = system_config.get('hardware_config', {})
-        env_sensor_hw_config = hardware_config.get('env_sensor', {})
-        self.env_sensor_enabled = env_sensor_hw_config.get('enabled', system_config.get('env_sensor_enabled', False))
         self.env_sensor_config = system_config.get('env_sensor_config', {})
         self._env_data_lock = threading.Lock()
         self._env_data = {
@@ -112,9 +108,6 @@ class RobotController():
         # 相机管理器相关
         self.camera_manager = None
         self.camera_config = system_config.get('camera_config', {})
-        # 从 hardware_config.camera.enabled 读取，兼容旧配置
-        camera_hw_config = hardware_config.get('camera', {})
-        self.camera_enabled = camera_hw_config.get('enabled', self.camera_config.get('camera_enabled', False))
 
         self.logger.info("机器人控制器初始化完成")
     
@@ -165,19 +158,9 @@ class RobotController():
                 self.logger.error("机械臂系统初始化失败")
                 return False
 
-            # 初始化环境传感器
-            env_sensor_ok = self._setup_environment_sensor()
-            if not env_sensor_ok:
-                self.logger.warning("环境传感器初始化失败，将使用默认值")
-
-            # 初始化相机
-            camera_ok = self._setup_camera()
-            if not camera_ok:
-                self.logger.warning("相机初始化失败，将使用模拟数据")
-
             self._system_initialized = True
             self.system_status = SystemStatus.IDLE
-            self.logger.info("机器人系统初始化完成")
+            self.logger.info("机器人系统初始化完成（AGV+机械臂）")
 
             return agv_ok and arm_ok
 
@@ -235,6 +218,8 @@ class RobotController():
                           ext_status_response[3].get('pos', 0.0),
                         ]
 
+            # 获取机械臂状态
+            
             arm_status = self.arm_controller.arm_get_state()
             
             # 构建状态字典
@@ -965,8 +950,9 @@ class RobotController():
         Returns:
             bool: 初始化是否成功
         """
-        if not self.env_sensor_enabled:
-            self.logger.info("环境传感器未启用")
+        # 幂等性保护：已初始化则跳过
+        if self.env_sensor is not None:
+            self.logger.info("环境传感器已在运行中，跳过重复初始化")
             return True
 
         if not ENV_SENSOR_AVAILABLE:
@@ -1051,8 +1037,9 @@ class RobotController():
         Returns:
             bool: 初始化是否成功
         """
-        if not self.camera_enabled:
-            self.logger.info("相机未启用")
+        # 幂等性保护：已初始化则跳过
+        if self.camera_manager is not None:
+            self.logger.info("相机已在运行中，跳过重复初始化")
             return True
 
         if not CAMERA_AVAILABLE:
@@ -1066,9 +1053,8 @@ class RobotController():
             try:
                 self.logger.info("正在初始化相机管理器...")
 
-                # 创建相机管理器实例，传入enabled状态
-                camera_config_with_enabled = {**self.camera_config, 'enabled': self.camera_enabled}
-                self.camera_manager = CameraManager(camera_config_with_enabled)
+                # 创建相机管理器实例
+                self.camera_manager = CameraManager(self.camera_config)
 
                 # 启动相机
                 if not self.camera_manager.start():

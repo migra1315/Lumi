@@ -10,7 +10,7 @@
         "agv_port": 31001
     },
     "grpc_config": {
-        "server_host": "localhost",
+        "server_host": "192.168.8.96",
         "server_port": 50001,
         "connection_timeout": 10,
         "stream_keep_alive_check": 30,
@@ -24,7 +24,7 @@
             "offline_message_ttl_hours": 24
         }
     },
-        "hardware_config": {
+    "hardware_config": {
         "auto_start_on_boot": true,
         "robot": {
             "enabled": true
@@ -54,7 +54,7 @@
         "capture_quality": 95,
         "stream_config": {
             "enabled": true,
-            "rtmp_url": "rtmp://127.0.0.1/live/test",
+            "rtmp_url": "rtmp://192.168.8.96/live/test",
             "bitrate": "2000k",
             "maxrate": "2500k",
             "bufsize": "5000k",

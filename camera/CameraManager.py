@@ -15,12 +15,116 @@ import threading
 import subprocess
 import base64
 import sys
+import random
 from enum import Enum
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Dict, Any, Optional, List
 import cv2
 import numpy as np
 
 from utils.logger_config import get_logger
+
+
+@dataclass
+class StreamReconnectStatistics:
+    """推流重连统计"""
+
+    # 重连统计
+    total_reconnect_attempts: int = 0
+    successful_reconnects: int = 0
+    failed_reconnects: int = 0
+    current_attempt: int = 0
+
+    # 稳定性追踪
+    last_stable_time: Optional[datetime] = None  # 最后一次稳定运行的时间
+    stable_duration_seconds: float = 0.0  # 当前稳定运行时长
+
+    # 时间统计
+    last_disconnect_time: Optional[datetime] = None
+    last_reconnect_time: Optional[datetime] = None
+    total_downtime_seconds: float = 0.0
+
+    # 错误信息
+    last_error: str = ""
+    error_counts: dict = field(default_factory=dict)
+
+    # 线程锁
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def record_disconnect(self, error: str = ""):
+        """记录断开连接"""
+        with self._lock:
+            self.last_disconnect_time = datetime.now()
+            self.last_error = error
+            self.stable_duration_seconds = 0.0
+            if error:
+                self.error_counts[error] = self.error_counts.get(error, 0) + 1
+
+    def record_reconnect_attempt(self):
+        """记录重连尝试"""
+        with self._lock:
+            self.total_reconnect_attempts += 1
+            self.current_attempt += 1
+
+    def record_reconnect_success(self):
+        """记录重连成功"""
+        with self._lock:
+            self.successful_reconnects += 1
+            self.last_reconnect_time = datetime.now()
+            self.last_stable_time = datetime.now()
+
+            # 计算停机时间
+            if self.last_disconnect_time:
+                downtime = (self.last_reconnect_time - self.last_disconnect_time).total_seconds()
+                self.total_downtime_seconds += downtime
+
+    def record_reconnect_failure(self):
+        """记录重连失败"""
+        with self._lock:
+            self.failed_reconnects += 1
+
+    def reset_attempt_counter(self):
+        """重置重试计数"""
+        with self._lock:
+            self.current_attempt = 0
+
+    def get_current_attempt(self) -> int:
+        """获取当前重试次数"""
+        with self._lock:
+            return self.current_attempt
+
+    def update_stable_duration(self) -> float:
+        """更新并返回稳定运行时长（秒）"""
+        with self._lock:
+            if self.last_stable_time:
+                self.stable_duration_seconds = (datetime.now() - self.last_stable_time).total_seconds()
+            return self.stable_duration_seconds
+
+    def should_reset_attempt_counter(self, stable_threshold_seconds: float) -> bool:
+        """检查是否应该重置重试计数（基于稳定运行时长）"""
+        with self._lock:
+            if self.current_attempt > 0 and self.last_stable_time:
+                duration = (datetime.now() - self.last_stable_time).total_seconds()
+                return duration >= stable_threshold_seconds
+            return False
+
+    def to_dict(self) -> dict:
+        """转换为字典"""
+        with self._lock:
+            return {
+                'total_reconnect_attempts': self.total_reconnect_attempts,
+                'successful_reconnects': self.successful_reconnects,
+                'failed_reconnects': self.failed_reconnects,
+                'current_attempt': self.current_attempt,
+                'stable_duration_seconds': round(self.stable_duration_seconds, 2),
+                'last_disconnect_time': self.last_disconnect_time.isoformat() if self.last_disconnect_time else None,
+                'last_reconnect_time': self.last_reconnect_time.isoformat() if self.last_reconnect_time else None,
+                'total_downtime_seconds': round(self.total_downtime_seconds, 2),
+                'last_error': self.last_error,
+                'success_rate': round(self.successful_reconnects / self.total_reconnect_attempts * 100, 2)
+                               if self.total_reconnect_attempts > 0 else 100.0
+            }
 
 
 class CameraState(Enum):
@@ -72,8 +176,12 @@ class CameraManager:
         self.stream_maxrate = self.stream_config.get('maxrate', '2500k')
         self.stream_bufsize = self.stream_config.get('bufsize', '5000k')
         self.stream_preset = self.stream_config.get('preset', 'ultrafast')
-        self.reconnect_interval = self.stream_config.get('reconnect_interval', 5)
-        self.max_reconnect_attempts = self.stream_config.get('max_reconnect_attempts', 10)
+
+        # 重连配置（新增）- 支持新旧两种格式
+        self._init_reconnect_config()
+
+        # 重连统计（新增）
+        self._reconnect_stats = StreamReconnectStatistics()
 
         # 状态
         self._state = CameraState.DISCONNECTED
@@ -99,7 +207,6 @@ class CameraManager:
         self._ffmpeg_process: Optional[subprocess.Popen] = None
         self._ffmpeg_monitor_thread: Optional[threading.Thread] = None
         self._ffmpeg_healthy = False
-        self._reconnect_count = 0
         self._last_ffmpeg_error = ""
 
         # 统计
@@ -116,6 +223,28 @@ class CameraManager:
         self.logger.info(f"CameraManager初始化完成 - 类型: {self.camera_type}, "
                         f"分辨率: {self.resolution['width']}x{self.resolution['height']}, "
                         f"推流: {'启用' if self.stream_enabled else '禁用'}")
+
+    def _init_reconnect_config(self):
+        """初始化重连配置 - 支持向后兼容"""
+        # 旧格式参数（向后兼容）
+        old_interval = self.stream_config.get('reconnect_interval', 5)
+        old_max_attempts = self.stream_config.get('max_reconnect_attempts', 10)
+
+        # 新格式配置
+        reconnect_config = self.stream_config.get('reconnect', {})
+
+        self._reconnect_base_delay = float(reconnect_config.get('base_delay', old_interval))
+        self._reconnect_max_delay = float(reconnect_config.get('max_delay', 30.0))
+        self._reconnect_max_attempts = int(reconnect_config.get('max_attempts', old_max_attempts))
+        self._reconnect_jitter_factor = float(reconnect_config.get('jitter_factor', 0.3))
+        # 稳定运行N秒后重置重试计数（默认60秒）
+        self._reconnect_stable_reset_seconds = float(reconnect_config.get('stable_reset_seconds', 60.0))
+
+        self.logger.info(f"重连配置: base_delay={self._reconnect_base_delay}s, "
+                        f"max_delay={self._reconnect_max_delay}s, "
+                        f"max_attempts={self._reconnect_max_attempts}, "
+                        f"jitter={self._reconnect_jitter_factor}, "
+                        f"stable_reset={self._reconnect_stable_reset_seconds}s")
 
     # ==================== 生命周期管理 ====================
 
@@ -514,7 +643,7 @@ class CameraManager:
         self._stream_thread.start()
 
         self._set_state(CameraState.STREAMING)
-        self._reconnect_count = 0
+        self._reconnect_stats.reset_attempt_counter()
         self.logger.info("RTMP推流已启动")
         return True
 
@@ -698,13 +827,15 @@ class CameraManager:
             self._ffmpeg_monitor_thread.join(timeout=1.0)
 
     def _stream_loop(self):
-        """推流循环（独立线程）- 增强版，带进程守护"""
+        """推流循环（独立线程）- 使用指数退避重连"""
         self.logger.info("推流线程已启动")
 
         frame_interval = 1.0 / self.fps
         last_frame_time = time.time()
         last_health_check = time.time()
+        last_stability_check = time.time()
         health_check_interval = 5.0  # 每5秒进行一次健康检查
+        stability_check_interval = 10.0  # 每10秒检查一次稳定性
         consecutive_write_errors = 0
         max_consecutive_errors = 3
 
@@ -715,15 +846,31 @@ class CameraManager:
                     time.sleep(0.01)
                     continue
 
-                # 定期健康检查
                 current_time = time.time()
+
+                # 定期健康检查
                 if current_time - last_health_check >= health_check_interval:
                     if not self._check_ffmpeg_health():
-                        self.logger.warning("FFmpeg健康检查失败，尝试重连")
+                        self.logger.warning("FFmpeg健康检查失败，触发重连")
+                        self._reconnect_stats.record_disconnect("health_check_failed")
+
                         if not self._try_reconnect():
                             break
                         consecutive_write_errors = 0
+                        # 重连后重置健康检查时间
+                        last_health_check = time.time()
+                        last_stability_check = time.time()
+                        continue
                     last_health_check = current_time
+
+                # 定期检查稳定性，判断是否重置重试计数
+                if current_time - last_stability_check >= stability_check_interval:
+                    if self._reconnect_stats.should_reset_attempt_counter(self._reconnect_stable_reset_seconds):
+                        self._reconnect_stats.reset_attempt_counter()
+                        self.logger.info(
+                            f"推流稳定运行超过{self._reconnect_stable_reset_seconds}秒，重置重试计数"
+                        )
+                    last_stability_check = current_time
 
                 # 控制帧率
                 elapsed = current_time - last_frame_time
@@ -745,20 +892,36 @@ class CameraManager:
                         consecutive_write_errors = 0  # 重置错误计数
                     except (BrokenPipeError, OSError) as e:
                         consecutive_write_errors += 1
-                        self.logger.error(f"FFmpeg写入错误 ({consecutive_write_errors}/{max_consecutive_errors}): {e}")
+                        self.logger.error(
+                            f"FFmpeg写入错误 ({consecutive_write_errors}/{max_consecutive_errors}): {e}"
+                        )
 
                         if consecutive_write_errors >= max_consecutive_errors:
-                            self.logger.error("连续写入错误过多，尝试重连")
+                            self.logger.error("连续写入错误过多，触发重连")
+                            self._reconnect_stats.record_disconnect(f"write_error: {e}")
+
                             if not self._try_reconnect():
                                 break
                             consecutive_write_errors = 0
+                            # 重连后重置时间
+                            last_health_check = time.time()
+                            last_stability_check = time.time()
                 else:
                     # FFmpeg进程不存在或已退出
                     exit_code = self._ffmpeg_process.poll() if self._ffmpeg_process else None
-                    self.logger.error(f"FFmpeg进程已退出 (退出码: {exit_code}), 最后错误: {self._last_ffmpeg_error}")
+                    error_msg = f"process_exit: {exit_code}"
+                    self.logger.error(
+                        f"FFmpeg进程已退出 (退出码: {exit_code}), "
+                        f"最后错误: {self._last_ffmpeg_error}"
+                    )
+                    self._reconnect_stats.record_disconnect(error_msg)
+
                     if not self._try_reconnect():
                         break
                     consecutive_write_errors = 0
+                    # 重连后重置时间
+                    last_health_check = time.time()
+                    last_stability_check = time.time()
 
                 last_frame_time = time.time()
 
@@ -786,39 +949,83 @@ class CameraManager:
 
         return True
 
+    def _calculate_backoff_delay(self, attempt: int) -> float:
+        """
+        计算指数退避延迟
+
+        Args:
+            attempt: 当前重试次数（从1开始）
+
+        Returns:
+            float: 实际延迟时间（秒）
+        """
+        # 指数退避：delay = base_delay * 2^(attempt-1)
+        exponential_delay = self._reconnect_base_delay * (2 ** (attempt - 1))
+
+        # 应用最大延迟上限
+        capped_delay = min(exponential_delay, self._reconnect_max_delay)
+
+        # 添加随机抖动
+        if self._reconnect_jitter_factor > 0:
+            jitter = capped_delay * self._reconnect_jitter_factor * (2 * random.random() - 1)
+            final_delay = max(0.1, capped_delay + jitter)
+        else:
+            final_delay = capped_delay
+
+        return round(final_delay, 2)
+
     def _try_reconnect(self) -> bool:
-        """尝试重连FFmpeg - 增强版，带指数退避"""
-        if self._reconnect_count >= self.max_reconnect_attempts:
-            self.logger.error(f"推流重连失败次数超过限制({self.max_reconnect_attempts})")
+        """
+        尝试重连FFmpeg - 使用指数退避算法
+
+        Returns:
+            bool: 重连是否成功
+        """
+        current_attempt = self._reconnect_stats.get_current_attempt()
+
+        # 检查是否超过最大重试次数
+        if current_attempt >= self._reconnect_max_attempts:
+            self.logger.error(f"推流重连失败次数超过限制({self._reconnect_max_attempts})")
             self._set_state(CameraState.ERROR)
             return False
 
-        self._reconnect_count += 1
+        # 记录重连尝试
+        self._reconnect_stats.record_reconnect_attempt()
+        current_attempt = self._reconnect_stats.get_current_attempt()
 
-        # 指数退避：每次重连等待时间递增
-        wait_time = min(self.reconnect_interval * (1.5 ** (self._reconnect_count - 1)), 30)
-        self.logger.warning(f"正在尝试重连FFmpeg (第{self._reconnect_count}/{self.max_reconnect_attempts}次)，原因: {self._last_ffmpeg_error or '未知'}，等待{wait_time:.1f}秒...")
+        # 计算指数退避延迟
+        wait_time = self._calculate_backoff_delay(current_attempt)
+
+        self.logger.warning(
+            f"正在尝试重连FFmpeg (第{current_attempt}/{self._reconnect_max_attempts}次)，"
+            f"原因: {self._reconnect_stats.last_error or '未知'}，"
+            f"等待{wait_time}秒..."
+        )
 
         # 停止当前FFmpeg进程
         self._stop_ffmpeg()
 
-        # 等待指定时间
-        time.sleep(wait_time)
-
-        # 如果已请求停止，不再重连
-        if self._stop_stream:
-            self.logger.info("收到停止信号，取消重连")
-            return False
+        # 可中断等待
+        wait_start = time.time()
+        while time.time() - wait_start < wait_time:
+            if self._stop_stream:
+                self.logger.info("收到停止信号，取消重连")
+                return False
+            time.sleep(0.1)
 
         # 尝试启动新的FFmpeg进程
         if self._start_ffmpeg():
-            self.logger.info(f"FFmpeg重连成功 (第{self._reconnect_count}次尝试)")
-            # 重连成功后逐渐降低重连计数（允许一定容错）
-            if self._reconnect_count > 1:
-                self._reconnect_count = max(0, self._reconnect_count - 1)
+            self._reconnect_stats.record_reconnect_success()
+            self.logger.info(f"FFmpeg重连成功 (第{current_attempt}次尝试)")
+            # 注意：重试计数的重置由 _stream_loop 中的稳定性检查负责
+            # 当推流稳定运行 stable_reset_seconds 后自动重置
             return True
         else:
-            self.logger.error(f"FFmpeg重连失败 (第{self._reconnect_count}次尝试)，原因: {self._last_ffmpeg_error}")
+            self._reconnect_stats.record_reconnect_failure()
+            self.logger.error(
+                f"FFmpeg重连失败 (第{current_attempt}次尝试)，"
+                f"原因: {self._last_ffmpeg_error}"
+            )
             return False
 
     def _is_streaming(self) -> bool:
@@ -855,7 +1062,7 @@ class CameraManager:
         return self._is_streaming()
 
     def get_statistics(self) -> Dict[str, Any]:
-        """获取统计信息"""
+        """获取统计信息（增强版）"""
         uptime = time.time() - self._stats['start_time'] if self._stats['start_time'] > 0 else 0
 
         # FFmpeg进程状态
@@ -882,8 +1089,9 @@ class CameraManager:
             'ffmpeg_pid': ffmpeg_pid,
             'ffmpeg_running': ffmpeg_running,
             'ffmpeg_healthy': self._ffmpeg_healthy,
-            'ffmpeg_reconnect_count': self._reconnect_count,
-            'ffmpeg_last_error': self._last_ffmpeg_error[:200] if self._last_ffmpeg_error else None
+            'ffmpeg_last_error': self._last_ffmpeg_error[:200] if self._last_ffmpeg_error else None,
+            # 重连统计（新增）
+            'reconnect_stats': self._reconnect_stats.to_dict()
         }
 
     # ==================== 深度图像（可选功能） ====================

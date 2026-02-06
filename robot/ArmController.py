@@ -2,6 +2,7 @@
 """JAKA Integrated Control System
 集成JAKA机器人、外部轴和AGV的控制功能
 """
+from torch import t
 import math
 import os
 from doctest import FAIL_FAST
@@ -345,7 +346,12 @@ class ArmController(JAKA):
         
         :return: 机械臂状态字典
         """
-        return self.get_joints()
+        try:
+            joints = self.get_joints()
+        except Exception as e:
+            self.logger.error(f"获取机械臂状态失败: {e}")
+            joints = [0,0,0,0,0,0]
+        return joints
     
     def rob_moveto(self, jpos, vel=None):
         """

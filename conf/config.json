@@ -10,7 +10,7 @@
         "agv_port": 31001
     },
     "grpc_config": {
-        "server_host": "192.168.8.93",
+        "server_host": "192.168.10.141",
         "server_port": 9898,
         "connection_timeout": 10,
         "stream_keep_alive_check": 30,
@@ -27,20 +27,17 @@
     "hardware_config": {
         "auto_start_on_boot": true,
         "robot": {
-            "enabled": true,
-            "auto_start": true
+            "enabled": true
         },
         "camera": {
-            "enabled": true,
-            "auto_start": true
+            "enabled": true
         },
         "env_sensor": {
-            "enabled": true,
-            "auto_start": true
+            "enabled": true
         }
     },
     "env_sensor_config": {
-        "port": "COM4",
+        "port": "COM3",
         "baudrate": 4800,
         "address": 1,
         "read_interval": 5
@@ -57,13 +54,18 @@
         "capture_quality": 95,
         "stream_config": {
             "enabled": true,
-            "rtmp_url": "rtmp://192.168.8.93/live/test",
+            "rtmp_url": "rtmp://192.168.10.141/live/test",
             "bitrate": "2000k",
             "maxrate": "2500k",
             "bufsize": "5000k",
             "preset": "ultrafast",
-            "reconnect_interval": 5,
-            "max_reconnect_attempts": 10
+            "reconnect": {
+                "base_delay": 2,
+                "max_delay": 30,
+                "max_attempts": 10,
+                "jitter_factor": 0.3,
+                "stable_reset_seconds": 60
+            }
         },
         "frame_buffer_size": 3,
         "warmup_frames": 10

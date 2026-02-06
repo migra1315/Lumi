@@ -475,46 +475,49 @@ class TaskScheduler:
                 return False
 
             # === 阶段 2: 移动机械臂 ===
-            station.execution_phase = StationExecutionPhase.ARM_POSITIONING
-            station.progress_detail = f"机械臂移动到归位位置 {station.station_config.robot_pos}"
-            self.logger.debug(f"[站点 {station_id}] 阶段: ARM_POSITIONING - {station.progress_detail}")
+            if station.station_config.robot_pos:
+                station.execution_phase = StationExecutionPhase.ARM_POSITIONING
+                station.progress_detail = f"机械臂移动到归位位置 {station.station_config.robot_pos}"
+                self.logger.debug(f"[站点 {station_id}] 阶段: ARM_POSITIONING - {station.progress_detail}")
 
-            # 触发进度更新回调
-            self._trigger_callback(
-                "on_station_progress",
-                station=station,
-                command_id=self.current_command.command_id if self.current_command else None
-            )
+                # 触发进度更新回调
+                self._trigger_callback(
+                    "on_station_progress",
+                    station=station,
+                    command_id=self.current_command.command_id if self.current_command else None
+                )
 
-            success = self.robot_controller.move_robot_to_position(
-                station.station_config.robot_pos
-            )
-            if not success:
-                station.execution_phase = StationExecutionPhase.FAILED
-                station.error_message = "机械臂移动失败"
-                self.logger.error(station.error_message)
-                return False
+                success = self.robot_controller.move_robot_to_position(
+                    station.station_config.robot_pos
+                )
+                if not success:
+                    station.execution_phase = StationExecutionPhase.FAILED
+                    station.error_message = "机械臂移动失败"
+                    self.logger.error(station.error_message)
+                    return False
 
             # === 阶段 3: 移动外部轴 ===
-            station.execution_phase = StationExecutionPhase.EXT_POSITIONING
-            station.progress_detail = f"外部轴移动到归位位置 {station.station_config.ext_pos}"
-            self.logger.debug(f"[站点 {station_id}] 阶段: EXT_POSITIONING - {station.progress_detail}")
+            if station.station_config.ext_pos:
+                
+                station.execution_phase = StationExecutionPhase.EXT_POSITIONING
+                station.progress_detail = f"外部轴移动到归位位置 {station.station_config.ext_pos}"
+                self.logger.debug(f"[站点 {station_id}] 阶段: EXT_POSITIONING - {station.progress_detail}")
 
-            # 触发进度更新回调
-            self._trigger_callback(
-                "on_station_progress",
-                station=station,
-                command_id=self.current_command.command_id if self.current_command else None
-            )
+                # 触发进度更新回调
+                self._trigger_callback(
+                    "on_station_progress",
+                    station=station,
+                    command_id=self.current_command.command_id if self.current_command else None
+                )
 
-            success = self.robot_controller.move_ext_to_position(
-                station.station_config.ext_pos
-            )
-            if not success:
-                station.execution_phase = StationExecutionPhase.FAILED
-                station.error_message = "外部轴移动失败"
-                self.logger.error(station.error_message)
-                return False
+                success = self.robot_controller.move_ext_to_position(
+                    station.station_config.ext_pos
+                )
+                if not success:
+                    station.execution_phase = StationExecutionPhase.FAILED
+                    station.error_message = "外部轴移动失败"
+                    self.logger.error(station.error_message)
+                    return False
 
             # === 阶段 4: 执行操作 ===
             if station.station_config.operation_config.operation_mode != OperationMode.NONE:
