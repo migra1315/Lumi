@@ -129,7 +129,7 @@ class BaseStreamManager(ABC):
             self.logger.debug(f"发送消息: msg_id={request.msg_id}, type={msg_type_str}")
         elif hasattr(request, 'command_id'):
             cmd_type_str = robot_pb2.ClientMessageType.Name(request.command_type) if hasattr(robot_pb2.ClientMessageType, 'Name') else request.command_type
-            self.logger.info(f"发送客户端消息: command_id={request.command_id}, type={cmd_type_str}")
+            self.logger.debug(f"发送客户端消息: command_id={request.command_id}, type={cmd_type_str}")
 
     def _handle_responses(self):
         """处理服务器响应"""
@@ -188,7 +188,7 @@ class BaseStreamManager(ABC):
             self.logger.debug(f"收到服务器响应: msg_id={response.msg_id}, type={msg_type_str}")
         elif hasattr(response, 'command_id'):
             cmd_type_str = robot_pb2.CmdType.Name(response.command_type) if hasattr(robot_pb2.CmdType, 'Name') else response.command_type
-            self.logger.info(f"收到服务器命令: command_id={response.command_id}, type={cmd_type_str}")
+            self.logger.debug(f"收到服务器命令: command_id={response.command_id}, type={cmd_type_str}")
 
     def send_message(self, request) -> bool:
         """通过持久化流发送消息

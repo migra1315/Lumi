@@ -1,3 +1,4 @@
+# from utils.voice_player import VoicePlayer
 import threading
 import queue
 import time
@@ -28,6 +29,7 @@ class TaskScheduler:
         self.scheduler_thread: Optional[threading.Thread] = None
         self.executor = ThreadPoolExecutor(max_workers=1)  # 单任务执行
         self.logger = get_logger(__name__)
+        # self.voice_player = VoicePlayer()
 
         # 回调函数注册
         self.task_callbacks = {
@@ -248,7 +250,8 @@ class TaskScheduler:
         # 设置任务状态为运行中
         task.status = TaskStatus.RUNNING
         self.logger.info(f"任务开始执行: {task.task_id}, 任务名称: {task.task_name}")
-
+        # if task.robot_mode == RobotMode.INSPECTION:
+        #     self.voice_player.play("收到巡检任务啦.mp3")
         # 触发任务开始回调
         self._trigger_callback("on_task_start", task)
 
@@ -325,7 +328,8 @@ class TaskScheduler:
             for i, station in enumerate(sorted_stations, 1):
                 station_id = station.station_config.station_id
                 self.logger.info(f"执行站点 {i}/{total_stations}: {station_id}")
-
+                # if task.robot_mode == RobotMode.INSPECTION:
+                #     self.voice_player.play(f"到达站点.mp3")
                 # 执行站点（包含重试逻辑）
                 if self._execute_station_task_with_retry(station):
                     success_count += 1
@@ -333,7 +337,8 @@ class TaskScheduler:
                 else:
                     failed_count += 1
                     self.logger.warning(f"✗ 站点 {station_id} 执行失败，继续执行后续站点")
-
+                # if task.robot_mode == RobotMode.INSPECTION:
+                #     self.voice_player.play(f"巡检完成.mp3")
             # 输出汇总日志
             self.logger.info(
                 f"任务 {task.task_id} 执行完成: "

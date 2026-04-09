@@ -1140,12 +1140,13 @@ class RobotControlSystem:
             command_id: 关联的命令ID（可选）
         """
         try:
-            self.task_manager.database.save_sent_message(
+            self.task_manager.database.save_server_command_sent(
                 msg_id=msg_id,
                 msg_time=msg_time,
                 msg_type=msg_type,
                 robot_id=str(self.robot_id),
                 data_json=json.dumps(data, ensure_ascii=False),
+                command_id=command_id,
                 status='sent'
             )
         except Exception as e:
@@ -1746,7 +1747,7 @@ if __name__ == "__main__":
     import os
 
     # 配置文件路径
-    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "conf", "config_local.json")
+    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "conf", "config.json")
 
     # 加载配置
     config = load_config(CONFIG_PATH)
@@ -1761,6 +1762,7 @@ if __name__ == "__main__":
         log_name_prefix=log_config.get('log_name_prefix', 'robot_control_system'),
         use_color=log_config.get('use_color', True),
         enable_file_logging=log_config.get('enable_file_logging', True),
+        max_log_days=log_config.get('max_log_days', 30),
         robot_id=config.get('robot_id', 123456)
     )
 

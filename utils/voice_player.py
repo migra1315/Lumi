@@ -1,3 +1,4 @@
+import time
 """
 语音播报模块
 
@@ -95,6 +96,7 @@ class VoicePlayer:
         )
         thread.start()
         self.logger.info(f"开始播放音频: {filename}")
+        time.sleep(5)
 
     def _play_file(self, audio_path):
         """在独立线程中执行ffplay播放"""

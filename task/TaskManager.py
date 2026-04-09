@@ -51,6 +51,17 @@ class TaskManager:
 
         # 初始化数据库和调度器
         self.database = TaskDatabase()
+
+        # 启动数据库清理线程
+        database_config = self.config.get('database_config', {})
+        retention_config = database_config.get('retention_days', {})
+        if retention_config:
+            self.database.start_cleanup_thread(
+                retention_config=retention_config,
+                cleanup_interval_hours=database_config.get('cleanup_interval_hours', 6),
+                vacuum_interval_hours=database_config.get('vacuum_interval_hours', 24)
+            )
+
         self.scheduler = TaskScheduler(self.robot_controller, self.database)
 
         # 启动调度器
@@ -816,6 +827,12 @@ class TaskManager:
     def shutdown(self):
         """关闭管理器"""
         self.scheduler.stop()
+
+        # 停止数据库清理线程
+        try:
+            self.database.stop_cleanup_thread()
+        except Exception as e:
+            self.logger.error(f"停止数据库清理线程失败: {e}")
 
         # 关闭机器人系统
         try:

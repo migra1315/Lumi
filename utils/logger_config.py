@@ -121,8 +121,7 @@ def setup_logging(
     log_dir: str = "logs",
     use_color: bool = True,
     enable_file_logging: bool = True,
-    max_bytes: int = 10 * 1024 * 1024,  # 10MB
-    backup_count: int = 5,
+    max_log_days: int = 30,
     robot_id: Optional[int] = None
 ) -> None:
     """
@@ -135,8 +134,7 @@ def setup_logging(
         log_dir: 日志目录
         use_color: 是否在控制台使用彩色输出
         enable_file_logging: 是否启用文件日志
-        max_bytes: 日志文件最大大小（字节）
-        backup_count: 保留的日志文件数量
+        max_log_days: 日志文件保留天数（默认30天，由TimedRotatingFileHandler自动管理）
         robot_id: 机器人ID（用于上下文信息）
     """
     # 创建日志目录
@@ -171,19 +169,19 @@ def setup_logging(
 
     # === 文件处理器 ===
     if enable_file_logging:
-        # 生成日志文件名
+        # 生成日志文件名（不带日期后缀，由TimedRotatingFileHandler自动管理轮转后缀）
         if log_file is None:
-            timestamp = datetime.now().strftime('%Y%m%d')
             prefix = log_name_prefix if log_name_prefix else "robot_system"
-            log_file = f"{prefix}_{timestamp}.log"
+            log_file = f"{prefix}.log"
 
         log_path = os.path.join(log_dir, log_file)
 
-        # 使用RotatingFileHandler进行日志轮转
-        file_handler = logging.handlers.RotatingFileHandler(
+        # 使用TimedRotatingFileHandler按天轮转日志
+        file_handler = logging.handlers.TimedRotatingFileHandler(
             log_path,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
+            when='midnight',
+            interval=1,
+            backupCount=max_log_days,
             encoding='utf-8'
         )
         file_handler.setLevel(getattr(logging, level.upper()))

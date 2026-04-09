@@ -2,7 +2,6 @@
 """JAKA Integrated Control System
 集成JAKA机器人、外部轴和AGV的控制功能
 """
-from torch import t
 import math
 import os
 from doctest import FAIL_FAST
@@ -337,9 +336,27 @@ class ArmController(JAKA):
         
         self.logger.info("系统已关闭")
 
+    def move_head(self):
+        """
+        控制头部移动到指定角度
+        
+        :param angle: 目标角度，单位为度
+        :return: 成功返回True，失败返回False
+        """
+        ext_status_response = self.ext_get_state()
+        ext_status = [ext_status_response[0].get('pos', 0.0),
+                        ext_status_response[1].get('pos', 0.0),
+                        ext_status_response[2].get('pos', 0.0),
+                        ext_status_response[3].get('pos', 0.0) + 10,
+                    ]
+        self.ext_moveto(ext_status)
+        ext_status[3]-=20
+        self.ext_moveto(ext_status)
+        
     # ===========================
     # 集成控制功能
     # ===========================
+    
     def arm_get_state(self):
         """
         获取机械臂当前状态

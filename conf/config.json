@@ -10,7 +10,7 @@
         "agv_port": 31001
     },
     "grpc_config": {
-        "server_host": "192.168.10.141",
+        "server_host": "192.168.8.14",
         "server_port": 9898,
         "connection_timeout": 10,
         "stream_keep_alive_check": 30,
@@ -54,7 +54,7 @@
         "capture_quality": 95,
         "stream_config": {
             "enabled": true,
-            "rtmp_url": "rtmp://192.168.10.141/live/test",
+            "rtmp_url": "rtmp://192.168.8.14/live/test",
             "bitrate": "2000k",
             "maxrate": "2500k",
             "bufsize": "5000k",
@@ -72,10 +72,24 @@
     },
     "use_mock": false,
     "report": true,
+    "database_config": {
+        "retention_days": {
+            "client_upload_sent": 7,
+            "client_upload_received": 7,
+            "server_command_received": 30,
+            "server_command_sent": 30,
+            "environment_data_history": 30,
+            "task_history": 90,
+            "unified_commands": 90
+        },
+        "cleanup_interval_hours": 6,
+        "vacuum_interval_hours": 24
+    },
     "log_config": {
         "level": "INFO",
         "log_name_prefix": "robot_control_system",
         "use_color": true,
-        "enable_file_logging": true
+        "enable_file_logging": true,
+        "max_log_days": 30
     }
 }

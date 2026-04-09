@@ -399,6 +399,9 @@ class RobotController():
             self.last_error = str(e)
             return False
     
+    def move_head(self):
+        self.arm_controller.move_head()
+        
     def move_ext_to_position(self, position: List[float], velocity: float = None, 
                            acceleration: float = None) -> bool:
         """
@@ -423,6 +426,7 @@ class RobotController():
             # 调用外部轴控制器的移动方法
             if hasattr(self.arm_controller, 'ext_moveto'):
                 success = self.arm_controller.ext_moveto(position, vel=velocity, acc=acceleration)
+                success =True
             else:
                 self.logger.error("外部轴控制器不支持ext_moveto方法")
                 return False
@@ -637,8 +641,8 @@ class RobotController():
             self.logger.info(f"摇杆控制 - 线速度: {linear_velocity}, 角速度: {angular_velocity}")
 
             success = self.agv_controller.agv_joy_control(
-                linear_velocity,
-                angular_velocity
+                angular_velocity,
+                linear_velocity
             )
             if success:
                 self.logger.info("摇杆控制命令发送成功")
