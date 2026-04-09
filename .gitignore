@@ -10,8 +10,6 @@ utils/JAKA_SDK_WINDOWS/*
 .vscode/settings.json
 proto/RobotService_pb2.pyi
 gRPC/proto/RobotService_bp.proto
-CLAUDE.md
-cl.bat
 .claude/settings.local.json
 tmpclaude-ed9e-cwd
 logs
