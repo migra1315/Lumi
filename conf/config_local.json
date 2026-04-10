@@ -24,7 +24,7 @@
             "offline_message_ttl_hours": 24
         }
     },
-        "hardware_config": {
+    "hardware_config": {
         "auto_start_on_boot": true,
         "robot": {
             "enabled": true
@@ -70,8 +70,11 @@
         "frame_buffer_size": 3,
         "warmup_frames": 10
     },
-    "use_mock": false,
-    "report": true,
+
+    "use_mock": true,
+
+    "report": false,
+
     "database_config": {
         "retention_days": {
             "client_upload_sent": 7,

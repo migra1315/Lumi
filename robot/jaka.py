@@ -5,9 +5,11 @@ Discription:
     JAKA robot movement control library.
 '''
 import os
-import time
 import sys
+import time
+
 from utils.logger_config import get_logger
+
 # 获取当前脚本所在目录
 current_dir = os.path.dirname(os.path.abspath(__file__))
 # 获取compose目录路径（当前目录的父目录）

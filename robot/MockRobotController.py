@@ -1,14 +1,15 @@
-from typing import Callable, Optional
 """
 MockRobotController.py
 Mock机器人控制器实现
 """
 
-import time
 import random
 import threading
+import time
 from typing import List, Dict, Any
+
 from robot.RobotControllerBase import RobotControllerBase, RobotStatus, BatteryStatus
+
 
 class MockRobotController(RobotControllerBase):
     """Mock机器人控制器实现类"""

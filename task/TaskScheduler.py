@@ -1,18 +1,20 @@
 # from utils.voice_player import VoicePlayer
-import threading
 import queue
+import threading
 import time
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Optional, List, Dict, Any
-from utils.logger_config import get_logger
-from task.TaskDatabase import TaskDatabase
+from datetime import datetime
+from typing import Callable, Optional, Dict, Any
+
+from dataModels.CommandModels import CmdType
 from dataModels.TaskModels import (
-    Task, Station, StationConfig, OperationMode,
+    Task, Station, OperationMode,
     TaskStatus, StationTaskStatus, StationExecutionPhase, OperationConfig, RobotMode
 )
-from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus, CommandCategory
-from dataModels.CommandModels import CmdType
+from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus
+from task.TaskDatabase import TaskDatabase
+from utils.logger_config import get_logger
+
 
 class TaskScheduler:
     """任务调度器 - 负责任务的调度和执行（支持统一命令队列）"""
@@ -31,18 +33,19 @@ class TaskScheduler:
         self.logger = get_logger(__name__)
         # self.voice_player = VoicePlayer()
 
-        # 回调函数注册
+        # 回调函数注册（每个事件只有一个消费者，使用单个 callable 而非 list）
         self.task_callbacks = {
-            "on_task_start": [],
-            "on_task_complete": [],
-            "on_task_failed": [],
-            "on_station_start": [],
-            "on_station_complete": [],
-            "on_station_retry": [],
-            "on_station_progress": [],       # 站点进度更新回调
-            "on_command_complete": [],       # 命令完成回调
-            "on_command_failed": [],         # 命令失败回调
-            "on_command_status_change": []   # 命令状态变化回调（RUNNING/RETRYING等）
+            "on_task_start": None,
+            "on_task_complete": None,
+            "on_task_failed": None,
+            "on_station_start": None,
+            "on_station_complete": None,
+            "on_station_retry": None,
+            "on_station_progress": None,
+            "on_operation_result": None,
+            "on_command_complete": None,
+            "on_command_failed": None,
+            "on_command_status_change": None,
         }
     
     def start(self):
@@ -600,15 +603,17 @@ class TaskScheduler:
                 'duration': 0.0
             }
 
-        # 触发操作结果回调
-        # operation_data 只包含操作特定数据，task_id/station_id/command_id从快照获取
+        # 触发操作结果回调，直接传入 task/station/command_id，避免后续再查快照
         self._trigger_callback(
             "on_operation_result",
             operation_data={
                 'operation_mode': operation_config.operation_mode,
                 'result': result,
                 'timestamp': time.time()
-            }
+            },
+            task=self.current_task,
+            station=self.current_station,
+            command_id=self.current_command.command_id if self.current_command else None
         )
 
         return result
@@ -740,11 +745,12 @@ class TaskScheduler:
     def register_callback(self, event: str, callback: Callable):
         """注册回调函数"""
         if event in self.task_callbacks:
-            self.task_callbacks[event].append(callback)
-    
+            self.task_callbacks[event] = callback
+
     def _trigger_callback(self, event: str, *args, **kwargs):
         """触发回调函数"""
-        for callback in self.task_callbacks.get(event, []):
+        callback = self.task_callbacks.get(event)
+        if callback:
             try:
                 callback(*args, **kwargs)
             except Exception as e:

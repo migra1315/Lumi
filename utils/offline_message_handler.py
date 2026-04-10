@@ -6,6 +6,7 @@
 """
 
 from typing import Optional, Tuple, Union
+
 from gRPC import RobotService_pb2 as robot_pb2
 from utils.logger_config import get_logger
 

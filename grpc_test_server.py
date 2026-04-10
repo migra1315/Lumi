@@ -4,15 +4,16 @@
 用于测试机器人控制系统的gRPC通信功能
 """
 
+import base64
+import math
+import os
 import queue
 import threading
 import time
-import grpc
-import os
-import base64
-from datetime import datetime
 from concurrent import futures
-import math
+from datetime import datetime
+
+import grpc
 
 import gRPC.RobotService_pb2 as robot_service_pb2
 import gRPC.RobotService_pb2_grpc as robot_service_pb2_grpc

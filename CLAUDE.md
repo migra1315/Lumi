@@ -173,7 +173,7 @@ Log files are stored in `logs/` directory with automatic rotation (10MB, 5 backu
 - StationConfig: Defines station_id, agv_marker, robot_pos, ext_pos, operation_config
 - OperationConfig: Specifies operation_mode (OPEN_DOOR, CLOSE_DOOR, CAPTURE, SERVICE, NONE)
 - **TaskStatus**: PENDING, RUNNING, COMPLETED, PARTIAL_COMPLETED, FAILED, SKIPPED, RETRYING
-- **StationTaskStatus**: PENDING, RUNNING, COMPLETED, FAILED, SKIPPED, RETRYING, TO_RETRY
+- **StationTaskStatus**: PENDING, RUNNING, COMPLETED, FAILED, SKIPPED, RETRYING
 
 ### gRPC Communication
 

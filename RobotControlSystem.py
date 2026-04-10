@@ -1,6 +1,7 @@
-from dataModels.TaskModels import TaskStatus
+from dataModels.TaskModels import RobotMode
 from dataModels.TaskModels import Task
-from dataModels.TaskModels import RobotMode, StationTaskStatus
+from dataModels.TaskModels import TaskStatus
+
 """
 RobotControlSystem.py
 机器人控制系统主类，负责接收、解析后台指令，协调任务管理和机器人执行
@@ -10,14 +11,12 @@ import json
 import threading
 import time
 import uuid
-from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, Optional, Callable, Generator
+from typing import Dict, Any, Optional, Callable
 from utils.logger_config import get_logger
 from utils.offline_message_handler import (
     serialize_message,
     deserialize_message,
-    get_stream_type_for_message,
     STREAM_TYPE_CLIENT_UPLOAD,
     STREAM_TYPE_SERVER_COMMAND
 )
@@ -31,9 +30,9 @@ from utils.dataConverter import convert_server_message_to_command_envelope, conv
 from task.TaskManager import TaskManager
 
 
-from dataModels.MessageModels import BatteryInfo, EnvironmentInfo, MessageEnvelope, MsgType, PositionInfo, SystemStatus, TaskListInfo,create_message_envelope
-from dataModels.CommandModels import CmdType, CommandEnvelope, TaskCmd,create_cmd_envelope
-from dataModels.TaskModels import OperationConfig, OperationMode, StationConfig, Station
+from dataModels.MessageModels import BatteryInfo, EnvironmentInfo, MessageEnvelope, MsgType, PositionInfo, SystemStatus, \
+    create_message_envelope
+from dataModels.CommandModels import CmdType, CommandEnvelope
 
 
 class ConnectionState(Enum):
@@ -1102,27 +1101,30 @@ class RobotControlSystem:
         except Exception as e:
             self.logger.error(f"发送命令状态更新失败: {e}")
 
-    def _handle_task_progress_callback(self):
-        """处理任务进度回调（简化版 - 无需参数）"""
+    def _handle_task_progress_callback(self, **kwargs):
+        """处理任务进度回调"""
         try:
-            # 直接调用，无需参数（从TaskManager快照获取数据）
-            self._send_task_progress_update()
+            task = kwargs.get("task")
+            station = kwargs.get("station")
+            command_id = kwargs.get("command_id")
+            if task:
+                self._send_task_progress_update(task, station, command_id)
         except Exception as e:
             self.logger.error(f"发送任务进度更新失败: {e}")
 
     def _handle_operation_result_callback(self, **kwargs):
-        """处理操作结果回调
-
-        Args:
-            **kwargs: 包含operation_data（操作特定数据，如result、operation_mode）
-        """
+        """处理操作结果回调"""
         operation_data = kwargs.get("operation_data")
         if not operation_data:
             return
 
         try:
-            # 发送操作结果消息（task_id/station_id/command_id从快照获取）
-            self._send_operation_result(operation_data)
+            self._send_operation_result(
+                operation_data,
+                task=kwargs.get("task"),
+                station=kwargs.get("station"),
+                command_id=kwargs.get("command_id")
+            )
         except Exception as e:
             self.logger.error(f"发送操作结果失败: {e}")
 
@@ -1301,21 +1303,15 @@ class RobotControlSystem:
         except Exception as e:
             self.logger.error(f"发送SET_MARKER_RESPONSE异常: {e}")
 
-    def _send_task_progress_update(self):
-        """发送任务进度更新（简化版 - 从TaskManager获取快照）"""
+    def _send_task_progress_update(self, task, station, command_id):
+        """发送任务进度更新"""
         try:
             import gRPC.RobotService_pb2 as robot_pb2
             from dataModels.TaskModels import TaskStatus, StationTaskStatus
 
-            # 从 TaskManager 获取完整快照
-            snapshot = self.task_manager.get_progress_snapshot()
-            if not snapshot:
+            if not task:
                 self.logger.warning("无任务进度可上报")
                 return
-
-            task = snapshot["task"]
-            station = snapshot["station"]
-            command_id = snapshot["command_id"]
 
             # 统计站点状态
             total_stations = len(task.station_list)
@@ -1416,25 +1412,19 @@ class RobotControlSystem:
             self.logger.error(f"发送任务进度更新异常: {e}")
 
 
-    def _send_operation_result(self, operation_data: Dict[str, Any]):
-        """发送操作结果（简化版 - 从TaskManager获取task_id/station_id/command_id）
+    def _send_operation_result(self, operation_data: Dict[str, Any],
+                               task=None, station=None, command_id=None):
+        """发送操作结果
 
         Args:
-            operation_data: 操作数据，包含operation_mode和result（特定于操作的数据）
+            operation_data: 操作数据，包含 operation_mode 和 result
+            task: 当前任务对象
+            station: 当前站点对象
+            command_id: 命令ID
         """
         try:
             import gRPC.RobotService_pb2 as robot_pb2
             from dataModels.TaskModels import OperationMode
-
-            # 从快照获取task_id, station_id, command_id
-            snapshot = self.task_manager.get_progress_snapshot()
-            if not snapshot:
-                self.logger.warning("无法获取进度快照，操作结果上报失败")
-                return
-
-            task = snapshot["task"]
-            station = snapshot["station"]
-            command_id = snapshot["command_id"]
 
             task_id = int(task.task_id) if task else 0
             station_id = int(station.station_config.station_id) if station else 0
@@ -1747,7 +1737,7 @@ if __name__ == "__main__":
     import os
 
     # 配置文件路径
-    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "conf", "config.json")
+    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "conf", "config_local.json")
 
     # 加载配置
     config = load_config(CONFIG_PATH)

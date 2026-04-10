@@ -1,7 +1,9 @@
+import sys
+
 import cv2
 import numpy as np
 from pyorbbecsdk import *
-import sys
+
 
 def display_rgb_image():
     # 初始化管道

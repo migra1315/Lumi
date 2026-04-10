@@ -10,16 +10,17 @@ CameraManager.py
 5. 抓拍与推流协调
 """
 
-import time
-import threading
-import subprocess
 import base64
-import sys
 import random
-from enum import Enum
+import subprocess
+import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Dict, Any, Optional, List
+
 import cv2
 import numpy as np
 

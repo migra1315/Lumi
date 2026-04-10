@@ -2,15 +2,15 @@
 """JAKA Integrated Control System
 集成JAKA机器人、外部轴和AGV的控制功能
 """
-import math
-import os
-from doctest import FAIL_FAST
-import time
-import requests
 import json
+import math
+import time
+
+import requests
+
+from robot.jaka import JAKA
 from utils.logger_config import get_logger
 from utils.voice_player import VoicePlayer
-from robot.jaka import JAKA
 
 
 class ArmController(JAKA):
@@ -380,8 +380,7 @@ class ArmController(JAKA):
         :param vel: 关节速度，默认90度/秒
         :return: 运动结果
         """
-        import math
-        
+
         vel = vel if vel is not None else self.DEFAULT_ROB_VEL
         # self.logger.info(f"输入的关节角度(度): {jpos}")
         
