@@ -44,6 +44,13 @@
     },
     "camera_config": {
         "camera_type": "orbbec",
+        "tplink": {
+            "ip": "192.168.8.72",
+            "username": "admin",
+            "password": "213213213**",
+            "light_warmup_seconds": 0.5,
+            "request_timeout": 5
+        },
         "resolution": {
             "width": 1280,
             "height": 720
