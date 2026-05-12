@@ -20,3 +20,4 @@ received_images/*
 utils/mediamtx_v1.15.6_windows_amd64/*
 utils/src/*.mp3
 *.png
+/.idea
