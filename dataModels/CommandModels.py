@@ -15,6 +15,8 @@ class CmdType(Enum):
     SET_MARKER_CMD = "set_marker_cmd"  # 设置标记命令
     CHARGE_CMD = "charge_cmd"  # 充电命令
     POSITION_ADJUST_CMD = "position_adjust_cmd"  # 位置调整命令
+    HARDWARE_START_CMD = "hardware_start_cmd"  # 硬件启动命令
+    HARDWARE_SHUTDOWN_CMD = "hardware_shutdown_cmd"  # 硬件关闭命令
 
 
 @dataclass
@@ -86,6 +88,21 @@ class PositionAdjustCmd:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "adjust": self.adjust,
+        }
+
+
+@dataclass
+class HardwareControlCmd:
+    """硬件控制命令"""
+    robot: bool = False       # 机器人（AGV+机械臂）
+    camera: bool = False      # 相机
+    env_sensor: bool = False  # 环境传感器
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "robot": self.robot,
+            "camera": self.camera,
+            "env_sensor": self.env_sensor,
         }
 
 

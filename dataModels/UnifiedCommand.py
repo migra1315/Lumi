@@ -87,6 +87,8 @@ CMD_TYPE_TO_CATEGORY = {
     CmdType.CHARGE_CMD: CommandCategory.CONTROL,
     CmdType.SET_MARKER_CMD: CommandCategory.CONFIGURATION,
     CmdType.POSITION_ADJUST_CMD: CommandCategory.CONFIGURATION,
+    CmdType.HARDWARE_START_CMD: CommandCategory.CONTROL,
+    CmdType.HARDWARE_SHUTDOWN_CMD: CommandCategory.CONTROL,
 }
 
 
@@ -98,6 +100,8 @@ CMD_TYPE_DEFAULT_PRIORITY = {
     CmdType.CHARGE_CMD: 4,                  # 充电 - 较高优先级
     CmdType.SET_MARKER_CMD: 3,              # 设置标记 - 高优先级
     CmdType.POSITION_ADJUST_CMD: 6,         # 位置调整 - 普通优先级
+    CmdType.HARDWARE_START_CMD: 2,          # 硬件启动 - 高优先级
+    CmdType.HARDWARE_SHUTDOWN_CMD: 2,       # 硬件关闭 - 高优先级
 }
 
 

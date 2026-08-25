@@ -1,3 +1,4 @@
+from utils.voice_player import VoicePlayer
 import threading
 import queue
 import time
@@ -28,6 +29,7 @@ class TaskScheduler:
         self.scheduler_thread: Optional[threading.Thread] = None
         self.executor = ThreadPoolExecutor(max_workers=1)  # 单任务执行
         self.logger = get_logger(__name__)
+        self.voice_player = VoicePlayer()
 
         # 回调函数注册
         self.task_callbacks = {
@@ -249,6 +251,10 @@ class TaskScheduler:
         task.status = TaskStatus.RUNNING
         self.logger.info(f"任务开始执行: {task.task_id}, 任务名称: {task.task_name}")
 
+        self.robot_controller.welcome()
+
+        # return
+
         # 触发任务开始回调
         self._trigger_callback("on_task_start", task)
 
@@ -325,7 +331,6 @@ class TaskScheduler:
             for i, station in enumerate(sorted_stations, 1):
                 station_id = station.station_config.station_id
                 self.logger.info(f"执行站点 {i}/{total_stations}: {station_id}")
-
                 # 执行站点（包含重试逻辑）
                 if self._execute_station_task_with_retry(station):
                     success_count += 1
@@ -333,7 +338,9 @@ class TaskScheduler:
                 else:
                     failed_count += 1
                     self.logger.warning(f"✗ 站点 {station_id} 执行失败，继续执行后续站点")
-
+                # if task.robot_mode == RobotMode.INSPECTION:
+                #     self.voice_player.play(f"巡检完成.mp3")
+                #     time.sleep(10)
             # 输出汇总日志
             self.logger.info(
                 f"任务 {task.task_id} 执行完成: "
@@ -475,46 +482,49 @@ class TaskScheduler:
                 return False
 
             # === 阶段 2: 移动机械臂 ===
-            station.execution_phase = StationExecutionPhase.ARM_POSITIONING
-            station.progress_detail = f"机械臂移动到归位位置 {station.station_config.robot_pos}"
-            self.logger.debug(f"[站点 {station_id}] 阶段: ARM_POSITIONING - {station.progress_detail}")
+            if station.station_config.robot_pos:
+                station.execution_phase = StationExecutionPhase.ARM_POSITIONING
+                station.progress_detail = f"机械臂移动到归位位置 {station.station_config.robot_pos}"
+                self.logger.debug(f"[站点 {station_id}] 阶段: ARM_POSITIONING - {station.progress_detail}")
 
-            # 触发进度更新回调
-            self._trigger_callback(
-                "on_station_progress",
-                station=station,
-                command_id=self.current_command.command_id if self.current_command else None
-            )
+                # 触发进度更新回调
+                self._trigger_callback(
+                    "on_station_progress",
+                    station=station,
+                    command_id=self.current_command.command_id if self.current_command else None
+                )
 
-            success = self.robot_controller.move_robot_to_position(
-                station.station_config.robot_pos
-            )
-            if not success:
-                station.execution_phase = StationExecutionPhase.FAILED
-                station.error_message = "机械臂移动失败"
-                self.logger.error(station.error_message)
-                return False
+                success = self.robot_controller.move_robot_to_position(
+                    station.station_config.robot_pos
+                )
+                if not success:
+                    station.execution_phase = StationExecutionPhase.FAILED
+                    station.error_message = "机械臂移动失败"
+                    self.logger.error(station.error_message)
+                    return False
 
             # === 阶段 3: 移动外部轴 ===
-            station.execution_phase = StationExecutionPhase.EXT_POSITIONING
-            station.progress_detail = f"外部轴移动到归位位置 {station.station_config.ext_pos}"
-            self.logger.debug(f"[站点 {station_id}] 阶段: EXT_POSITIONING - {station.progress_detail}")
+            if station.station_config.ext_pos:
+                
+                station.execution_phase = StationExecutionPhase.EXT_POSITIONING
+                station.progress_detail = f"外部轴移动到归位位置 {station.station_config.ext_pos}"
+                self.logger.debug(f"[站点 {station_id}] 阶段: EXT_POSITIONING - {station.progress_detail}")
 
-            # 触发进度更新回调
-            self._trigger_callback(
-                "on_station_progress",
-                station=station,
-                command_id=self.current_command.command_id if self.current_command else None
-            )
+                # 触发进度更新回调
+                self._trigger_callback(
+                    "on_station_progress",
+                    station=station,
+                    command_id=self.current_command.command_id if self.current_command else None
+                )
 
-            success = self.robot_controller.move_ext_to_position(
-                station.station_config.ext_pos
-            )
-            if not success:
-                station.execution_phase = StationExecutionPhase.FAILED
-                station.error_message = "外部轴移动失败"
-                self.logger.error(station.error_message)
-                return False
+                success = self.robot_controller.move_ext_to_position(
+                    station.station_config.ext_pos
+                )
+                if not success:
+                    station.execution_phase = StationExecutionPhase.FAILED
+                    station.error_message = "外部轴移动失败"
+                    self.logger.error(station.error_message)
+                    return False
 
             # === 阶段 4: 执行操作 ===
             if station.station_config.operation_config.operation_mode != OperationMode.NONE:
@@ -545,7 +555,7 @@ class TaskScheduler:
                     station.error_message = f"操作失败: {operation_result.get('message')}"
                     self.logger.error(station.error_message)
                     return False
-
+            self.robot_controller.move_head()
             # === 完成 ===
             station.execution_phase = StationExecutionPhase.COMPLETED
             station.status = StationTaskStatus.COMPLETED
@@ -583,7 +593,7 @@ class TaskScheduler:
         elif operation_mode == OperationMode.CAPTURE:
             result = self._capture(operation_config.device_id)
         elif operation_mode == OperationMode.SERVE:
-            result = self._serve(operation_config.device_id)
+            result = self._guide_serve()
         else:
             result = {
                 'success': True,
@@ -791,24 +801,17 @@ class TaskScheduler:
                 'duration': 0.0
             }
 
-    def _serve(self, device_id: str) -> Dict[str, Any]:
+    def _guide_serve(self) -> Dict[str, Any]:
         """服务操作实现（返回详细结果）"""
         try:
-            self.logger.info(f"执行服务操作: {device_id}")
-            result = self.robot_controller.serve(device_id)
-            # 触发回调：通知TaskManager到达服务站点
-            self._trigger_callback(
-                "on_arrive_service_station",
-                device_id=device_id
-            )
+            self.logger.info(f"执行服务操作")
+            result = self.robot_controller.guide_serve()
             return result
         except Exception as e:
             self.logger.error(f"服务操作失败: {e}")
             return {
                 'success': False,
-                'message': f'服务操作异常: {str(e)}',
-                'device_id': device_id,
+                'message': f'讲解服务操作异常: {str(e)}',
                 'timestamp': time.time(),
-                'duration': 0.0
             }
 

@@ -52,17 +52,19 @@ class SystemStatus(Enum):
 
 class RobotController():
     """机器人主控制器，整合AGV、机械臂和外部轴的控制"""
-    
-    def __init__(self, system_config: Dict[str, Any] = None, debug: bool = False):
+
+    def __init__(self, system_config: Dict[str, Any] = None, debug: bool = False, auto_setup: bool = True):
         """
         初始化机器人控制器
-        
+
         Args:
             system_config: 系统配置字典
             debug: 是否启用调试模式
+            auto_setup: 是否自动调用 setup_system()（默认True保持向后兼容）
         """
         self.system_config = system_config or {}
         self.debug = debug
+        self._auto_setup = auto_setup
         
         # 控制器状态
         self.system_status = SystemStatus.IDLE
@@ -88,7 +90,6 @@ class RobotController():
 
         # 环境传感器相关
         self.env_sensor = None
-        self.env_sensor_enabled = system_config.get('env_sensor_enabled', False)
         self.env_sensor_config = system_config.get('env_sensor_config', {})
         self._env_data_lock = threading.Lock()
         self._env_data = {
@@ -157,19 +158,9 @@ class RobotController():
                 self.logger.error("机械臂系统初始化失败")
                 return False
 
-            # 初始化环境传感器
-            env_sensor_ok = self._setup_environment_sensor()
-            if not env_sensor_ok:
-                self.logger.warning("环境传感器初始化失败，将使用默认值")
-
-            # 初始化相机
-            camera_ok = self._setup_camera()
-            if not camera_ok:
-                self.logger.warning("相机初始化失败，将使用模拟数据")
-
             self._system_initialized = True
             self.system_status = SystemStatus.IDLE
-            self.logger.info("机器人系统初始化完成")
+            self.logger.info("机器人系统初始化完成（AGV+机械臂）")
 
             return agv_ok and arm_ok
 
@@ -323,6 +314,9 @@ class RobotController():
             self.logger.error(f"重置错误状态时发生错误: {e}")
             return False
     
+    def welcome(self):
+        self.arm_controller.welcome()
+
     def move_to_marker(self, marker_id: str) -> bool:
         """
         移动AGV到指定标记点
@@ -406,6 +400,9 @@ class RobotController():
             self.last_error = str(e)
             return False
     
+    def move_head(self):
+        self.arm_controller.move_head()
+
     def move_ext_to_position(self, position: List[float], velocity: float = None, 
                            acceleration: float = None) -> bool:
         """
@@ -429,7 +426,8 @@ class RobotController():
             
             # 调用外部轴控制器的移动方法
             if hasattr(self.arm_controller, 'ext_moveto'):
-                success = self.arm_controller.ext_moveto(position, vel=velocity, acc=acceleration)
+                self.arm_controller.ext_moveto(position, vel=velocity, acc=acceleration)
+                success = True
             else:
                 self.logger.error("外部轴控制器不支持ext_moveto方法")
                 return False
@@ -609,7 +607,7 @@ class RobotController():
         """
         self.logger.info(f"开始充电")
         self.system_status = SystemStatus.CHARGING
-
+        self.move_ext_to_position([10.0,0.0,0.0,0.0])
         try:
             move_success = self.move_to_marker("charge_point_1F_6010")
             if not move_success:
@@ -644,8 +642,8 @@ class RobotController():
             self.logger.info(f"摇杆控制 - 线速度: {linear_velocity}, 角速度: {angular_velocity}")
 
             success = self.agv_controller.agv_joy_control(
-                linear_velocity,
-                angular_velocity
+                angular_velocity,
+                linear_velocity
             )
             if success:
                 self.logger.info("摇杆控制命令发送成功")
@@ -690,6 +688,8 @@ class RobotController():
         Returns:
             bool: 操作是否成功
         """
+        self.arm_controller.playvideo_after_inspection()
+        return True
         try:
             self.logger.info(f"开始位置调整 - 目标标记点: {marker_id}")
             if self.agv_controller.agv_position_adjust(marker_id):
@@ -773,10 +773,9 @@ class RobotController():
                 'duration': time.time() - start_time if 'start_time' in locals() else 0.0
             }
 
-    def serve(self, device_id: str) -> Dict[str, Any]:
+    def guide_serve(self) -> Dict[str, Any]:
         """
-        服务操作（如仪表读数、设备检查等）
-
+        讲解服务操作
         Args:
             device_id: 设备ID
 
@@ -790,39 +789,13 @@ class RobotController():
                 'duration': float
             }
         """
-        try:
-            self.logger.info(f"执行服务操作: {device_id}")
-            start_time = time.time()
-
-            # TODO: 实现具体的服务逻辑
-            # 例如：仪表读数、设备状态检查等
-            service_data = {
-                'device_status': 'normal',
-                'reading_value': 0.0
-            }
-
-            duration = time.time() - start_time
-
-            return {
-                'success': True,
-                'message': f'服务操作完成，耗时{duration:.2f}秒',
-                'device_id': device_id,
-                'data': service_data,
-                'timestamp': time.time(),
-                'duration': duration
-            }
-
-        except Exception as e:
-            self.logger.error(f"服务操作失败: {e}")
-            return {
-                'success': False,
-                'message': f'服务操作失败: {str(e)}',
-                'device_id': device_id,
-                'data': {},
-                'timestamp': time.time(),
-                'duration': time.time() - start_time
-            }
-
+        self.logger.info(f"执行服务操作")
+        return {
+            'success': True,
+            'message': '讲解服务操作成功',
+            'timestamp': time.time(),
+        }
+    
     def get_environment_data(self) -> Dict[str, float]:
         """
         获取环境数据（温度、湿度等）
@@ -929,6 +902,53 @@ class RobotController():
             self.logger.error(f"停止AGV数据监控失败: {e}")
             return False
 
+    # ==================== 硬件模块控制方法 ====================
+    def start_camera(self) -> bool:
+        """
+        启动相机
+
+        Returns:
+            bool: 操作是否成功
+        """
+        return self._setup_camera()
+
+    def stop_camera(self) -> bool:
+        """
+        关闭相机
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            self._shutdown_camera()
+            return True
+        except Exception as e:
+            self.logger.error(f"关闭相机失败: {e}")
+            return False
+
+    def start_env_sensor(self) -> bool:
+        """
+        启动环境传感器
+
+        Returns:
+            bool: 操作是否成功
+        """
+        return self._setup_environment_sensor()
+
+    def stop_env_sensor(self) -> bool:
+        """
+        关闭环境传感器
+
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            self._shutdown_environment_sensor()
+            return True
+        except Exception as e:
+            self.logger.error(f"关闭环境传感器失败: {e}")
+            return False
+
     # ==================== 环境传感器相关方法 ====================
     def _setup_environment_sensor(self) -> bool:
         """
@@ -937,8 +957,9 @@ class RobotController():
         Returns:
             bool: 初始化是否成功
         """
-        if not self.env_sensor_enabled:
-            self.logger.info("环境传感器未启用")
+        # 幂等性保护：已初始化则跳过
+        if self.env_sensor is not None:
+            self.logger.info("环境传感器已在运行中，跳过重复初始化")
             return True
 
         if not ENV_SENSOR_AVAILABLE:
@@ -1023,8 +1044,9 @@ class RobotController():
         Returns:
             bool: 初始化是否成功
         """
-        if not self.camera_config.get('camera_enabled', False):
-            self.logger.info("相机未启用")
+        # 幂等性保护：已初始化则跳过
+        if self.camera_manager is not None:
+            self.logger.info("相机已在运行中，跳过重复初始化")
             return True
 
         if not CAMERA_AVAILABLE:

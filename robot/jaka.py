@@ -163,6 +163,7 @@ class JAKA():
         if ret[0] == 0:
             return 0
         else:
+            self.logger.info("joint_move_origin failed, ret: %s", ret)
             return -1
 
     def get_joints(self):

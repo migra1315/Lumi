@@ -2,12 +2,14 @@
 """JAKA Integrated Control System
 集成JAKA机器人、外部轴和AGV的控制功能
 """
+import math
 import os
 from doctest import FAIL_FAST
 import time
 import requests
 import json
 from utils.logger_config import get_logger
+from utils.voice_player import VoicePlayer
 from robot.jaka import JAKA
 
 
@@ -51,6 +53,12 @@ class ArmController(JAKA):
         
         # 加载外部轴关节限制
         self.ext_axis_limits = ext_axis_limits
+        self.WELCOME_JOINTS_1 = [-5.0,50,23,0.0,36,0]
+        self.WELCOME_JOINTS_2 = [5.0,70,40,0.0,36,0]
+        self.WELCOME_JOINTS_3 = [-170.0,90.0,0.0,20.0,90.0,55.0]
+
+        # 语音播报器
+        self.voice_player = VoicePlayer()
     
     def _load_ext_axis_limits(self):
         """加载外部轴关节限制参数"""
@@ -62,6 +70,7 @@ class ArmController(JAKA):
             "joint3": {"min": -180, "max": 180, "desc": "头部旋转，单位度"},
             "joint4": {"min": -5, "max": 35, "desc": "头部俯仰，单位度"}
         }
+    
     def _adjust_to_joint_limits(self, point):
         """
         调整关节位置以确保在限制范围内
@@ -298,9 +307,22 @@ class ArmController(JAKA):
             if ext_ok:
                 ext_ok = ext_ok and self.ext_reset()
                 ext_ok = ext_ok and self.ext_enable(True)
-                
+
         return robot_ok and ext_ok
     
+    def welcome(self):
+        # 语音播报 + 欢迎动作（语音播放在独立线程中，不阻塞欢迎动作执行）
+        self.voice_player.play("巡检开始前.mp3")
+        time.sleep(1)
+        for i in range(2):
+            self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_1])
+            self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_2])
+        
+        self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_3])
+
+    def playvideo_after_inspection(self):
+        self.voice_player.play("巡检结束后.mp3")
+
     def shutdown_system(self):
         """
         关闭整个系统
@@ -317,16 +339,39 @@ class ArmController(JAKA):
         
         self.logger.info("系统已关闭")
 
+    def move_head(self):
+        """
+        控制头部移动到指定角度
+        
+        :param angle: 目标角度，单位为度
+        :return: 成功返回True，失败返回False
+        """
+        ext_status_response = self.ext_get_state()
+        ext_status = [ext_status_response[0].get('pos', 0.0),
+                        ext_status_response[1].get('pos', 0.0),
+                        ext_status_response[2].get('pos', 0.0),
+                        ext_status_response[3].get('pos', 0.0) + 10,
+                    ]
+        self.ext_moveto(ext_status)
+        ext_status[3]-=20
+        self.ext_moveto(ext_status)
+        
     # ===========================
     # 集成控制功能
     # ===========================
+    
     def arm_get_state(self):
         """
         获取机械臂当前状态
         
         :return: 机械臂状态字典
         """
-        return self.get_joints()
+        try:
+            joints = self.get_joints()
+        except Exception as e:
+            self.logger.error(f"获取机械臂状态失败: {e}")
+            joints = [0,0,0,0,0,0]
+        return joints
     
     def rob_moveto(self, jpos, vel=None):
         """

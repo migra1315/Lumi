@@ -1,5 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
+import time
+import threading
 from typing import Generator, List, Dict, Any, Optional
 import sqlite3
 from contextlib import contextmanager
@@ -9,11 +11,16 @@ from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus
 
 class TaskDatabase:
     """任务数据库管理 - 负责任务和消息的持久化存储"""
-    
+
     def __init__(self, db_path: str = "tasks.db"):
         self.db_path = db_path
         self.logger = get_logger(__name__)
         self._init_database()
+
+    @staticmethod
+    def _local_now() -> str:
+        """获取当前本地时间字符串（北京时间），用于数据库时间戳字段"""
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
     def _init_database(self):
         """初始化数据库表"""
@@ -164,6 +171,30 @@ class TaskDatabase:
                 )
             ''')
 
+            # 创建离线消息缓存表（用于 gRPC 断线重连时的消息持久化）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS offline_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    msg_id TEXT NOT NULL UNIQUE,
+                    stream_type TEXT NOT NULL,
+                    msg_time INTEGER NOT NULL,
+                    msg_type TEXT NOT NULL,
+                    robot_id TEXT NOT NULL,
+                    payload_blob BLOB NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 离线消息表索引
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_offline_stream_time
+                ON offline_messages(stream_type, msg_time)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_offline_created
+                ON offline_messages(created_at)
+            ''')
+
             # 四表消息架构索引
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_client_upload_sent_time
@@ -202,6 +233,30 @@ class TaskDatabase:
                 ON server_command_sent(command_id)
             ''')
 
+            # task_history 表清理用索引
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_task_history_timestamp
+                ON task_history(timestamp)
+            ''')
+
+            # 四表消息架构清理用索引（基于 created_at 做过期删除）
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_client_upload_sent_created
+                ON client_upload_sent(created_at)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_client_upload_received_created
+                ON client_upload_received(created_at)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_server_command_received_created
+                ON server_command_received(created_at)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_server_command_sent_created
+                ON server_command_sent(created_at)
+            ''')
+
             conn.commit()
     
     @contextmanager
@@ -218,16 +273,16 @@ class TaskDatabase:
         finally:
             conn.close()
     
-    def log_task_action(self, task_id: str, station_id: str, 
+    def log_task_action(self, task_id: str, station_id: str,
                        action: str, status: str, details: str = None):
         """记录任务执行日志"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO task_history 
-                (task_id, station_id, action, status, details)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (task_id, station_id, action, status, details))
+                INSERT INTO task_history
+                (task_id, station_id, action, status, timestamp, details)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (task_id, station_id, action, status, self._local_now(), details))
 
     # ==================== 四表消息架构方法 ====================
 
@@ -240,9 +295,9 @@ class TaskDatabase:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO client_upload_sent
-                (msg_id, msg_time, msg_type, robot_id, data_json, status)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (msg_id, msg_time, msg_type, robot_id, data_json, status))
+                (msg_id, msg_time, msg_type, robot_id, data_json, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (msg_id, msg_time, msg_type, robot_id, data_json, status, self._local_now()))
 
     def get_client_upload_sent(self, msg_type: str = None, limit: int = 100) -> List[Dict[str, Any]]:
         """获取 clientUpload 流发送的消息"""
@@ -274,9 +329,9 @@ class TaskDatabase:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO client_upload_received
-                (msg_id, msg_time, msg_type, robot_id, data_json)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (msg_id, msg_time, msg_type, robot_id, data_json))
+                (msg_id, msg_time, msg_type, robot_id, data_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (msg_id, msg_time, msg_type, robot_id, data_json, self._local_now()))
 
     def get_client_upload_received(self, processed: bool = None, limit: int = 100) -> List[Dict[str, Any]]:
         """获取 clientUpload 流接收的响应"""
@@ -308,9 +363,9 @@ class TaskDatabase:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO server_command_received
-                (msg_id, msg_time, cmd_type, robot_id, data_json)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (msg_id, msg_time, cmd_type, robot_id, data_json))
+                (msg_id, msg_time, cmd_type, robot_id, data_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (msg_id, msg_time, cmd_type, robot_id, data_json, self._local_now()))
 
     def mark_server_command_processed(self, msg_id: str):
         """标记 serverCommand 命令已处理"""
@@ -353,9 +408,9 @@ class TaskDatabase:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO server_command_sent
-                (msg_id, msg_time, msg_type, robot_id, command_id, data_json, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (msg_id, msg_time, msg_type, robot_id, command_id, data_json, status))
+                (msg_id, msg_time, msg_type, robot_id, command_id, data_json, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (msg_id, msg_time, msg_type, robot_id, command_id, data_json, status, self._local_now()))
 
     def get_server_command_sent(self, command_id: str = None, msg_type: str = None,
                                  limit: int = 100) -> List[Dict[str, Any]]:
@@ -651,11 +706,12 @@ class TaskDatabase:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO environment_data_history
-                    (robot_id, position_x, position_y, position_theta,
+                    (timestamp, robot_id, position_x, position_y, position_theta,
                      temperature, humidity, oxygen, carbon_dioxide,
                      pm25, pm10, etvoc, noise, metadata_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
+                    self._local_now(),
                     robot_id,
                     position.get('x', 0.0),
                     position.get('y', 0.0),
@@ -832,3 +888,305 @@ class TaskDatabase:
         except Exception as e:
             self.logger.error(f"获取所有系统配置失败: {e}")
             raise
+
+    # ==================== 离线消息缓存相关方法 ====================
+
+    def save_offline_message(
+        self,
+        msg_id: str,
+        stream_type: str,
+        msg_time: int,
+        msg_type: str,
+        robot_id: str,
+        payload_blob: bytes
+    ):
+        """保存离线消息到缓存表
+
+        Args:
+            msg_id: 消息唯一标识
+            stream_type: 流类型 ('client_upload' 或 'server_command')
+            msg_time: 消息时间戳（毫秒）
+            msg_type: 消息类型名称（protobuf类名）
+            robot_id: 机器人ID
+            payload_blob: protobuf序列化后的二进制数据
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO offline_messages
+                    (msg_id, stream_type, msg_time, msg_type, robot_id, payload_blob, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (msg_id, stream_type, msg_time, msg_type, robot_id, payload_blob, self._local_now()))
+                self.logger.debug(f"离线消息已保存: msg_id={msg_id}, stream_type={stream_type}, msg_type={msg_type}")
+        except Exception as e:
+            self.logger.error(f"保存离线消息失败: {e}")
+            raise
+
+    def get_offline_messages(
+        self,
+        stream_type: str = None,
+        limit: int = 1000
+    ) -> List[Dict[str, Any]]:
+        """获取离线消息（按时间排序，先进先出）
+
+        Args:
+            stream_type: 流类型过滤（可选）
+            limit: 返回记录数限制
+
+        Returns:
+            List[Dict[str, Any]]: 离线消息列表，按 msg_time ASC 排序
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+
+                query = 'SELECT * FROM offline_messages'
+                params = []
+
+                if stream_type:
+                    query += ' WHERE stream_type = ?'
+                    params.append(stream_type)
+
+                query += ' ORDER BY msg_time ASC LIMIT ?'
+                params.append(limit)
+
+                cursor.execute(query, params)
+                return [dict(row) for row in cursor.fetchall()]
+
+        except Exception as e:
+            self.logger.error(f"获取离线消息失败: {e}")
+            raise
+
+    def delete_offline_message(self, msg_id: str):
+        """删除单条离线消息
+
+        Args:
+            msg_id: 消息唯一标识
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    DELETE FROM offline_messages
+                    WHERE msg_id = ?
+                ''', (msg_id,))
+                self.logger.debug(f"离线消息已删除: msg_id={msg_id}")
+        except Exception as e:
+            self.logger.error(f"删除离线消息失败: {e}")
+            raise
+
+    def delete_offline_messages_batch(self, msg_ids: List[str]):
+        """批量删除离线消息
+
+        Args:
+            msg_ids: 消息ID列表
+        """
+        if not msg_ids:
+            return
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                placeholders = ','.join(['?' for _ in msg_ids])
+                cursor.execute(f'''
+                    DELETE FROM offline_messages
+                    WHERE msg_id IN ({placeholders})
+                ''', msg_ids)
+                self.logger.debug(f"批量删除离线消息: count={len(msg_ids)}")
+        except Exception as e:
+            self.logger.error(f"批量删除离线消息失败: {e}")
+            raise
+
+    def cleanup_old_offline_messages(self, ttl_hours: int = 24) -> int:
+        """清理过期的离线消息
+
+        Args:
+            ttl_hours: 消息存活时间（小时），默认24小时
+
+        Returns:
+            int: 删除的消息数量
+        """
+        try:
+            cutoff_time = (datetime.now() - timedelta(hours=ttl_hours)).strftime('%Y-%m-%d %H:%M:%S')
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    DELETE FROM offline_messages
+                    WHERE created_at < ?
+                ''', (cutoff_time,))
+                deleted_count = cursor.rowcount
+                if deleted_count > 0:
+                    self.logger.info(f"清理过期离线消息: count={deleted_count}, ttl_hours={ttl_hours}")
+                return deleted_count
+        except Exception as e:
+            self.logger.error(f"清理过期离线消息失败: {e}")
+            raise
+
+    def get_offline_message_count(self, stream_type: str = None) -> int:
+        """获取离线消息数量
+
+        Args:
+            stream_type: 流类型过滤（可选）
+
+        Returns:
+            int: 消息数量
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+
+                if stream_type:
+                    cursor.execute('''
+                        SELECT COUNT(*) as count FROM offline_messages
+                        WHERE stream_type = ?
+                    ''', (stream_type,))
+                else:
+                    cursor.execute('SELECT COUNT(*) as count FROM offline_messages')
+
+                row = cursor.fetchone()
+                return row['count'] if row else 0
+
+        except Exception as e:
+            self.logger.error(f"获取离线消息数量失败: {e}")
+            raise
+
+    # ==================== 数据清理相关方法 ====================
+
+    # 各表使用的时间戳字段映射
+    _TABLE_TIME_COLUMN = {
+        "environment_data_history": "timestamp",
+        "task_history": "timestamp",
+        "client_upload_sent": "created_at",
+        "client_upload_received": "created_at",
+        "server_command_received": "created_at",
+        "server_command_sent": "created_at",
+        "unified_commands": "created_at",
+    }
+
+    def cleanup_old_data(self, retention_config: Dict[str, int]) -> Dict[str, int]:
+        """清理过期数据
+
+        按照 retention_config 中指定的每个表的保留天数，删除超期数据。
+
+        Args:
+            retention_config: 各表保留天数，格式 {"table_name": days, ...}
+
+        Returns:
+            Dict[str, int]: 各表删除的行数
+        """
+        deleted_counts = {}
+
+        for table_name, retention_days in retention_config.items():
+            time_column = self._TABLE_TIME_COLUMN.get(table_name)
+            if not time_column:
+                self.logger.warning(f"未知表名或无时间字段映射，跳过清理: {table_name}")
+                continue
+
+            cutoff_time = (datetime.now() - timedelta(days=retention_days)).strftime('%Y-%m-%d %H:%M:%S')
+
+            try:
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        f'DELETE FROM {table_name} WHERE {time_column} < ?',
+                        (cutoff_time,)
+                    )
+                    deleted_count = cursor.rowcount
+                    deleted_counts[table_name] = deleted_count
+
+                    if deleted_count > 0:
+                        self.logger.info(
+                            f"清理表 {table_name}: 删除 {deleted_count} 条记录 "
+                            f"(保留 {retention_days} 天, 截止 {cutoff_time})"
+                        )
+            except Exception as e:
+                self.logger.error(f"清理表 {table_name} 失败: {e}")
+                deleted_counts[table_name] = -1
+
+        return deleted_counts
+
+    def vacuum(self):
+        """执行 VACUUM 回收磁盘空间"""
+        try:
+            # VACUUM 不能在事务中执行，需要直接使用连接
+            conn = sqlite3.connect(self.db_path)
+            conn.execute('VACUUM')
+            conn.close()
+            self.logger.info("数据库 VACUUM 完成，已回收磁盘空间")
+        except Exception as e:
+            self.logger.error(f"数据库 VACUUM 失败: {e}")
+
+    def start_cleanup_thread(
+        self,
+        retention_config: Dict[str, int],
+        cleanup_interval_hours: float = 6,
+        vacuum_interval_hours: float = 24
+    ):
+        """启动后台数据清理线程
+
+        Args:
+            retention_config: 各表保留天数
+            cleanup_interval_hours: 清理间隔（小时）
+            vacuum_interval_hours: VACUUM 间隔（小时）
+        """
+        self._cleanup_stop_event = threading.Event()
+        self._cleanup_thread = threading.Thread(
+            target=self._cleanup_loop,
+            args=(retention_config, cleanup_interval_hours, vacuum_interval_hours),
+            daemon=True,
+            name="DatabaseCleanup"
+        )
+        self._cleanup_thread.start()
+        self.logger.info(
+            f"数据库清理线程已启动 (清理间隔: {cleanup_interval_hours}h, VACUUM间隔: {vacuum_interval_hours}h)"
+        )
+
+    def _cleanup_loop(
+        self,
+        retention_config: Dict[str, int],
+        cleanup_interval_hours: float,
+        vacuum_interval_hours: float
+    ):
+        """后台清理循环"""
+        cleanup_interval_seconds = cleanup_interval_hours * 3600
+        vacuum_interval_seconds = vacuum_interval_hours * 3600
+
+        last_cleanup_time = 0.0  # 立即执行首次清理
+        last_vacuum_time = time.time()  # VACUUM 延迟到第一个完整周期后执行
+
+        while not self._cleanup_stop_event.is_set():
+            current_time = time.time()
+
+            # 执行数据清理
+            if current_time - last_cleanup_time >= cleanup_interval_seconds:
+                try:
+                    result = self.cleanup_old_data(retention_config)
+                    total_deleted = sum(v for v in result.values() if v > 0)
+                    if total_deleted > 0:
+                        self.logger.info(f"定期数据清理完成，共删除 {total_deleted} 条记录")
+                except Exception as e:
+                    self.logger.error(f"定期数据清理异常: {e}")
+                last_cleanup_time = current_time
+
+            # 执行 VACUUM
+            if current_time - last_vacuum_time >= vacuum_interval_seconds:
+                try:
+                    self.vacuum()
+                except Exception as e:
+                    self.logger.error(f"定期 VACUUM 异常: {e}")
+                last_vacuum_time = current_time
+
+            # 每60秒检查一次停止信号
+            self._cleanup_stop_event.wait(timeout=60)
+
+    def stop_cleanup_thread(self):
+        """停止后台清理线程"""
+        if hasattr(self, '_cleanup_stop_event') and self._cleanup_stop_event:
+            self._cleanup_stop_event.set()
+        if hasattr(self, '_cleanup_thread') and self._cleanup_thread and self._cleanup_thread.is_alive():
+            self._cleanup_thread.join(timeout=5)
+            if self._cleanup_thread.is_alive():
+                self.logger.warning("数据库清理线程未能在超时时间内停止")
+            else:
+                self.logger.info("数据库清理线程已停止")

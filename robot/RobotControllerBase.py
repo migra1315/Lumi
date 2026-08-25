@@ -26,17 +26,19 @@ class BatteryStatus(Enum):
 
 class RobotControllerBase(ABC):
     """机器人控制器基类，定义所有机器人控制器必须实现的接口"""
-    
-    def __init__(self, config: Dict[str, Any] = None, debug: bool = False):
+
+    def __init__(self, config: Dict[str, Any] = None, debug: bool = False, auto_setup: bool = True):
         """
         初始化基类
 
         Args:
             config: 配置字典
             debug: 调试模式
+            auto_setup: 是否自动调用 setup_system()（默认True保持向后兼容）
         """
         self.config = config or {}
         self.debug = debug
+        self._auto_setup = auto_setup
 
         # 通用状态（所有实现类都应该有的状态）
         self.status = RobotStatus.IDLE
@@ -195,6 +197,47 @@ class RobotControllerBase(ABC):
             "noise": 0.0
         }
 
+
+    # ==================== 硬件模块控制方法 ====================
+    def start_camera(self) -> bool:
+        """
+        启动相机（子类实现）
+
+        Returns:
+            bool: 操作是否成功
+        """
+        self.logger.info("启动相机（基类默认实现）")
+        return True
+
+    def stop_camera(self) -> bool:
+        """
+        关闭相机（子类实现）
+
+        Returns:
+            bool: 操作是否成功
+        """
+        self.logger.info("关闭相机（基类默认实现）")
+        return True
+
+    def start_env_sensor(self) -> bool:
+        """
+        启动环境传感器（子类实现）
+
+        Returns:
+            bool: 操作是否成功
+        """
+        self.logger.info("启动环境传感器（基类默认实现）")
+        return True
+
+    def stop_env_sensor(self) -> bool:
+        """
+        关闭环境传感器（子类实现）
+
+        Returns:
+            bool: 操作是否成功
+        """
+        self.logger.info("关闭环境传感器（基类默认实现）")
+        return True
 
     # ==================== 回调机制 ====================
     def register_callback(self, event: str, callback: Callable):
