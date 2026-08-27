@@ -9,7 +9,6 @@ import logging.handlers
 import os
 import sys
 from typing import Optional
-from datetime import datetime
 
 
 # ANSI颜色代码

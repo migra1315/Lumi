@@ -1,18 +1,20 @@
-from utils.voice_player import VoicePlayer
-import threading
+# from utils.voice_player import VoicePlayer
 import queue
+import threading
 import time
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Optional, List, Dict, Any
-from utils.logger_config import get_logger
-from task.TaskDatabase import TaskDatabase
+from datetime import datetime
+from typing import Callable, Optional, Dict, Any
+
+from dataModels.CommandModels import CmdType
 from dataModels.TaskModels import (
-    Task, Station, StationConfig, OperationMode,
+    Task, Station, OperationMode,
     TaskStatus, StationTaskStatus, StationExecutionPhase, OperationConfig, RobotMode
 )
-from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus, CommandCategory
-from dataModels.CommandModels import CmdType
+from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus
+from task.TaskDatabase import TaskDatabase
+from utils.logger_config import get_logger
+
 
 class TaskScheduler:
     """任务调度器 - 负责任务的调度和执行（支持统一命令队列）"""
@@ -29,20 +31,21 @@ class TaskScheduler:
         self.scheduler_thread: Optional[threading.Thread] = None
         self.executor = ThreadPoolExecutor(max_workers=1)  # 单任务执行
         self.logger = get_logger(__name__)
-        self.voice_player = VoicePlayer()
+        # self.voice_player = VoicePlayer()
 
-        # 回调函数注册
+        # 回调函数注册（每个事件只有一个消费者，使用单个 callable 而非 list）
         self.task_callbacks = {
-            "on_task_start": [],
-            "on_task_complete": [],
-            "on_task_failed": [],
-            "on_station_start": [],
-            "on_station_complete": [],
-            "on_station_retry": [],
-            "on_station_progress": [],       # 站点进度更新回调
-            "on_command_complete": [],       # 命令完成回调
-            "on_command_failed": [],         # 命令失败回调
-            "on_command_status_change": []   # 命令状态变化回调（RUNNING/RETRYING等）
+            "on_task_start": None,
+            "on_task_complete": None,
+            "on_task_failed": None,
+            "on_station_start": None,
+            "on_station_complete": None,
+            "on_station_retry": None,
+            "on_station_progress": None,
+            "on_operation_result": None,
+            "on_command_complete": None,
+            "on_command_failed": None,
+            "on_command_status_change": None,
         }
     
     def start(self):
@@ -250,11 +253,8 @@ class TaskScheduler:
         # 设置任务状态为运行中
         task.status = TaskStatus.RUNNING
         self.logger.info(f"任务开始执行: {task.task_id}, 任务名称: {task.task_name}")
-
-        self.robot_controller.welcome()
-
-        # return
-
+        # if task.robot_mode == RobotMode.INSPECTION:
+        #     self.voice_player.play("收到巡检任务啦.mp3")
         # 触发任务开始回调
         self._trigger_callback("on_task_start", task)
 
@@ -331,6 +331,8 @@ class TaskScheduler:
             for i, station in enumerate(sorted_stations, 1):
                 station_id = station.station_config.station_id
                 self.logger.info(f"执行站点 {i}/{total_stations}: {station_id}")
+                # if task.robot_mode == RobotMode.INSPECTION:
+                #     self.voice_player.play(f"到达站点.mp3")
                 # 执行站点（包含重试逻辑）
                 if self._execute_station_task_with_retry(station):
                     success_count += 1
@@ -340,7 +342,6 @@ class TaskScheduler:
                     self.logger.warning(f"✗ 站点 {station_id} 执行失败，继续执行后续站点")
                 # if task.robot_mode == RobotMode.INSPECTION:
                 #     self.voice_player.play(f"巡检完成.mp3")
-                #     time.sleep(10)
             # 输出汇总日志
             self.logger.info(
                 f"任务 {task.task_id} 执行完成: "
@@ -481,27 +482,6 @@ class TaskScheduler:
                 self.logger.error(station.error_message)
                 return False
 
-            # === 阶段 2: 移动机械臂 ===
-            if station.station_config.robot_pos:
-                station.execution_phase = StationExecutionPhase.ARM_POSITIONING
-                station.progress_detail = f"机械臂移动到归位位置 {station.station_config.robot_pos}"
-                self.logger.debug(f"[站点 {station_id}] 阶段: ARM_POSITIONING - {station.progress_detail}")
-
-                # 触发进度更新回调
-                self._trigger_callback(
-                    "on_station_progress",
-                    station=station,
-                    command_id=self.current_command.command_id if self.current_command else None
-                )
-
-                success = self.robot_controller.move_robot_to_position(
-                    station.station_config.robot_pos
-                )
-                if not success:
-                    station.execution_phase = StationExecutionPhase.FAILED
-                    station.error_message = "机械臂移动失败"
-                    self.logger.error(station.error_message)
-                    return False
 
             # === 阶段 3: 移动外部轴 ===
             if station.station_config.ext_pos:
@@ -523,6 +503,28 @@ class TaskScheduler:
                 if not success:
                     station.execution_phase = StationExecutionPhase.FAILED
                     station.error_message = "外部轴移动失败"
+                    self.logger.error(station.error_message)
+                    return False
+
+            # === 阶段 2: 移动机械臂 ===
+            if station.station_config.robot_pos:
+                station.execution_phase = StationExecutionPhase.ARM_POSITIONING
+                station.progress_detail = f"机械臂移动到归位位置 {station.station_config.robot_pos}"
+                self.logger.debug(f"[站点 {station_id}] 阶段: ARM_POSITIONING - {station.progress_detail}")
+
+                # 触发进度更新回调
+                self._trigger_callback(
+                    "on_station_progress",
+                    station=station,
+                    command_id=self.current_command.command_id if self.current_command else None
+                )
+
+                success = self.robot_controller.move_robot_to_position(
+                    station.station_config.robot_pos
+                )
+                if not success:
+                    station.execution_phase = StationExecutionPhase.FAILED
+                    station.error_message = "机械臂移动失败"
                     self.logger.error(station.error_message)
                     return False
 
@@ -555,7 +557,14 @@ class TaskScheduler:
                     station.error_message = f"操作失败: {operation_result.get('message')}"
                     self.logger.error(station.error_message)
                     return False
-            self.robot_controller.move_head()
+
+            # === 阶段5 === 机械臂和外部轴复位
+            self.robot_controller.move_robot_to_position(
+                  [0,1.784529347,-0.2298249559,1.5707963268,-1.5105126544,0.7853981634]  
+                )
+            self.robot_controller.move_ext_to_position(
+                    [10,0,0,0]
+                )
             # === 完成 ===
             station.execution_phase = StationExecutionPhase.COMPLETED
             station.status = StationTaskStatus.COMPLETED
@@ -602,15 +611,17 @@ class TaskScheduler:
                 'duration': 0.0
             }
 
-        # 触发操作结果回调
-        # operation_data 只包含操作特定数据，task_id/station_id/command_id从快照获取
+        # 触发操作结果回调，直接传入 task/station/command_id，避免后续再查快照
         self._trigger_callback(
             "on_operation_result",
             operation_data={
                 'operation_mode': operation_config.operation_mode,
                 'result': result,
                 'timestamp': time.time()
-            }
+            },
+            task=self.current_task,
+            station=self.current_station,
+            command_id=self.current_command.command_id if self.current_command else None
         )
 
         return result
@@ -742,11 +753,12 @@ class TaskScheduler:
     def register_callback(self, event: str, callback: Callable):
         """注册回调函数"""
         if event in self.task_callbacks:
-            self.task_callbacks[event].append(callback)
-    
+            self.task_callbacks[event] = callback
+
     def _trigger_callback(self, event: str, *args, **kwargs):
         """触发回调函数"""
-        for callback in self.task_callbacks.get(event, []):
+        callback = self.task_callbacks.get(event)
+        if callback:
             try:
                 callback(*args, **kwargs)
             except Exception as e:

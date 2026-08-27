@@ -2,15 +2,15 @@
 """JAKA Integrated Control System
 集成JAKA机器人、外部轴和AGV的控制功能
 """
-import math
-import os
-from doctest import FAIL_FAST
-import time
-import requests
 import json
+import math
+import time
+
+import requests
+
+from robot.jaka import JAKA
 from utils.logger_config import get_logger
 from utils.voice_player import VoicePlayer
-from robot.jaka import JAKA
 
 
 class ArmController(JAKA):
@@ -307,22 +307,19 @@ class ArmController(JAKA):
             if ext_ok:
                 ext_ok = ext_ok and self.ext_reset()
                 ext_ok = ext_ok and self.ext_enable(True)
+        
 
+        # 语音播报 + 欢迎动作（语音播放在独立线程中，不阻塞欢迎动作执行）
+        # self.voice_player.play("你的实验室助手已上线.mp3")
+        # time.sleep(1)
+        # for i in range(2):
+        #     self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_1])
+        #     self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_2])
+        
+        # self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_3])
+        
         return robot_ok and ext_ok
     
-    def welcome(self):
-        # 语音播报 + 欢迎动作（语音播放在独立线程中，不阻塞欢迎动作执行）
-        self.voice_player.play("巡检开始前.mp3")
-        time.sleep(1)
-        for i in range(2):
-            self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_1])
-            self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_2])
-        
-        self.rob_moveto([math.radians(angle) for angle in self.WELCOME_JOINTS_3])
-
-    def playvideo_after_inspection(self):
-        self.voice_player.play("巡检结束后.mp3")
-
     def shutdown_system(self):
         """
         关闭整个系统
@@ -383,8 +380,7 @@ class ArmController(JAKA):
         :param vel: 关节速度，默认90度/秒
         :return: 运动结果
         """
-        import math
-        
+
         vel = vel if vel is not None else self.DEFAULT_ROB_VEL
         # self.logger.info(f"输入的关节角度(度): {jpos}")
         

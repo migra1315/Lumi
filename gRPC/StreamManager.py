@@ -1,13 +1,14 @@
-from abc import ABC, abstractmethod
-from gRPC import RobotService_pb2 as robot_pb2
-import grpc
+import queue
 import threading
 import time
-from utils.logger_config import get_logger
-import queue
 import uuid
+from abc import ABC, abstractmethod
 from typing import Optional, Generator, Any, Callable
-from concurrent import futures
+
+import grpc
+
+from gRPC import RobotService_pb2 as robot_pb2
+from utils.logger_config import get_logger
 
 
 class BaseStreamManager(ABC):
@@ -134,18 +135,22 @@ class BaseStreamManager(ABC):
     def _handle_responses(self):
         """处理服务器响应"""
         self.logger.debug("响应处理线程启动")
-        
+
+        # 初始化断开原因，防止 for-loop break 时未赋值导致 NameError
+        disconnect_reason = "unknown"
+
         try:
             for response in self.response_iterator:
                 if self.shutdown_event.is_set() or not self.is_stream_active:
+                    disconnect_reason = "shutdown"
                     break
-                    
+
                 self.stats['messages_received'] += 1
                 self.stats['last_activity'] = time.time()
-                
+
                 # 记录响应信息
                 self._log_response_info(response)
-                
+
                 # 调用响应处理函数
                 if self.response_handler:
                     try:
@@ -156,10 +161,10 @@ class BaseStreamManager(ABC):
 
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.CANCELLED:
-                self.logger.info("RPC调用被取消")
+                self.logger.debug("RPC调用被取消（正常关闭）")
                 disconnect_reason = "cancelled"
             else:
-                self.logger.error(f"RPC错误: {e}")
+                self.logger.error(f"RPC错误: {e.code().name} - {e.details()}")
                 self.stats['errors'] += 1
                 disconnect_reason = f"rpc_error: {e.code().name}"
         except Exception as e:
@@ -171,10 +176,9 @@ class BaseStreamManager(ABC):
         finally:
             was_active = self.is_stream_active
             self.is_stream_active = False
-            self.logger.info("响应处理线程结束")
+            self.logger.debug(f"响应处理线程结束，原因: {disconnect_reason}")
 
-            # 如果流之前是活跃的且有断线回调，触发回调
-            # 排除正常关闭（shutdown_event已设置）的情况
+            # 只在流之前活跃且不是主动关闭的情况下触发回调
             if was_active and self.on_stream_broken and not self.shutdown_event.is_set():
                 try:
                     self.on_stream_broken(disconnect_reason)
@@ -308,28 +312,10 @@ class ClientUploadStreamManager(BaseStreamManager):
         return robot_pb2.RobotUploadResponse
 
     def _send_keepalive(self):
-        """发送保持连接的消息"""
-        # 对于clientUpload流，可以发送一个简单的心跳消息
-        try:
-            # 创建一个简单的心跳消息
-            request = self._get_request_type()(
-                msg_id=int(uuid.uuid4().hex[:8], 16),
-                msg_time=int(time.time() * 1000),
-                msg_type=robot_pb2.MsgType.ROBOT_STATUS,
-                robot_id=self.robot_id
-            )
-            # 设置空的机器人状态
-            robot_status = robot_pb2.RobotStatusUpload(
-                battery_info=robot_pb2.BatteryInfo(power_percent=0.0, charge_status="unknown"),
-                position_info=robot_pb2.PositionInfo(),
-                system_status=robot_pb2.SystemStatus(move_status=robot_pb2.MoveStatus.IDLE)
-            )
-            request.robot_status.CopyFrom(robot_status)
-            self.send_message(request)
-        except Exception as e:
-            self.logger.debug(f"发送心跳失败: {e}")
+        """clientUpload 流靠定期真实状态上报（10s/30s）维持活跃时间，无需额外 keepalive"""
+        pass
 
-    def send_robot_status(self, msg_id: int, msg_type: robot_pb2.MsgType, 
+    def send_robot_status(self, msg_id: int, msg_type: robot_pb2.MsgType,
                         robot_status: robot_pb2.RobotStatusUpload) -> bool:
         """发送机器人状态"""
         request = self._get_request_type()(
@@ -381,8 +367,8 @@ class ServerCommandStreamManager(BaseStreamManager):
         """获取响应消息类型"""
         return robot_pb2.ServerStreamMessage
 
-    def _send_keep_alive(self):
-        """发送保持连接的心跳"""
+    def _send_keepalive(self):
+        """发送保持连接的心跳（供 _request_generator 在队列空闲时调用）"""
         current_time = time.time()
         if current_time - self.last_heartbeat_time > self.heartbeat_interval:
             try:
@@ -478,7 +464,7 @@ class ServerCommandStreamManager(BaseStreamManager):
                     time.sleep(1)
                 except Exception as e:
                     self.logger.error(f"心跳线程错误: {e}")
-                    break
+                    # 不退出，避免心跳停止导致 60s 后误判心跳超时断连
 
         heartbeat_thread_instance = threading.Thread(
             target=heartbeat_thread, 

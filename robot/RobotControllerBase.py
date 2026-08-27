@@ -4,9 +4,11 @@ RobotControllerBase.py
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Callable
 from enum import Enum
+from typing import List, Dict, Any, Callable
+
 from utils.logger_config import get_logger
+
 
 class RobotStatus(Enum):
     IDLE = "idle"

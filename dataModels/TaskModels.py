@@ -1,8 +1,8 @@
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from datetime import datetime
-import json
+
 
 class StationTaskStatus(Enum):
     PENDING = "pending"      # 待执行
@@ -11,7 +11,6 @@ class StationTaskStatus(Enum):
     FAILED = "failed"        # 执行失败
     SKIPPED = "skipped"      # 已跳过
     RETRYING = "retrying"    # 重试中
-    TO_RETRY = "to_retry"    # 重试中
 
 
 class StationExecutionPhase(Enum):

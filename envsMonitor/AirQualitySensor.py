@@ -1,7 +1,8 @@
-import serial
-import struct
 import time
 from datetime import datetime
+
+import serial
+
 
 class AirQualitySensor:
     def __init__(self, port='COM1', baudrate=4800, address=0x01, timeout=1):

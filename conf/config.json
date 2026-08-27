@@ -37,13 +37,20 @@
         }
     },
     "env_sensor_config": {
-        "port": "COM3",
+        "port": "COM4",
         "baudrate": 4800,
         "address": 1,
         "read_interval": 5
     },
     "camera_config": {
-        "camera_type": "orbbec",
+        "camera_type": "tplink",
+        "tplink": {
+            "ip": "192.168.11.3",
+            "username": "admin",
+            "password": "213213213**",
+            "light_warmup_seconds": 0.5,
+            "request_timeout": 5
+        },
         "resolution": {
             "width": 1280,
             "height": 720
@@ -71,7 +78,7 @@
         "warmup_frames": 10
     },
     "use_mock": false,
-    "report": true,
+    "report": false,
     "database_config": {
         "retention_days": {
             "client_upload_sent": 7,

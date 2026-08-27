@@ -12,7 +12,6 @@ import subprocess
 import threading
 
 from utils.logger_config import get_logger
-# from logger_config import get_logger
 
 
 class VoicePlayer:
@@ -75,7 +74,6 @@ class VoicePlayer:
 
         :param filename: 音频文件名（相对于audio_dir）或完整路径
         """
-        
         # 解析完整路径
         if os.path.isabs(filename):
             audio_path = filename
@@ -98,7 +96,7 @@ class VoicePlayer:
         )
         thread.start()
         self.logger.info(f"开始播放音频: {filename}")
-        # time.sleep(5)
+        time.sleep(5)
 
     def _play_file(self, audio_path):
         """在独立线程中执行ffplay播放"""
@@ -147,4 +145,3 @@ class VoicePlayer:
                 # 进程已退出，清理引用
                 self._process = None
             return self._process is not None
-

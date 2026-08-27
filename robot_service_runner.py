@@ -5,7 +5,6 @@ import threading
 
 from RobotControlSystem import RobotControlSystem, load_config
 
-
 stop_event = threading.Event()
 
 

@@ -1,9 +1,10 @@
-from doctest import FAIL_FAST
+import time
+import socket
+import sys
+import threading
 import time
 import json
-import socket
-import threading
-import sys 
+
 sys.path.append('D:\WorkSpace\Lumi')
 from utils.logger_config import get_logger
 import uuid

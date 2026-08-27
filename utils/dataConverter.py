@@ -1,31 +1,31 @@
-from typing import Any, Dict
-from dataModels.MessageModels import MoveStatus
-from dataModels.TaskModels import TaskStatus, Task, Station, StationTaskStatus, StationConfig, OperationConfig, OperationMode, RobotMode
 from datetime import datetime
-import gRPC.RobotService_pb2 as robot_pb2
+from typing import Any, Dict
 
+import gRPC.RobotService_pb2 as robot_pb2
 from dataModels.CommandModels import (
-    CommandEnvelope, CmdType, create_cmd_envelope, TaskCmd, RobotModeCmd,
-    joyControlCmd, CommandResponse, SetMarkerCmd
+    CommandEnvelope, CmdType, TaskCmd
 )
 from dataModels.MessageModels import (
-    MessageEnvelope, MsgType, create_message_envelope, UploadResponse,
-    BatteryInfo, PositionInfo, TaskListInfo, SystemStatus, ErrorInfo,
-    DeviceInfo, EnvironmentInfo
+    MessageEnvelope, MsgType, UploadResponse
 )
+from dataModels.MessageModels import MoveStatus
+from dataModels.TaskModels import TaskStatus, Task, Station, StationTaskStatus, StationConfig, OperationConfig, \
+    OperationMode, RobotMode
+
 
 # ====================== gRPC -> Python 转换 ======================
 
 def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.ServerStreamMessage) -> CommandEnvelope:
     """将gRPC ServerStreamMessage转换为CommandEnvelope
-    
+
     Args:
         server_cmd_request: gRPC服务端命令请求
-        
+
     Returns:
         CommandEnvelope: 命令信封对象
     """
     # 转换CmdType枚举
+    parsed_data = None  # 预解析对象，TASK_CMD时直接存 Task 避免后续重复解析
     cmd_type_map = {
         robot_pb2.CmdType.RESPONSE_CMD: CmdType.RESPONSE_CMD,
         robot_pb2.CmdType.ROBOT_MODE_CMD: CmdType.ROBOT_MODE_CMD,
@@ -74,7 +74,7 @@ def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.Ser
             robot_pb2.StationTaskStatus.STATION_TASK_STATUS_FAILED: StationTaskStatus.FAILED,
             robot_pb2.StationTaskStatus.STATION_TASK_STATUS_CANCELLED: StationTaskStatus.SKIPPED,
             robot_pb2.StationTaskStatus.STATION_TASK_STATUS_RETRYING: StationTaskStatus.RETRYING,
-            robot_pb2.StationTaskStatus.STATION_TASK_STATUS_TO_RETRY: StationTaskStatus.TO_RETRY,
+            robot_pb2.StationTaskStatus.STATION_TASK_STATUS_TO_RETRY: StationTaskStatus.RETRYING,
         }
         
         # 转换OperationMode枚举
@@ -143,7 +143,9 @@ def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.Ser
             #     metadata=metadata
             # )
             task_cmd.station_config_list.append(station_config)
-        
+
+        # 直接构建 Task 对象，避免 TaskManager 再次解析 data_json
+        parsed_data = convert_task_cmd_to_task(task_cmd)
         data_json = {
             "task_cmd": task_cmd.to_dict()
         }
@@ -204,9 +206,10 @@ def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.Ser
         cmd_time=int(server_cmd_request.command_time),
         cmd_type=cmd_type,
         robot_id=server_cmd_request.robot_id,
-        data_json=data_json
+        data_json=data_json,
+        data=parsed_data
     )
-    
+
     return command_envelope
 
 
@@ -349,7 +352,6 @@ def _convert_station_to_proto(station: Dict[str, Any]) -> robot_pb2.Station:
         'failed': robot_pb2.StationTaskStatus.STATION_TASK_STATUS_FAILED,
         'cancelled': robot_pb2.StationTaskStatus.STATION_TASK_STATUS_CANCELLED,
         'retrying': robot_pb2.StationTaskStatus.STATION_TASK_STATUS_RETRYING,
-        'to_retry': robot_pb2.StationTaskStatus.STATION_TASK_STATUS_TO_RETRY,
     }
 
     # 转换 StationConfig
@@ -709,58 +711,6 @@ def convert_task_cmd_to_task(task_cmd: TaskCmd) -> Task:
     return task
 
 
-def convert_data_json_to_task_cmd(data_json: Dict[str, Any]) -> TaskCmd:
-        """从data_json解析TaskCmd对象
-
-        Args:
-            data_json: 命令数据JSON
-
-        Returns:
-            TaskCmd: 任务命令对象
-        """
-        task_cmd_dict = data_json.get('task_cmd', {})
-
-        # 提取任务信息
-        task_id = task_cmd_dict.get('task_id')
-        task_name = task_cmd_dict.get('task_name')
-        robot_mode = RobotMode(task_cmd_dict.get('robot_mode'))
-        generate_time = datetime.fromisoformat(task_cmd_dict.get('generate_time'))
-        station_config_tasks = task_cmd_dict.get('station_config_tasks', [])
-
-        # 解析站点配置列表
-        station_config_list = []
-        for station_config_dict in station_config_tasks:
-            # 解析操作配置
-            operation_config_data = station_config_dict.get('operation_config', {})
-            operation_config = OperationConfig(
-                operation_mode=OperationMode(operation_config_data.get('operation_mode', 'None')),
-                door_ip=operation_config_data.get('door_ip'),
-                device_id=operation_config_data.get('device_id')
-            )
-
-            # 创建站点配置
-            station_config = StationConfig(
-                station_id=station_config_dict.get('station_id'),
-                sort=station_config_dict.get('sort', 0),
-                name=station_config_dict.get('name', ''),
-                agv_marker=station_config_dict.get('agv_marker', ''),
-                robot_pos=station_config_dict.get('robot_pos', []),
-                ext_pos=station_config_dict.get('ext_pos', []),
-                operation_config=operation_config
-            )
-
-            station_config_list.append(station_config)
-
-        # 创建TaskCmd对象
-        return TaskCmd(
-            task_id=task_id,
-            task_name=task_name,
-            robot_mode=robot_mode,
-            generate_time=generate_time,
-            station_config_list=station_config_list
-        )
-
-
 def convert_station_to_proto_station(station: Station) -> robot_pb2.Station:
     """将Station对象转换为gRPC Station消息
     
@@ -778,7 +728,6 @@ def convert_station_to_proto_station(station: Station) -> robot_pb2.Station:
         StationTaskStatus.FAILED: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_FAILED,
         StationTaskStatus.SKIPPED: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_CANCELLED,
         StationTaskStatus.RETRYING: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_RETRYING,
-        StationTaskStatus.TO_RETRY: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_TO_RETRY,
     }
     
     # 转换OperationMode枚举

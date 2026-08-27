@@ -4,14 +4,16 @@ RobotController.py
 机器人控制器主类，整合AGV、机械臂和外部轴的控制
 """
 
-import time
-from utils.logger_config import get_logger
 import threading
-from typing import Dict, List, Any, Optional, Callable
+import time
 from enum import Enum
+from typing import Dict, List, Any, Callable
+
 from dataModels.MessageModels import MoveStatus
+from robot.MockArmController import MockArmController
 from robot.AGVController import AGVController
 from robot.ArmController import ArmController
+from utils.logger_config import get_logger
 
 # 导入相机管理器
 try:
@@ -33,7 +35,7 @@ try:
     env_monitor_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'envsMonitor')
     if env_monitor_path not in sys.path:
         sys.path.insert(0, env_monitor_path)
-    from envsMonitor.AirQualitySensor import AirQualitySensor
+    from envsMonitor.MockAirQualitySensor import MockAirQualitySensor as AirQualitySensor
     ENV_SENSOR_AVAILABLE = True
 except ImportError as e:
     ENV_SENSOR_AVAILABLE = False
@@ -122,7 +124,7 @@ class RobotController():
 
             self.logger.debug("正在初始化机械臂控制器...")
             # 注意：ArmController同时包含机械臂和外部轴控制
-            self.arm_controller = ArmController(
+            self.arm_controller = MockArmController(
                 system_config=robot_config,
                 ext_axis_limits=robot_config.get("ext_axis_limits"),
                 debug=self.debug
@@ -218,6 +220,8 @@ class RobotController():
                           ext_status_response[3].get('pos', 0.0),
                         ]
 
+            # 获取机械臂状态
+            
             arm_status = self.arm_controller.arm_get_state()
             
             # 构建状态字典
@@ -314,9 +318,6 @@ class RobotController():
             self.logger.error(f"重置错误状态时发生错误: {e}")
             return False
     
-    def welcome(self):
-        self.arm_controller.welcome()
-
     def move_to_marker(self, marker_id: str) -> bool:
         """
         移动AGV到指定标记点
@@ -402,7 +403,7 @@ class RobotController():
     
     def move_head(self):
         self.arm_controller.move_head()
-
+        
     def move_ext_to_position(self, position: List[float], velocity: float = None, 
                            acceleration: float = None) -> bool:
         """
@@ -426,8 +427,8 @@ class RobotController():
             
             # 调用外部轴控制器的移动方法
             if hasattr(self.arm_controller, 'ext_moveto'):
-                self.arm_controller.ext_moveto(position, vel=velocity, acc=acceleration)
-                success = True
+                success = self.arm_controller.ext_moveto(position, vel=velocity, acc=acceleration)
+                success =True
             else:
                 self.logger.error("外部轴控制器不支持ext_moveto方法")
                 return False
@@ -607,7 +608,7 @@ class RobotController():
         """
         self.logger.info(f"开始充电")
         self.system_status = SystemStatus.CHARGING
-        self.move_ext_to_position([10.0,0.0,0.0,0.0])
+
         try:
             move_success = self.move_to_marker("charge_point_1F_6010")
             if not move_success:
@@ -688,8 +689,6 @@ class RobotController():
         Returns:
             bool: 操作是否成功
         """
-        self.arm_controller.playvideo_after_inspection()
-        return True
         try:
             self.logger.info(f"开始位置调整 - 目标标记点: {marker_id}")
             if self.agv_controller.agv_position_adjust(marker_id):
@@ -963,7 +962,7 @@ class RobotController():
             return True
 
         if not ENV_SENSOR_AVAILABLE:
-            self.logger.warning("环境传感器模块不可用，请检查 envsMonitor/demo.py 是否存在")
+            self.logger.warning("环境传感器模块不可")
             return False
 
         try:

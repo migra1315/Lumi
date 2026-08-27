@@ -10,8 +10,6 @@ utils/JAKA_SDK_WINDOWS/*
 .vscode/settings.json
 proto/RobotService_pb2.pyi
 gRPC/proto/RobotService_bp.proto
-CLAUDE.md
-cl.bat
 .claude/settings.local.json
 tmpclaude-ed9e-cwd
 logs
@@ -20,10 +18,11 @@ tmpclaude-1782-cwd
 utils/ffmpeg-2026-01-12-git-21a3e44fbe-full_build/*
 received_images/*
 utils/mediamtx_v1.15.6_windows_amd64/*
-deploy/install_service.bat
-deploy/install.bat
-deploy/LumiRobot.xml
-deploy/README.txt
-deploy/start.bat
-deploy/status.bat
-deploy/uninstall_service.bat
+utils/src/*.mp3
+*.png
+/.idea
+CLAUDE.md
+cl.bat
+tmp
+robot/RobotController_bp_260825.py
+gRPC/proto/RobotService_newer.proto
