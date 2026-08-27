@@ -13,7 +13,6 @@ gRPC/proto/RobotService_bp.proto
 .claude/settings.local.json
 tmpclaude-ed9e-cwd
 logs
-docs/*
 tmpclaude-1782-cwd
 utils/ffmpeg-2026-01-12-git-21a3e44fbe-full_build/*
 received_images/*

@@ -35,7 +35,7 @@ enum StationTaskStatus {
     STATION_TASK_STATUS_UNSPECIFIED = 0;
     STATION_TASK_STATUS_PENDING = 1;      // 待执行
     STATION_TASK_STATUS_RUNNING = 2;      // 执行中
-    STATION_TASK_STATUS_COMPLETED = 3;    // 已完成
+    STATION_TASK_STATUS_COMPLETED = 3;    // 巡检已完成；服务已到达
     STATION_TASK_STATUS_FAILED = 4;       // 失败
     STATION_TASK_STATUS_CANCELLED = 5;    // 已取消
     STATION_TASK_STATUS_RETRYING = 6;     // 重试中
@@ -69,8 +69,9 @@ enum CmdType {
     CHARGE_CMD = 5; // 充电命令 (Trigger信号，无需dataJson参数)
     POSITION_ADJUST_CMD = 6; // 重定位命令 (Trigger信号，无需dataJson参数)
     HEARTBEAT_CMD = 7; // 心跳确认
-    HARDWARE_START_CMD = 8; // 硬件启动命令
+    HARDWARE_START_CMD = 8;    // 硬件启动命令
     HARDWARE_SHUTDOWN_CMD = 9; // 硬件关闭命令
+    CANCEL_TASK_CMD = 10; // 任务取消命令
 }
 
 // 客户端信息类型
@@ -80,8 +81,8 @@ enum ClientMessageType {
     SET_MARKER_RESPONSE = 2; // 设置标记点响应
     COMMAND_STATUS_UPDATE = 3; // 命令状态更新
     TASK_PROGRESS_UPDATE = 4; // 任务进度更新
-    OPERATION_RESULT = 5; // 操作结果反馈
-    HARDWARE_STATUS_RESPONSE = 6; // 硬件状态响应
+    OPERATION_RESULT = 5; // 操作结果反馈：巡检；服务点位到达
+    HARDWARE_STATUS_RESPONSE = 6;
 }
 
 // 命令状态枚举
@@ -264,7 +265,7 @@ message Station {
 
 // 巡检任务
 message Task {
-    int64 task_id = 1;                 // 任务唯一标识符
+    int64 task_id = 1;                 // 任务唯一标识符，inspectionRecordEntity.Id
     string task_name = 2;              // 任务名称
     repeated Station station_list = 3; // 站点信息
     TaskStatus status = 4;             // 任务状态，默认值在代码中处理
@@ -297,9 +298,9 @@ message JoyControlCmd {
 
 // 硬件控制命令
 message HardwareControlCommand {
-    bool robot = 1;       // 机器人（AGV+机械臂）
-    bool camera = 2;      // 相机
-    bool env_sensor = 3;  // 环境传感器
+    bool robot = 1;       // 是否控制机器人（AGV+机械臂）
+    bool camera = 2;      // 是否控制相机
+    bool env_sensor = 3;  // 是否控制环境传感器
 }
 
 // === 服务端下发命令消息 ===
@@ -364,12 +365,12 @@ message OperationResult {
     double duration = 10;              // 操作耗时(秒)
 }
 
-// 硬件状态响应
+// 硬件控制命令响应
 message HardwareStatusResponse {
-    bool robot_enabled = 1;      // 机器人启用状态
-    bool camera_enabled = 2;     // 相机启用状态
-    bool env_sensor_enabled = 3; // 环境传感器启用状态
-    string message = 4;          // 响应消息
+    bool robot_enabled = 1;      // 机器人当前启用状态
+    bool camera_enabled = 2;     // 相机当前启用状态
+    bool env_sensor_enabled = 3; // 环境传感器当前启用状态
+    string message = 4;          // 响应消息（成功/失败原因）
 }
 
 // 客户端响应消息
@@ -383,7 +384,7 @@ message ClientStreamMessage {
         PositionInfo position_info = 6;
         CommandStatusUpdate command_status = 7;
         TaskProgressUpdate task_progress = 8;
-        OperationResult operation_result = 9;
+        OperationResult operation_result = 9; // TODO
         HardwareStatusResponse hardware_status = 10;
     }
 }
