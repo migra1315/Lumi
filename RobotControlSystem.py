@@ -25,9 +25,9 @@ import grpc
 import gRPC.RobotService_pb2 as robot_pb2
 from gRPC import RobotService_pb2_grpc
 from gRPC.StreamManager import ClientUploadStreamManager, ServerCommandStreamManager
-from utils.dataConverter import convert_server_message_to_command_envelope, convert_message_envelope_to_robot_upload_request
+from utils.dataConverter import CommandValidationError, convert_server_message_to_command_envelope, convert_message_envelope_to_robot_upload_request
 
-from task.TaskManager import TaskManager
+from task.TaskManager import TaskManager, CancelRequestPersistenceError
 
 
 from dataModels.MessageModels import BatteryInfo, EnvironmentInfo, MessageEnvelope, MsgType, PositionInfo, SystemStatus, \
@@ -782,10 +782,12 @@ class RobotControlSystem:
         Args:
             response: ServerStreamMessage
         """
-        command_envelope = convert_server_message_to_command_envelope(response)
-        self.logger.debug(f"收到命令: {command_envelope.to_json()}")
-
         try:
+            command_envelope = convert_server_message_to_command_envelope(
+                response,
+                expected_robot_id=self.robot_id,
+            )
+            self.logger.debug(f"收到命令: {command_envelope.to_json()}")
             # 保存接收到的消息到数据库
             msg_id = command_envelope.cmd_id
             msg_time = command_envelope.cmd_time
@@ -823,6 +825,19 @@ class RobotControlSystem:
                 self._handle_hardware_shutdown(command_envelope)
                 return
 
+            # 取消命令即时分流，不进入普通队列，也不产生 QUEUED/RUNNING 反馈。
+            if cmd_type == CmdType.CANCEL_TASK_CMD:
+                cancel_command = self.task_manager.request_cancel_task(
+                    msg_id, command_envelope.data.task_id
+                )
+                self.task_manager.database.mark_message_processed(msg_id)
+                self.logger.info(
+                    f"任务取消命令处理完成: command_id={msg_id}, "
+                    f"task_id={command_envelope.data.task_id}, "
+                    f"status={cancel_command.status.value}"
+                )
+                return
+
             # 统一通过TaskManager处理所有命令
             command_id = self.task_manager.receive_command(command_envelope)
             self.logger.info(f"命令已提交给TaskManager: {command_id}, 类型: {cmd_type.value}")
@@ -830,6 +845,14 @@ class RobotControlSystem:
             # 标记消息为已处理
             self.task_manager.database.mark_message_processed(msg_id)
 
+        except CommandValidationError as e:
+            self.logger.warning(f"拒绝无效服务端命令: command_id={response.command_id}, 原因={e}")
+        except CancelRequestPersistenceError as e:
+            # 不标记 received message 为 processed，等待后台或重连流程重发。
+            self.logger.error(
+                f"取消请求尚未形成可持久化终态，将保留未处理状态: "
+                f"command_id={response.command_id}, 原因={e}"
+            )
         except Exception as e:
             self.logger.error(f"_handle_command 处理命令失败: {e}")
             # 可以在这里发送错误响应
@@ -1191,6 +1214,7 @@ class RobotControlSystem:
                 CmdType.CHARGE_CMD: robot_pb2.CmdType.CHARGE_CMD,
                 CmdType.POSITION_ADJUST_CMD: robot_pb2.CmdType.POSITION_ADJUST_CMD,
                 CmdType.RESPONSE_CMD: robot_pb2.CmdType.RESPONSE_CMD,
+                CmdType.CANCEL_TASK_CMD: robot_pb2.CmdType.CANCEL_TASK_CMD,
             }
 
             # 创建CommandStatusUpdate消息
@@ -1343,6 +1367,7 @@ class RobotControlSystem:
                 TaskStatus.FAILED: robot_pb2.TaskStatus.TASK_STATUS_FAILED,
                 TaskStatus.PARTIAL_COMPLETED: robot_pb2.TaskStatus.TASK_STATUS_COMPLETED,
                 TaskStatus.RETRYING: robot_pb2.TaskStatus.TASK_STATUS_RETRYING,
+                TaskStatus.CANCELLED: robot_pb2.TaskStatus.TASK_STATUS_CANCELLED,
             }
 
             # 映射站点状态
@@ -1352,6 +1377,7 @@ class RobotControlSystem:
                 StationTaskStatus.COMPLETED: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_COMPLETED,
                 StationTaskStatus.FAILED: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_FAILED,
                 StationTaskStatus.RETRYING: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_RETRYING,
+                StationTaskStatus.CANCELLED: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_CANCELLED,
             }
 
             # 创建TaskProgressUpdate消息

@@ -116,6 +116,18 @@ class TaskDatabase:
                 )
             ''')
 
+            # 取消请求只保存机器人端幂等与审计所需的最小信息。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS task_cancel_requests (
+                    cancel_command_id TEXT PRIMARY KEY,
+                    target_task_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP
+                )
+            ''')
+
             # 创建索引
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_cmd_status
@@ -564,6 +576,60 @@ class TaskDatabase:
         except Exception as e:
             self.logger.error(f"保存命令失败: {e}")
             raise
+
+    def begin_task_cancel_request(self, cancel_command_id: str, target_task_id: str) -> bool:
+        """原子登记取消请求；返回 True 表示本次调用创建了请求。"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR IGNORE INTO task_cancel_requests
+                (cancel_command_id, target_task_id, status, created_at)
+                VALUES (?, ?, 'pending', ?)
+            ''', (cancel_command_id, str(target_task_id), self._local_now()))
+            return cursor.rowcount == 1
+
+    def get_task_cancel_request(self, cancel_command_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM task_cancel_requests WHERE cancel_command_id = ?
+            ''', (cancel_command_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def fail_pending_task_cancel_requests(self, message: str) -> List[Dict[str, Any]]:
+        """启动时原子收敛上次进程遗留的 pending 取消请求。"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT cancel_command_id, target_task_id
+                FROM task_cancel_requests WHERE status = 'pending'
+            ''')
+            pending = [dict(row) for row in cursor.fetchall()]
+            cursor.execute('''
+                UPDATE task_cancel_requests
+                SET status = 'failed', message = ?, completed_at = ?
+                WHERE status = 'pending'
+            ''', (message, self._local_now()))
+            return pending
+
+    def complete_task_cancel_request(
+        self,
+        cancel_command_id: str,
+        status: CommandStatus,
+        message: str
+    ) -> bool:
+        """条件提交取消请求终态；仅 pending 可成功提交。"""
+        if status not in (CommandStatus.COMPLETED, CommandStatus.FAILED):
+            raise ValueError("取消请求只允许保存 COMPLETED 或 FAILED 终态")
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE task_cancel_requests
+                SET status = ?, message = ?, completed_at = ?
+                WHERE cancel_command_id = ? AND status = 'pending'
+            ''', (status.value, message, self._local_now(), cancel_command_id))
+            return cursor.rowcount == 1
 
     def update_command_status(
         self,

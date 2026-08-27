@@ -3,7 +3,7 @@ from typing import Any, Dict
 
 import gRPC.RobotService_pb2 as robot_pb2
 from dataModels.CommandModels import (
-    CommandEnvelope, CmdType, TaskCmd
+    CancelTaskCmd, CommandEnvelope, CmdType, TaskCmd
 )
 from dataModels.MessageModels import (
     MessageEnvelope, MsgType, UploadResponse
@@ -15,7 +15,14 @@ from dataModels.TaskModels import TaskStatus, Task, Station, StationTaskStatus, 
 
 # ====================== gRPC -> Python 转换 ======================
 
-def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.ServerStreamMessage) -> CommandEnvelope:
+class CommandValidationError(ValueError):
+    """服务端命令不符合机器人端协议约束。"""
+
+
+def convert_server_message_to_command_envelope(
+    server_cmd_request: robot_pb2.ServerStreamMessage,
+    expected_robot_id: Any = None,
+) -> CommandEnvelope:
     """将gRPC ServerStreamMessage转换为CommandEnvelope
 
     Args:
@@ -36,9 +43,19 @@ def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.Ser
         robot_pb2.CmdType.POSITION_ADJUST_CMD: CmdType.POSITION_ADJUST_CMD,
         robot_pb2.CmdType.HARDWARE_START_CMD: CmdType.HARDWARE_START_CMD,
         robot_pb2.CmdType.HARDWARE_SHUTDOWN_CMD: CmdType.HARDWARE_SHUTDOWN_CMD,
+        robot_pb2.CmdType.CANCEL_TASK_CMD: CmdType.CANCEL_TASK_CMD,
     }
-    
-    cmd_type = cmd_type_map.get(server_cmd_request.command_type, CmdType.RESPONSE_CMD)
+
+    if server_cmd_request.command_type not in cmd_type_map:
+        raise CommandValidationError(
+            f"不支持的命令类型: {server_cmd_request.command_type}"
+        )
+    cmd_type = cmd_type_map[server_cmd_request.command_type]
+
+    if expected_robot_id is not None and str(server_cmd_request.robot_id) != str(expected_robot_id):
+        raise CommandValidationError(
+            f"机器人ID不匹配: expected={expected_robot_id}, actual={server_cmd_request.robot_id}"
+        )
     
     # 根据命令类型提取数据
     data_json = {}
@@ -49,7 +66,20 @@ def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.Ser
         robot_pb2.RobotMode.ESTOP: RobotMode.ESTOP,
         robot_pb2.RobotMode.CHARGE: RobotMode.CHARGE,
     }
-    if server_cmd_request.HasField('robot_mode_command'):
+    if cmd_type == CmdType.CANCEL_TASK_CMD:
+        oneof_field = server_cmd_request.WhichOneof('data_json')
+        if oneof_field != 'task_cmd':
+            raise CommandValidationError(
+                f"取消任务命令必须使用 task_cmd，实际字段: {oneof_field or '未设置'}"
+            )
+        task_id = int(server_cmd_request.task_cmd.task_id)
+        if task_id <= 0:
+            raise CommandValidationError("取消任务命令的 task_id 必须大于 0")
+
+        parsed_data = CancelTaskCmd(task_id=task_id)
+        data_json = {"cancel_task_cmd": parsed_data.to_dict()}
+
+    elif server_cmd_request.HasField('robot_mode_command'):
         robot_mode_cmd = server_cmd_request.robot_mode_command
         # 转换RobotMode枚举
 
@@ -72,7 +102,7 @@ def convert_server_message_to_command_envelope(server_cmd_request: robot_pb2.Ser
             robot_pb2.StationTaskStatus.STATION_TASK_STATUS_RUNNING: StationTaskStatus.RUNNING,
             robot_pb2.StationTaskStatus.STATION_TASK_STATUS_COMPLETED: StationTaskStatus.COMPLETED,
             robot_pb2.StationTaskStatus.STATION_TASK_STATUS_FAILED: StationTaskStatus.FAILED,
-            robot_pb2.StationTaskStatus.STATION_TASK_STATUS_CANCELLED: StationTaskStatus.SKIPPED,
+            robot_pb2.StationTaskStatus.STATION_TASK_STATUS_CANCELLED: StationTaskStatus.CANCELLED,
             robot_pb2.StationTaskStatus.STATION_TASK_STATUS_RETRYING: StationTaskStatus.RETRYING,
             robot_pb2.StationTaskStatus.STATION_TASK_STATUS_TO_RETRY: StationTaskStatus.RETRYING,
         }
@@ -400,6 +430,7 @@ def _convert_task_to_proto(task_info: Dict[str, Any]) -> robot_pb2.TaskInfo:
         'completed': robot_pb2.TaskStatus.TASK_STATUS_COMPLETED,
         'partial_completed': robot_pb2.TaskStatus.TASK_STATUS_COMPLETED,  # 映射到已完成
         'failed': robot_pb2.TaskStatus.TASK_STATUS_FAILED,
+        'cancelled': robot_pb2.TaskStatus.TASK_STATUS_CANCELLED,
         'skipped': robot_pb2.TaskStatus.TASK_STATUS_CANCELLED,  # 映射到已取消
         'retrying': robot_pb2.TaskStatus.TASK_STATUS_RETRYING,
     }
@@ -610,6 +641,7 @@ def convert_command_envelope_to_client_message(cmd_envelope: CommandEnvelope) ->
         CmdType.SET_MARKER_CMD: robot_pb2.CmdType.SET_MARKER_CMD,
         CmdType.CHARGE_CMD: robot_pb2.CmdType.CHARGE_CMD,
         CmdType.POSITION_ADJUST_CMD: robot_pb2.CmdType.POSITION_ADJUST_CMD,
+        CmdType.CANCEL_TASK_CMD: robot_pb2.CmdType.CANCEL_TASK_CMD,
     }
     
     grpc_cmd_type = cmd_type_map.get(cmd_envelope.cmd_type, robot_pb2.CmdType.RESPONSE_CMD)
@@ -726,6 +758,7 @@ def convert_station_to_proto_station(station: Station) -> robot_pb2.Station:
         StationTaskStatus.RUNNING: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_RUNNING,
         StationTaskStatus.COMPLETED: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_COMPLETED,
         StationTaskStatus.FAILED: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_FAILED,
+        StationTaskStatus.CANCELLED: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_CANCELLED,
         StationTaskStatus.SKIPPED: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_CANCELLED,
         StationTaskStatus.RETRYING: robot_pb2.StationTaskStatus.STATION_TASK_STATUS_RETRYING,
     }

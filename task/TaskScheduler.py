@@ -31,6 +31,10 @@ class TaskScheduler:
         self.scheduler_thread: Optional[threading.Thread] = None
         self.executor = ThreadPoolExecutor(max_workers=1)  # 单任务执行
         self.logger = get_logger(__name__)
+        self._task_registry_lock = threading.RLock()
+        self._active_tasks: Dict[int, Dict[str, Any]] = {}
+        # 仅保留当前进程内、最近一个已取消任务代际，供不同取消命令幂等查询。
+        self._cancelled_task_generations: Dict[int, Dict[str, Any]] = {}
         # self.voice_player = VoicePlayer()
 
         # 回调函数注册（每个事件只有一个消费者，使用单个 callable 而非 list）
@@ -67,12 +71,29 @@ class TaskScheduler:
     
     def add_command(self, command: UnifiedCommand):
         """添加命令到队列（新接口，支持所有命令类型）"""
-        # 更新命令状态为已加入队列
-        command.status = CommandStatus.QUEUED
+        with self._task_registry_lock:
+            if command.cmd_type == CmdType.TASK_CMD:
+                task = command.data
+                if not isinstance(task, Task):
+                    raise ValueError("TASK_CMD 的数据必须是 Task")
+                if task.task_id in self._active_tasks:
+                    raise ValueError(f"活动 task_id 重复: {task.task_id}")
+                # 必须先持久化，再向注册表和队列发布，避免保存失败的幽灵任务。
+                command.status = CommandStatus.QUEUED
+                self.database.save_command(command)
+                # 新任务代际开始，旧代际的取消墓碑不再适用。
+                self._cancelled_task_generations.pop(task.task_id, None)
+                self._active_tasks[task.task_id] = {
+                    "command": command,
+                    "cancel_event": threading.Event(),
+                    "state": "queued",
+                }
 
-        self.command_queue.put(command)
-        # 保存命令到数据库
-        self.database.save_command(command)
+                self.command_queue.put(command)
+            else:
+                command.status = CommandStatus.QUEUED
+                self.database.save_command(command)
+                self.command_queue.put(command)
 
         # 触发命令状态变化回调（QUEUED）
         self._trigger_callback("on_command_status_change", command)
@@ -112,7 +133,21 @@ class TaskScheduler:
 
     def _execute_command(self, command: UnifiedCommand):
         """执行命令（统一入口）"""
-        self.current_command = command
+        with self._task_registry_lock:
+            if command.cmd_type == CmdType.TASK_CMD:
+                task = command.data
+                entry = self._active_tasks.get(task.task_id)
+                if (entry is None or entry["command"] is not command or
+                        entry["cancel_event"].is_set() or
+                        command.status == CommandStatus.CANCELLED):
+                    self.logger.info(f"跳过已取消的等待任务: task_id={task.task_id}")
+                    if entry is not None and entry["command"] is command:
+                        self._active_tasks.pop(task.task_id, None)
+                    self.command_queue.task_done()
+                    return
+                entry["state"] = "running"
+
+            self.current_command = command
 
         # 更新命令状态为运行中
         command.status = CommandStatus.RUNNING
@@ -161,6 +196,71 @@ class TaskScheduler:
             # 触发命令失败回调
             self._trigger_callback("on_command_failed", command)
 
+    def cancel_waiting_task(self, task_id: int) -> Dict[str, Any]:
+        """取消尚未开始执行的任务；本阶段不支持取消运行中任务。"""
+        with self._task_registry_lock:
+            entry = self._active_tasks.get(task_id)
+            if entry is None:
+                cancelled = self._cancelled_task_generations.get(task_id)
+                if cancelled is not None:
+                    return {
+                        "success": cancelled["success"],
+                        "message": cancelled["message"],
+                        "target_command_id": cancelled["target_command_id"],
+                    }
+                return {"success": False, "message": f"任务不存在或已结束: {task_id}"}
+
+            command = entry["command"]
+            if entry["state"] == "cancelled" or command.status == CommandStatus.CANCELLED:
+                return {"success": True, "message": f"任务已取消: {task_id}"}
+            if entry["state"] == "running" or command.status == CommandStatus.RUNNING:
+                return {"success": False, "message": "当前阶段不支持取消正在运行的任务"}
+            if command.status in (CommandStatus.COMPLETED, CommandStatus.FAILED):
+                return {"success": False, "message": f"任务已进入终态: {command.status.value}"}
+
+            entry["cancel_event"].set()
+            entry["state"] = "cancelled"
+            command.status = CommandStatus.CANCELLED
+            command.completed_at = datetime.now()
+            command.error_message = "任务在等待队列中被取消"
+
+            task = command.data
+            task.status = TaskStatus.CANCELLED
+            for station in task.station_list:
+                if station.status not in (StationTaskStatus.COMPLETED, StationTaskStatus.FAILED):
+                    station.status = StationTaskStatus.CANCELLED
+
+            # 内存终态与代际墓碑在同一临界区先提交。原命令终态落盘失败时，
+            # 任务仍不可执行，但该代际后续取消必须稳定返回相同失败结果。
+            persistence_failure = f"任务已取消，但原任务命令终态落盘失败: {task_id}"
+            tombstone = {
+                "success": False,
+                "message": persistence_failure,
+                "target_command_id": command.command_id,
+            }
+            self._cancelled_task_generations[task_id] = tombstone
+            try:
+                self.database.update_command_status(
+                    command.command_id,
+                    CommandStatus.CANCELLED,
+                    command.error_message,
+                )
+            except Exception:
+                self.logger.exception(persistence_failure)
+                return dict(tombstone)
+
+            tombstone["success"] = True
+            tombstone["message"] = f"等待任务取消成功: {task_id}"
+            try:
+                self.database.log_task_action(
+                    str(task_id), "", "cancel_waiting_task", "cancelled",
+                    f"command_id={command.command_id}",
+                )
+            except Exception:
+                # 审计是非关键附属写，不反转已经持久化的取消终态。
+                self.logger.exception(f"等待任务取消审计写入失败: {task_id}")
+            return dict(tombstone)
+
     def _command_execution_done(self, future, command: UnifiedCommand):
         """命令执行完成回调"""
         try:
@@ -185,6 +285,7 @@ class TaskScheduler:
 
                 self._trigger_callback("on_command_complete", command)
                 self.logger.info(f"命令 {command.command_id} 执行完成")
+                self._release_task_registration(command)
             else:
                 # 检查是否需要重试
                 if command.retry_count < command.max_retries:
@@ -217,6 +318,7 @@ class TaskScheduler:
 
                     self._trigger_callback("on_command_failed", command)
                     self.logger.error(f"命令 {command.command_id} 执行失败")
+                    self._release_task_registration(command)
 
         except Exception as e:
             self.logger.error(f"命令执行回调异常: {e}")
@@ -232,6 +334,15 @@ class TaskScheduler:
             # 保存元数据（如果有）
             if command.metadata:
                 self.database.update_command_metadata(command.command_id, command.metadata)
+            self._release_task_registration(command)
+
+    def _release_task_registration(self, command: UnifiedCommand):
+        if command.cmd_type != CmdType.TASK_CMD or not isinstance(command.data, Task):
+            return
+        with self._task_registry_lock:
+            entry = self._active_tasks.get(command.data.task_id)
+            if entry is not None and entry["command"] is command:
+                self._active_tasks.pop(command.data.task_id, None)
 
     # ==================== 命令类型的执行方法 ====================
    

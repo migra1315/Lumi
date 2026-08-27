@@ -90,6 +90,7 @@ CMD_TYPE_TO_CATEGORY = {
     CmdType.POSITION_ADJUST_CMD: CommandCategory.CONFIGURATION,
     CmdType.HARDWARE_START_CMD: CommandCategory.CONTROL,
     CmdType.HARDWARE_SHUTDOWN_CMD: CommandCategory.CONTROL,
+    CmdType.CANCEL_TASK_CMD: CommandCategory.CONTROL,
 }
 
 
@@ -103,6 +104,7 @@ CMD_TYPE_DEFAULT_PRIORITY = {
     CmdType.POSITION_ADJUST_CMD: 6,         # 位置调整 - 普通优先级
     CmdType.HARDWARE_START_CMD: 2,          # 硬件启动 - 高优先级
     CmdType.HARDWARE_SHUTDOWN_CMD: 2,       # 硬件关闭 - 高优先级
+    CmdType.CANCEL_TASK_CMD: 0,             # 即时分流，不进入普通优先级队列
 }
 
 

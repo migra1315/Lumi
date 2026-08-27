@@ -11,6 +11,7 @@ class StationTaskStatus(Enum):
     FAILED = "failed"        # 执行失败
     SKIPPED = "skipped"      # 已跳过
     RETRYING = "retrying"    # 重试中
+    CANCELLED = "cancelled"  # 已取消
 
 
 class StationExecutionPhase(Enum):
@@ -32,6 +33,7 @@ class TaskStatus(Enum):
     FAILED = "failed"                  # 执行失败（所有站点失败）
     SKIPPED = "skipped"                # 已跳过
     RETRYING = "retrying"              # 重试中
+    CANCELLED = "cancelled"            # 已取消
 
 
 class OperationMode(Enum):

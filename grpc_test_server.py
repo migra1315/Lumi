@@ -51,6 +51,7 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         logger.info("  5 - 发送位置校正控制命令 (POSITION_ADJUST_CMD)")
         logger.info("  7 - 发送硬件启动命令 (HARDWARE_START_CMD)")
         logger.info("  8 - 发送硬件关闭命令 (HARDWARE_SHUTDOWN_CMD)")
+        logger.info("  9 - 发送任务取消命令 (CANCEL_TASK_CMD)")
         logger.info("  a - 切换自动发送模式 (当前: 关闭)")
         logger.info("  q - 退出服务器")
     
@@ -332,6 +333,21 @@ class RobotServiceServicer(robot_service_pb2_grpc.RobotServiceServicer):
         request.hardware_control_cmd.CopyFrom(hardware_control_cmd)
 
         logger.info(f"【手动触发】创建硬件启动命令: {self.command_counter}, robot={robot}, camera={camera}, env_sensor={env_sensor}")
+        return request
+
+    def create_cancel_task_command(self, task_id: int):
+        """创建只携带目标 task_id 的任务取消命令。"""
+        self.command_counter += 1
+        request = robot_service_pb2.ServerStreamMessage(
+            command_id=self.command_counter,
+            command_time=int(time.time() * 1000),
+            command_type=robot_service_pb2.CmdType.CANCEL_TASK_CMD,
+            robot_id=123456,
+        )
+        request.task_cmd.task_id = task_id
+        logger.info(
+            f"【手动触发】创建任务取消命令: {self.command_counter}, task_id={task_id}"
+        )
         return request
 
     def create_hardware_shutdown_command(self, robot: bool = True, camera: bool = True, env_sensor: bool = True):
@@ -997,6 +1013,17 @@ def keyboard_input_handler(servicer, stop_event):
                 logger.info("【键盘输入】触发: 硬件关闭命令 (HARDWARE_SHUTDOWN_CMD)")
                 cmd = servicer.create_hardware_shutdown_command(robot=True, camera=True, env_sensor=True)
                 servicer.manual_command_queue.put(cmd)
+
+            elif key == '9':
+                try:
+                    task_id = int(input("请输入需要取消的任务ID: ").strip())
+                except ValueError:
+                    logger.warning("【键盘输入】任务ID必须是整数")
+                    continue
+                logger.info(f"【键盘输入】触发: 任务取消命令, task_id={task_id}")
+                servicer.manual_command_queue.put(
+                    servicer.create_cancel_task_command(task_id)
+                )
 
             elif key == 'a':
                 servicer.auto_send_enabled = not servicer.auto_send_enabled

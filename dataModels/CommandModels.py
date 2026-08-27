@@ -18,6 +18,7 @@ class CmdType(Enum):
     POSITION_ADJUST_CMD = "position_adjust_cmd"  # 位置调整命令
     HARDWARE_START_CMD = "hardware_start_cmd"  # 硬件启动命令
     HARDWARE_SHUTDOWN_CMD = "hardware_shutdown_cmd"  # 硬件关闭命令
+    CANCEL_TASK_CMD = "cancel_task_cmd"  # 任务取消命令（即时分流，不进入普通队列）
 
 
 @dataclass
@@ -59,6 +60,15 @@ class TaskCmd:
             "generate_time": self.generate_time.isoformat(),
             "station_config_tasks": [station.to_dict() for station in self.station_config_list]
         }
+
+
+@dataclass(frozen=True)
+class CancelTaskCmd:
+    """任务取消命令，只描述被取消的业务任务。"""
+    task_id: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"task_id": self.task_id}
 
 
 @dataclass

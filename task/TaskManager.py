@@ -2,12 +2,16 @@ import threading
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from dataModels.CommandModels import CmdType, CommandEnvelope
+from dataModels.CommandModels import CmdType, CommandEnvelope, CancelTaskCmd
 from dataModels.TaskModels import Task, Station, RobotMode, StationTaskStatus
 from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus, CommandCategory, create_unified_command
 from task.TaskDatabase import TaskDatabase
 from task.TaskScheduler import TaskScheduler
 from utils.logger_config import get_logger
+
+
+class CancelRequestPersistenceError(RuntimeError):
+    """取消请求未能持久化终态；接收消息必须保持未处理以便重试。"""
 
 
 class TaskManager:
@@ -43,12 +47,24 @@ class TaskManager:
             "env_sensor": False
         }
         self._hardware_lock = threading.Lock()
+        self._cancel_request_lock = threading.Lock()
+        self._cancel_requests_inflight: Dict[str, threading.Event] = {}
+        self._cancel_requests_seen = set()
 
         # 创建机器人控制器（不自动初始化）
         self._create_robot_controller()
 
         # 初始化数据库和调度器
         self.database = TaskDatabase()
+        recovery_message = "机器人进程重启，取消请求结果未知，按失败收敛"
+        for pending in self.database.fail_pending_task_cancel_requests(recovery_message):
+            self.database.update_command_status(
+                pending["cancel_command_id"], CommandStatus.FAILED, recovery_message
+            )
+            self.database.log_task_action(
+                pending["target_task_id"], "", "recover_pending_cancel", "failed",
+                f"cancel_command_id={pending['cancel_command_id']}; {recovery_message}",
+            )
 
         # 启动数据库清理线程
         database_config = self.config.get('database_config', {})
@@ -460,6 +476,9 @@ class TaskManager:
 
             self.logger.info(f"TaskManager接收命令: {cmd_id}, 类型: {cmd_type.value}")
 
+            if cmd_type == CmdType.CANCEL_TASK_CMD:
+                raise ValueError("取消任务必须通过 request_cancel_task 即时处理")
+
             # 根据命令类型创建UnifiedCommand
             if cmd_type == CmdType.TASK_CMD:
                 # dataConverter 已在解析 proto 时构建好 Task 对象，直接取用
@@ -504,6 +523,201 @@ class TaskManager:
         except Exception as e:
             self.logger.error(f"接收命令失败: {e}")
             raise
+
+    def request_cancel_task(self, cancel_command_id: str, task_id: int) -> UnifiedCommand:
+        """即时处理等待任务取消，并只触发一次取消请求的最终状态回调。"""
+        # __new__ 构造的轻量测试实例也使用同一套并发语义。
+        if not hasattr(self, "_cancel_request_lock"):
+            self._cancel_request_lock = threading.Lock()
+            self._cancel_requests_inflight = {}
+            self._cancel_requests_seen = set()
+
+        wait_event = None
+        recovered_pending = False
+        with self._cancel_request_lock:
+            created = self.database.begin_task_cancel_request(cancel_command_id, str(task_id))
+            if created:
+                owner_event = threading.Event()
+                self._cancel_requests_inflight[cancel_command_id] = owner_event
+                self._cancel_requests_seen.add(cancel_command_id)
+            else:
+                saved = self.database.get_task_cancel_request(cancel_command_id)
+                if saved and saved["target_task_id"] != str(task_id):
+                    conflict = self._make_cancel_result_command(
+                        cancel_command_id, task_id, CommandStatus.FAILED,
+                        "同一取消 command_id 不能指向不同 task_id",
+                        {"idempotency_conflict": True},
+                    )
+                    self.database.log_task_action(
+                        str(task_id), "", "cancel_request_conflict", "failed",
+                        f"cancel_command_id={cancel_command_id}; original_task_id={saved['target_task_id']}",
+                    )
+                    return conflict
+
+                wait_event = self._cancel_requests_inflight.get(cancel_command_id)
+                if wait_event is None and saved and saved["status"] == "pending":
+                    recovered_pending = True
+
+        if wait_event is not None:
+            wait_event.wait()
+            saved = self.database.get_task_cancel_request(cancel_command_id)
+            if saved and saved["status"] == "pending":
+                # owner 未能提交终态；当前等待者接管遗留请求并按失败收敛。
+                return self.request_cancel_task(cancel_command_id, task_id)
+            replay = self._cancel_command_from_saved(saved, task_id)
+            with self._cancel_request_lock:
+                should_emit = cancel_command_id not in self._cancel_requests_seen
+                self._cancel_requests_seen.add(cancel_command_id)
+            if should_emit:
+                self._trigger_system_callback(
+                    "on_command_status_change", command=replay
+                )
+            return replay
+
+        if not created:
+            saved = self.database.get_task_cancel_request(cancel_command_id)
+            if recovered_pending:
+                message = "机器人进程中断，取消请求结果未知，按失败收敛"
+                try:
+                    committed = self.database.complete_task_cancel_request(
+                        cancel_command_id, CommandStatus.FAILED, message
+                    )
+                except Exception as exc:
+                    raise CancelRequestPersistenceError(
+                        f"取消请求终态提交失败: {cancel_command_id}"
+                    ) from exc
+                saved = self.database.get_task_cancel_request(cancel_command_id)
+                if not committed and saved and saved["status"] == "pending":
+                    raise CancelRequestPersistenceError(
+                        f"取消请求仍处于 pending: {cancel_command_id}"
+                    )
+                recovered = self._cancel_command_from_saved(saved, task_id)
+                if committed:
+                    self.database.update_command_status(
+                        cancel_command_id, CommandStatus.FAILED, message
+                    )
+                    self.database.log_task_action(
+                        str(task_id), "", "recover_pending_cancel", "failed", message
+                    )
+                    self._trigger_system_callback(
+                        "on_command_status_change", command=recovered
+                    )
+                    with self._cancel_request_lock:
+                        self._cancel_requests_seen.add(cancel_command_id)
+                return recovered
+            replay = self._cancel_command_from_saved(saved, task_id)
+            with self._cancel_request_lock:
+                should_emit = cancel_command_id not in self._cancel_requests_seen
+                self._cancel_requests_seen.add(cancel_command_id)
+            if should_emit:
+                self._trigger_system_callback(
+                    "on_command_status_change", command=replay
+                )
+            return replay
+
+        cancel_command = create_unified_command(
+            command_id=cancel_command_id,
+            cmd_type=CmdType.CANCEL_TASK_CMD,
+            data=CancelTaskCmd(task_id),
+            metadata={"target_task_id": task_id, "source": "request_cancel_task"},
+        )
+        try:
+            self.database.save_command(cancel_command)
+            result = self.scheduler.cancel_waiting_task(task_id)
+            cancel_command.status = (
+                CommandStatus.COMPLETED if result["success"] else CommandStatus.FAILED
+            )
+            cancel_command.error_message = result["message"]
+        except Exception as exc:
+            cancel_command.status = CommandStatus.FAILED
+            cancel_command.error_message = f"取消任务处理异常: {exc}"
+            self.logger.exception(cancel_command.error_message)
+
+        cancel_command.completed_at = datetime.now()
+        committed = False
+        finalize_error = None
+        try:
+            try:
+                self.database.update_command_status(
+                    cancel_command_id, cancel_command.status, cancel_command.error_message
+                )
+            except Exception as exc:
+                cancel_command.status = CommandStatus.FAILED
+                cancel_command.error_message = f"取消请求命令落盘失败: {exc}"
+                self.logger.exception(cancel_command.error_message)
+
+            try:
+                committed = self.database.complete_task_cancel_request(
+                    cancel_command_id, cancel_command.status, cancel_command.error_message
+                )
+            except Exception:
+                self.logger.exception("取消请求终态提交失败")
+                finalize_error = CancelRequestPersistenceError(
+                    f"取消请求终态提交失败: {cancel_command_id}"
+                )
+            if committed:
+                try:
+                    self.database.log_task_action(
+                        str(task_id), "", "cancel_request", cancel_command.status.value,
+                        f"cancel_command_id={cancel_command_id}; {cancel_command.error_message}",
+                    )
+                except Exception:
+                    self.logger.exception("取消请求审计日志写入失败")
+                self._trigger_system_callback(
+                    "on_command_status_change", command=cancel_command
+                )
+        finally:
+            with self._cancel_request_lock:
+                event = self._cancel_requests_inflight.pop(cancel_command_id, None)
+                if event is not None:
+                    event.set()
+        if finalize_error is not None:
+            raise finalize_error
+        if not committed:
+            saved = self.database.get_task_cancel_request(cancel_command_id)
+            if saved and saved["status"] == "pending":
+                raise CancelRequestPersistenceError(
+                    f"取消请求仍处于 pending: {cancel_command_id}"
+                )
+            return self._cancel_command_from_saved(saved, task_id)
+        return cancel_command
+
+    @staticmethod
+    def _make_cancel_result_command(
+        cancel_command_id: str,
+        task_id: int,
+        status: CommandStatus,
+        message: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> UnifiedCommand:
+        return UnifiedCommand(
+            command_id=cancel_command_id,
+            cmd_type=CmdType.CANCEL_TASK_CMD,
+            category=CommandCategory.CONTROL,
+            priority=0,
+            data=CancelTaskCmd(task_id),
+            status=status,
+            error_message=message,
+            metadata=metadata or {},
+        )
+
+    def _cancel_command_from_saved(
+        self, saved: Optional[Dict[str, Any]], fallback_task_id: int
+    ) -> UnifiedCommand:
+        if not saved:
+            return self._make_cancel_result_command(
+                "", fallback_task_id, CommandStatus.FAILED, "取消请求结果不可用"
+            )
+        status = (
+            CommandStatus.COMPLETED
+            if saved["status"] == CommandStatus.COMPLETED.value
+            else CommandStatus.FAILED
+        )
+        return self._make_cancel_result_command(
+            saved["cancel_command_id"], int(saved["target_task_id"]), status,
+            saved.get("message") or "取消请求尚未形成终态",
+            {"idempotent_replay": True},
+        )
 
 
 
