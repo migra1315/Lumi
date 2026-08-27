@@ -827,14 +827,12 @@ class RobotControlSystem:
 
             # 取消命令即时分流，不进入普通队列，也不产生 QUEUED/RUNNING 反馈。
             if cmd_type == CmdType.CANCEL_TASK_CMD:
-                cancel_command = self.task_manager.request_cancel_task(
+                self.task_manager.request_cancel_task_async(
                     msg_id, command_envelope.data.task_id
                 )
-                self.task_manager.database.mark_message_processed(msg_id)
                 self.logger.info(
-                    f"任务取消命令处理完成: command_id={msg_id}, "
-                    f"task_id={command_envelope.data.task_id}, "
-                    f"status={cancel_command.status.value}"
+                    f"任务取消命令已提交: command_id={msg_id}, "
+                    f"task_id={command_envelope.data.task_id}"
                 )
                 return
 

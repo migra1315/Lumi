@@ -1,4 +1,5 @@
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -47,9 +48,21 @@ class TaskManager:
             "env_sensor": False
         }
         self._hardware_lock = threading.Lock()
-        self._cancel_request_lock = threading.Lock()
+        self._cancel_request_lock = threading.RLock()
         self._cancel_requests_inflight: Dict[str, threading.Event] = {}
         self._cancel_requests_seen = set()
+        cancel_config = self.config.get("task_cancel", {})
+        self._cancel_wait_timeout = float(cancel_config.get("wait_timeout_seconds", 30))
+        coordinator_workers = int(cancel_config.get("coordinator_workers", 4))
+        coordinator_capacity = int(cancel_config.get("coordinator_capacity", 32))
+        self._cancel_coordinator = ThreadPoolExecutor(
+            max_workers=coordinator_workers,
+            thread_name_prefix="cancel-task",
+        )
+        self._cancel_coordinator_slots = threading.BoundedSemaphore(
+            max(coordinator_workers, coordinator_capacity)
+        )
+        self._async_cancel_futures = {}
 
         # 创建机器人控制器（不自动初始化）
         self._create_robot_controller()
@@ -76,7 +89,13 @@ class TaskManager:
                 vacuum_interval_hours=database_config.get('vacuum_interval_hours', 24)
             )
 
-        self.scheduler = TaskScheduler(self.robot_controller, self.database)
+        self.scheduler = TaskScheduler(
+            self.robot_controller,
+            self.database,
+            allow_running_task_cancel=bool(
+                cancel_config.get("allow_running_task_cancel", False)
+            ),
+        )
 
         # 启动调度器
         self.scheduler.start()
@@ -525,10 +544,10 @@ class TaskManager:
             raise
 
     def request_cancel_task(self, cancel_command_id: str, task_id: int) -> UnifiedCommand:
-        """即时处理等待任务取消，并只触发一次取消请求的最终状态回调。"""
+        """协调任务取消，并只触发一次取消请求的最终状态回调。"""
         # __new__ 构造的轻量测试实例也使用同一套并发语义。
         if not hasattr(self, "_cancel_request_lock"):
-            self._cancel_request_lock = threading.Lock()
+            self._cancel_request_lock = threading.RLock()
             self._cancel_requests_inflight = {}
             self._cancel_requests_seen = set()
 
@@ -623,7 +642,16 @@ class TaskManager:
         )
         try:
             self.database.save_command(cancel_command)
-            result = self.scheduler.cancel_waiting_task(task_id)
+            result = self.scheduler.cancel_task(task_id)
+            if result.get("pending"):
+                # 该等待只发生在独立取消协调线程，不占用业务 executor。
+                wait_timeout = getattr(self, "_cancel_wait_timeout", 30.0)
+                completed = result["event"].wait(wait_timeout)
+                result = result["entry"].get("cancel_result") if completed else None
+                result = result or {
+                    "success": False,
+                    "message": f"等待运行任务取消超时: {task_id}",
+                }
             cancel_command.status = (
                 CommandStatus.COMPLETED if result["success"] else CommandStatus.FAILED
             )
@@ -681,6 +709,135 @@ class TaskManager:
                 )
             return self._cancel_command_from_saved(saved, task_id)
         return cancel_command
+
+    def request_cancel_task_async(self, cancel_command_id: str, task_id: int):
+        """立即返回；相同 command_id 只占用一个有界协调 worker。"""
+        if not hasattr(self, "_cancel_request_lock"):
+            self._cancel_request_lock = threading.RLock()
+            self._cancel_requests_inflight = {}
+            self._cancel_requests_seen = set()
+        if not hasattr(self, "_cancel_coordinator"):
+            self._cancel_wait_timeout = 30.0
+            self._cancel_coordinator = ThreadPoolExecutor(
+                max_workers=4, thread_name_prefix="cancel-task"
+            )
+            self._cancel_coordinator_slots = threading.BoundedSemaphore(32)
+            self._async_cancel_futures = {}
+
+        def coordinate():
+            try:
+                self.request_cancel_task(cancel_command_id, task_id)
+                self.database.mark_message_processed(cancel_command_id)
+            except CancelRequestPersistenceError:
+                self.logger.exception(
+                    f"取消请求终态未落盘: {cancel_command_id}"
+                )
+            except Exception:
+                self.logger.exception(f"异步取消处理异常: {cancel_command_id}")
+        with self._cancel_request_lock:
+            existing = self._async_cancel_futures.get(cancel_command_id)
+            if existing is not None:
+                return existing
+            has_slot = self._cancel_coordinator_slots.acquire(blocking=False)
+            if has_slot:
+                try:
+                    future = self._cancel_coordinator.submit(coordinate)
+                except Exception:
+                    self._cancel_coordinator_slots.release()
+                    raise
+                self._async_cancel_futures[cancel_command_id] = future
+
+        if not has_slot:
+            # SQLite 和回调必须在 _cancel_request_lock 之外执行。
+            self.logger.error(f"取消协调队列已满: {cancel_command_id}")
+            rejected = Future()
+            try:
+                result = self._settle_cancel_overload(cancel_command_id, task_id)
+                rejected.set_result(result)
+            except Exception as error:
+                rejected.set_exception(error)
+            return rejected
+
+        def release(completed):
+            with self._cancel_request_lock:
+                if self._async_cancel_futures.get(cancel_command_id) is completed:
+                    self._async_cancel_futures.pop(cancel_command_id, None)
+                self._cancel_coordinator_slots.release()
+        future.add_done_callback(release)
+        return future
+
+    def _settle_cancel_overload(self, cancel_command_id: str, task_id: int):
+        """容量拒绝也按正常取消请求完成幂等终态收敛。"""
+        message = "取消协调队列已满，请稍后重试"
+        created = self.database.begin_task_cancel_request(
+            cancel_command_id, str(task_id)
+        )
+        saved = self.database.get_task_cancel_request(cancel_command_id)
+        if not saved:
+            raise CancelRequestPersistenceError(
+                f"容量拒绝请求登记不可用: {cancel_command_id}"
+            )
+        if saved["target_task_id"] != str(task_id):
+            # 与正常取消入口一致：不改写原请求，不复用原结果。
+            conflict = self._make_cancel_result_command(
+                cancel_command_id, task_id, CommandStatus.FAILED,
+                "同一取消 command_id 不能指向不同 task_id",
+                {"idempotency_conflict": True},
+            )
+            try:
+                self.database.log_task_action(
+                    str(task_id), "", "cancel_request_conflict", "failed",
+                    f"cancel_command_id={cancel_command_id}; "
+                    f"original_task_id={saved['target_task_id']}",
+                )
+                # server_command_received 记录的是本次冲突载荷，
+                # 它必须独立收敛，不改写原 cancel request。
+                self.database.mark_message_processed(cancel_command_id)
+            except Exception as error:
+                raise CancelRequestPersistenceError(
+                    f"取消请求冲突收敛失败: {cancel_command_id}"
+                ) from error
+            return conflict
+        result = self._make_cancel_result_command(
+            cancel_command_id, task_id, CommandStatus.FAILED, message,
+            {"coordinator_overloaded": True},
+        )
+        result.completed_at = datetime.now()
+        try:
+            if saved["status"] == "pending":
+                committed = self.database.complete_task_cancel_request(
+                    cancel_command_id, CommandStatus.FAILED, message
+                )
+                if not committed:
+                    saved = self.database.get_task_cancel_request(cancel_command_id)
+                    if not saved or saved["status"] == "pending":
+                        raise CancelRequestPersistenceError(
+                            f"容量拒绝终态提交失败: {cancel_command_id}"
+                        )
+            # 即使请求表已在前次尝试中终态，也要补齐命令表。
+            self.database.save_command(result)
+            self.database.update_command_status(
+                cancel_command_id, CommandStatus.FAILED, message
+            )
+        except CancelRequestPersistenceError:
+            raise
+        except Exception as error:
+            raise CancelRequestPersistenceError(
+                f"容量拒绝关键落盘失败: {cancel_command_id}"
+            ) from error
+
+        with self._cancel_request_lock:
+            should_emit = cancel_command_id not in self._cancel_requests_seen
+            self._cancel_requests_seen.add(cancel_command_id)
+        if should_emit:
+            self._trigger_system_callback("on_command_status_change", command=result)
+        try:
+            self.database.mark_message_processed(cancel_command_id)
+        except Exception as error:
+            raise CancelRequestPersistenceError(
+                f"容量拒绝 processed 标记失败: {cancel_command_id}"
+            ) from error
+        return result
 
     @staticmethod
     def _make_cancel_result_command(
@@ -1048,6 +1205,8 @@ class TaskManager:
     def shutdown(self):
         """关闭管理器"""
         self.scheduler.stop()
+        if hasattr(self, "_cancel_coordinator"):
+            self._cancel_coordinator.shutdown(wait=False, cancel_futures=True)
 
         # 停止数据库清理线程
         try:

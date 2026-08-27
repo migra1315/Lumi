@@ -21,6 +21,8 @@ class MockRobotController(RobotControllerBase):
         self.success_rate = self.config.get('success_rate', 0.95)
         self.base_latency = self.config.get('latency', 0.1)
         self.max_error_rate = self.config.get('max_error_rate', 0.1)
+        self.action_history = []
+        self._action_gates = {}
         
         # Mock数据
         self._marker_positions = {
@@ -125,6 +127,12 @@ class MockRobotController(RobotControllerBase):
             self.logger.debug(f"错误场景 {scenario} 已{status_str}")
         else:
             self.logger.warning(f"未知错误场景: {scenario}")
+
+    def set_action_gate(self, operation_name: str, release_event: threading.Event):
+        """测试钩子：让指定 Mock 动作阻塞到 release_event 被设置。"""
+        started_event = threading.Event()
+        self._action_gates[operation_name] = (started_event, release_event)
+        return started_event
     
     def capture_image(self, device_id: str) -> str:
         """模拟拍照功能"""
@@ -544,6 +552,12 @@ class MockRobotController(RobotControllerBase):
     
     def _simulate_operation(self, operation_name: str) -> bool:
         """模拟操作"""
+        self.action_history.append(operation_name)
+        gate = self._action_gates.get(operation_name)
+        if gate is not None:
+            started_event, release_event = gate
+            started_event.set()
+            release_event.wait()
         # 检查是否有错误场景启用
         for scenario, enabled in self.error_scenarios.items():
             if enabled:

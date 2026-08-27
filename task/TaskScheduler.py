@@ -16,10 +16,15 @@ from task.TaskDatabase import TaskDatabase
 from utils.logger_config import get_logger
 
 
+class TaskCancelledError(RuntimeError):
+    """任务在安全检查点响应了协作取消。"""
+
+
 class TaskScheduler:
     """任务调度器 - 负责任务的调度和执行（支持统一命令队列）"""
 
-    def __init__(self, robot_controller, database: TaskDatabase):
+    def __init__(self, robot_controller, database: TaskDatabase,
+                 allow_running_task_cancel: bool = False):
         self.robot_controller = robot_controller
         self.database = database
         # 使用优先级队列，支持UnifiedCommand
@@ -35,6 +40,7 @@ class TaskScheduler:
         self._active_tasks: Dict[int, Dict[str, Any]] = {}
         # 仅保留当前进程内、最近一个已取消任务代际，供不同取消命令幂等查询。
         self._cancelled_task_generations: Dict[int, Dict[str, Any]] = {}
+        self.allow_running_task_cancel = allow_running_task_cancel
         # self.voice_player = VoicePlayer()
 
         # 回调函数注册（每个事件只有一个消费者，使用单个 callable 而非 list）
@@ -64,6 +70,16 @@ class TaskScheduler:
     def stop(self):
         """停止调度器"""
         self.is_running = False
+        with self._task_registry_lock:
+            for task_id, entry in self._active_tasks.items():
+                if entry["state"] == "cancelling" and not entry["cancel_complete_event"].is_set():
+                    entry["cancel_result"] = {
+                        "success": False,
+                        "message": f"调度器关闭，取消未完成: {task_id}",
+                        "target_command_id": entry["command"].command_id,
+                    }
+                    entry["shutdown_notified"] = True
+                    entry["cancel_complete_event"].set()
         if self.scheduler_thread:
             self.scheduler_thread.join(timeout=5)
         self.executor.shutdown(wait=False)
@@ -87,6 +103,8 @@ class TaskScheduler:
                     "command": command,
                     "cancel_event": threading.Event(),
                     "state": "queued",
+                    "cancel_complete_event": threading.Event(),
+                    "cancel_result": None,
                 }
 
                 self.command_queue.put(command)
@@ -117,6 +135,20 @@ class TaskScheduler:
                     if self.current_command.status in [CommandStatus.COMPLETED, CommandStatus.FAILED, CommandStatus.CANCELLED]:
                         # 清除逻辑应该更精细
                         cmd_type = self.current_command.cmd_type
+
+                        if cmd_type == CmdType.TASK_CMD:
+                            with self._task_registry_lock:
+                                entry = self._active_tasks.get(
+                                    self.current_command.data.task_id
+                                )
+                                terminal_pending = (
+                                    entry is not None and
+                                    entry["command"] is self.current_command
+                                )
+                            if terminal_pending:
+                                # done callback 尚未完成终态落盘/注册表释放。
+                                time.sleep(0.01)
+                                continue
 
                         self.current_command = None
 
@@ -196,8 +228,8 @@ class TaskScheduler:
             # 触发命令失败回调
             self._trigger_callback("on_command_failed", command)
 
-    def cancel_waiting_task(self, task_id: int) -> Dict[str, Any]:
-        """取消尚未开始执行的任务；本阶段不支持取消运行中任务。"""
+    def cancel_task(self, task_id: int) -> Dict[str, Any]:
+        """登记取消；运行中任务由工作线程在检查点完成终态。"""
         with self._task_registry_lock:
             entry = self._active_tasks.get(task_id)
             if entry is None:
@@ -213,8 +245,22 @@ class TaskScheduler:
             command = entry["command"]
             if entry["state"] == "cancelled" or command.status == CommandStatus.CANCELLED:
                 return {"success": True, "message": f"任务已取消: {task_id}"}
-            if entry["state"] == "running" or command.status == CommandStatus.RUNNING:
-                return {"success": False, "message": "当前阶段不支持取消正在运行的任务"}
+            if entry["state"] in ("running", "cancelling"):
+                if not self.allow_running_task_cancel:
+                    return {
+                        "success": False,
+                        "message": "运行中任务取消功能未启用，不支持取消正在运行的任务",
+                    }
+                entry["state"] = "cancelling"
+                entry["cancel_event"].set()
+                return {
+                    "pending": True,
+                    "event": entry["cancel_complete_event"],
+                    "entry": entry,
+                    "target_command_id": command.command_id,
+                }
+            if entry["state"] == "terminalizing":
+                return {"success": False, "message": "任务已开始提交终态"}
             if command.status in (CommandStatus.COMPLETED, CommandStatus.FAILED):
                 return {"success": False, "message": f"任务已进入终态: {command.status.value}"}
 
@@ -261,80 +307,152 @@ class TaskScheduler:
                 self.logger.exception(f"等待任务取消审计写入失败: {task_id}")
             return dict(tombstone)
 
+    # 保留第二步 API 兼容性。
+    cancel_waiting_task = cancel_task
+
+    def _raise_if_task_cancelled(self):
+        task = self.current_task
+        if task is None:
+            return
+        with self._task_registry_lock:
+            entry = self._active_tasks.get(task.task_id)
+            if entry is not None and entry["cancel_event"].is_set():
+                raise TaskCancelledError(f"任务已请求取消: {task.task_id}")
+
+    def _cancel_aware_wait(self, timeout: float):
+        task = self.current_task
+        with self._task_registry_lock:
+            entry = self._active_tasks.get(task.task_id) if task else None
+            event = entry["cancel_event"] if entry else None
+        if event is not None and event.wait(timeout):
+            raise TaskCancelledError(f"任务已请求取消: {task.task_id}")
+        self._raise_if_task_cancelled()
+
     def _command_execution_done(self, future, command: UnifiedCommand):
-        """命令执行完成回调"""
+        """命令执行完成回调；任务终态选择在注册表锁内线性化。"""
+        execution_error = None
         try:
             success = future.result()
+        except Exception as e:
+            success = False
+            execution_error = e
 
-            if success:
-                command.status = CommandStatus.COMPLETED
-                command.completed_at = datetime.now()
-                self.database.update_command_status(command.command_id, CommandStatus.COMPLETED)
+        if command.cmd_type != CmdType.TASK_CMD:
+            self._finalize_non_task_command(command, success, execution_error)
+            return
 
-                # 保存元数据（如果有）
-                if command.metadata:
-                    self.database.update_command_metadata(command.command_id, command.metadata)
-
-                # 保存错误信息（如果有，用于 PARTIAL_COMPLETED 情况）
-                if command.error_message:
-                    self.database.update_command_status(
-                        command.command_id,
-                        CommandStatus.COMPLETED,
-                        command.error_message
-                    )
-
-                self._trigger_callback("on_command_complete", command)
-                self.logger.info(f"命令 {command.command_id} 执行完成")
-                self._release_task_registration(command)
-            else:
-                # 检查是否需要重试
-                if command.retry_count < command.max_retries:
-                    command.retry_count += 1
-                    command.status = CommandStatus.RETRYING
+        task = command.data
+        with self._task_registry_lock:
+            entry = self._active_tasks.get(task.task_id)
+            if entry is None or entry["command"] is not command:
+                return
+            cancelled = entry["cancel_event"].is_set()
+            if not cancelled and execution_error is None and not success and command.retry_count < command.max_retries:
+                command.retry_count += 1
+                command.status = CommandStatus.RETRYING
+                entry["state"] = "queued"
+                try:
                     self.database.add_command_retry_count(command.command_id)
                     self.database.update_command_status(command.command_id, CommandStatus.RETRYING)
-
-                    # 触发命令状态变化回调（RETRYING）
                     self._trigger_callback("on_command_status_change", command)
-
-                    self.logger.warning(f"命令 {command.command_id} 将进行第 {command.retry_count} 次重试")
-                    time.sleep(1)
-                    # 重新加入队列
                     self.command_queue.put(command)
                     self.current_command = None
+                except Exception as error:
+                    execution_error = error
                 else:
-                    command.status = CommandStatus.FAILED
-                    command.completed_at = datetime.now()
-                    command.error_message = command.error_message or "命令执行失败"
-                    self.database.update_command_status(
-                        command.command_id,
-                        CommandStatus.FAILED,
-                        command.error_message
-                    )
-
-                    # 保存元数据（如果有）
-                    if command.metadata:
-                        self.database.update_command_metadata(command.command_id, command.metadata)
-
-                    self._trigger_callback("on_command_failed", command)
-                    self.logger.error(f"命令 {command.command_id} 执行失败")
-                    self._release_task_registration(command)
-
-        except Exception as e:
-            self.logger.error(f"命令执行回调异常: {e}")
-            command.status = CommandStatus.FAILED
-            command.completed_at = datetime.now()
-            command.error_message = f"回调异常: {str(e)}"
-            self.database.update_command_status(
-                command.command_id,
-                CommandStatus.FAILED,
-                command.error_message
+                    return
+            # 线性化点：此后新取消不再被接受；此前已提交的取消必然胜出。
+            entry["state"] = "terminalizing"
+            entry["terminal_decision"] = (
+                CommandStatus.CANCELLED if cancelled else
+                CommandStatus.COMPLETED if success and execution_error is None else
+                CommandStatus.FAILED
             )
 
-            # 保存元数据（如果有）
-            if command.metadata:
-                self.database.update_command_metadata(command.command_id, command.metadata)
-            self._release_task_registration(command)
+        self._finalize_task_terminal(command, entry, execution_error)
+
+    def _finalize_task_terminal(self, command, entry, execution_error):
+        task = command.data
+        decision = entry["terminal_decision"]
+        cancelled = decision == CommandStatus.CANCELLED
+        reason = (
+            f"任务已请求取消: {task.task_id}" if cancelled else
+            f"回调异常: {execution_error}" if execution_error else
+            command.error_message or "命令执行失败"
+        )
+        cancel_result = entry.get("cancel_result") if entry.get("shutdown_notified") else None
+        try:
+            now = datetime.now()
+            command.status = decision
+            command.completed_at = now
+            if cancelled:
+                command.error_message = reason
+                task.status = TaskStatus.CANCELLED
+                task.completed_at = now
+                for station in task.station_list:
+                    if station.status != StationTaskStatus.COMPLETED:
+                        station.status = StationTaskStatus.CANCELLED
+                        station.completed_at = now
+            elif decision == CommandStatus.FAILED:
+                command.error_message = reason
+            status_persisted = False
+            try:
+                self.database.update_command_status(
+                    command.command_id, decision, command.error_message
+                )
+                status_persisted = True
+            except Exception as error:
+                self.logger.exception(f"任务终态落盘失败: {task.task_id}")
+                if cancelled and cancel_result is None:
+                    cancel_result = {"success": False, "message": f"运行任务已退出，但终态落盘失败: {task.task_id}", "target_command_id": command.command_id}
+                else:
+                    command.status = CommandStatus.FAILED
+                    command.error_message = f"终态落盘失败: {error}"
+            if status_persisted:
+                if command.metadata:
+                    try:
+                        self.database.update_command_metadata(
+                            command.command_id, command.metadata
+                        )
+                    except Exception:
+                        # metadata 是附属写，不得反转已提交的关键终态。
+                        self.logger.exception(
+                            f"任务终态 metadata 落盘失败: {task.task_id}"
+                        )
+                if cancelled and cancel_result is None:
+                    cancel_result = {"success": True, "message": f"运行任务取消成功: {task.task_id}", "target_command_id": command.command_id}
+                elif not cancelled:
+                    try:
+                        self._trigger_callback(
+                            "on_command_complete" if decision == CommandStatus.COMPLETED
+                            else "on_command_failed",
+                            command,
+                        )
+                    except Exception:
+                        self.logger.exception(
+                            f"任务终态回调失败: {task.task_id}"
+                        )
+        finally:
+            with self._task_registry_lock:
+                if cancelled:
+                    entry["cancel_result"] = cancel_result or {"success": False, "message": f"取消终态未知: {task.task_id}", "target_command_id": command.command_id}
+                    self._cancelled_task_generations[task.task_id] = dict(entry["cancel_result"])
+                    entry["cancel_complete_event"].set()
+                current = self._active_tasks.get(task.task_id)
+                if current is entry:
+                    self._active_tasks.pop(task.task_id, None)
+
+    def _finalize_non_task_command(self, command, success, execution_error):
+        try:
+            status = CommandStatus.COMPLETED if success and execution_error is None else CommandStatus.FAILED
+            command.status = status
+            command.completed_at = datetime.now()
+            if execution_error:
+                command.error_message = f"回调异常: {execution_error}"
+            self.database.update_command_status(command.command_id, status, command.error_message)
+            self._trigger_callback("on_command_complete" if success else "on_command_failed", command)
+        except Exception:
+            self.logger.exception(f"非任务命令终态处理失败: {command.command_id}")
 
     def _release_task_registration(self, command: UnifiedCommand):
         if command.cmd_type != CmdType.TASK_CMD or not isinstance(command.data, Task):
@@ -361,6 +479,7 @@ class TaskScheduler:
             command.error_message = f"数据类型错误: {type(task)}"
             return False
 
+        self._raise_if_task_cancelled()
         # 设置任务状态为运行中
         task.status = TaskStatus.RUNNING
         self.logger.info(f"任务开始执行: {task.task_id}, 任务名称: {task.task_name}")
@@ -371,6 +490,7 @@ class TaskScheduler:
 
         # 执行任务
         success = self._execute_task_internal(task)
+        self._raise_if_task_cancelled()
 
         # 判断任务状态
         task_status = self._determine_task_status(task)
@@ -440,6 +560,7 @@ class TaskScheduler:
 
             # 顺序执行所有站点任务（失败后继续）
             for i, station in enumerate(sorted_stations, 1):
+                self._raise_if_task_cancelled()
                 station_id = station.station_config.station_id
                 self.logger.info(f"执行站点 {i}/{total_stations}: {station_id}")
                 # if task.robot_mode == RobotMode.INSPECTION:
@@ -460,9 +581,11 @@ class TaskScheduler:
                 f"失败 {failed_count}/{total_stations}"
             )
 
+            self._raise_if_task_cancelled()
             # 返回值：至少有一个站点成功则返回 True
             return success_count > 0
-
+        except TaskCancelledError:
+            raise
         except Exception as e:
             self.logger.error(f"任务执行异常: {e}")
             return False
@@ -485,6 +608,7 @@ class TaskScheduler:
         max_attempts = station.max_retries + 1  # 首次执行 + 重试次数
 
         for attempt in range(max_attempts):
+            self._raise_if_task_cancelled()
             # 判断是否为重试
             if attempt > 0:
                 station.retry_count = attempt
@@ -503,7 +627,7 @@ class TaskScheduler:
                 self._trigger_callback("on_station_retry", station)
 
                 self.logger.warning(f"站点 {station_id} 第 {attempt}/{station.max_retries} 次重试")
-                time.sleep(1)  # 重试间隔
+                self._cancel_aware_wait(1)  # 重试间隔
 
             # 执行站点任务
             if self._execute_station_task(station):
@@ -552,6 +676,7 @@ class TaskScheduler:
     def _execute_station_task(self, station: Station) -> bool:
         """执行单个站点任务（添加细粒度进度更新）"""
         try:
+            self._raise_if_task_cancelled()
             self.current_station = station
             station_id = station.station_config.station_id
 
@@ -587,6 +712,7 @@ class TaskScheduler:
             success = self.robot_controller.move_to_marker(
                 station.station_config.agv_marker
             )
+            self._raise_if_task_cancelled()
             if not success:
                 station.execution_phase = StationExecutionPhase.FAILED
                 station.error_message = f"AGV 移动失败: {station.station_config.agv_marker}"
@@ -611,6 +737,7 @@ class TaskScheduler:
                 success = self.robot_controller.move_ext_to_position(
                     station.station_config.ext_pos
                 )
+                self._raise_if_task_cancelled()
                 if not success:
                     station.execution_phase = StationExecutionPhase.FAILED
                     station.error_message = "外部轴移动失败"
@@ -633,6 +760,7 @@ class TaskScheduler:
                 success = self.robot_controller.move_robot_to_position(
                     station.station_config.robot_pos
                 )
+                self._raise_if_task_cancelled()
                 if not success:
                     station.execution_phase = StationExecutionPhase.FAILED
                     station.error_message = "机械臂移动失败"
@@ -656,6 +784,7 @@ class TaskScheduler:
                 operation_result = self._execute_operation(
                     station.station_config.operation_config
                 )
+                self._raise_if_task_cancelled()
 
                 # 保存操作结果到metadata
                 if not station.metadata:
@@ -670,12 +799,15 @@ class TaskScheduler:
                     return False
 
             # === 阶段5 === 机械臂和外部轴复位
+            self._raise_if_task_cancelled()
             self.robot_controller.move_robot_to_position(
                   [0,1.784529347,-0.2298249559,1.5707963268,-1.5105126544,0.7853981634]  
                 )
+            self._raise_if_task_cancelled()
             self.robot_controller.move_ext_to_position(
                     [10,0,0,0]
                 )
+            self._raise_if_task_cancelled()
             # === 完成 ===
             station.execution_phase = StationExecutionPhase.COMPLETED
             station.status = StationTaskStatus.COMPLETED
@@ -696,6 +828,8 @@ class TaskScheduler:
 
             return True
 
+        except TaskCancelledError:
+            raise
         except Exception as e:
             station.execution_phase = StationExecutionPhase.FAILED
             station.error_message = f"站点执行异常: {str(e)}"
