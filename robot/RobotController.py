@@ -10,9 +10,8 @@ from enum import Enum
 from typing import Dict, List, Any, Callable
 
 from dataModels.MessageModels import MoveStatus
-from robot.MockArmController import MockArmController
 from robot.AGVController import AGVController
-from robot.ArmController import ArmController
+from robot.HardwareErrors import ControlledStopError
 from utils.logger_config import get_logger
 
 # 导入相机管理器
@@ -123,8 +122,9 @@ class RobotController():
             self.agv_controller = AGVController(robot_config, debug=self.debug)
 
             self.logger.debug("正在初始化机械臂控制器...")
-            # 注意：ArmController同时包含机械臂和外部轴控制
-            self.arm_controller = MockArmController(
+            # RobotController 只用于真实硬件路径；Mock 由 TaskManager 单独创建。
+            from robot.ArmController import ArmController
+            self.arm_controller = ArmController(
                 system_config=robot_config,
                 ext_axis_limits=robot_config.get("ext_axis_limits"),
                 debug=self.debug
@@ -318,7 +318,7 @@ class RobotController():
             self.logger.error(f"重置错误状态时发生错误: {e}")
             return False
     
-    def move_to_marker(self, marker_id: str) -> bool:
+    def move_to_marker(self, marker_id: str, cancel_event=None) -> bool:
         """
         移动AGV到指定标记点
         
@@ -336,13 +336,18 @@ class RobotController():
             self.logger.debug(f"移动AGV到标记点: {marker_id}")
             self.system_status = SystemStatus.MOVING
             
-            # 调用AGV控制器的移动方法
-            success = self.agv_controller.agv_moveto(marker_id)
+            # 将同一个 cancel_event 传到底层；底层负责发送停止命令并确认停稳。
+            success = self.agv_controller.agv_moveto(
+                marker_id, cancel_event=cancel_event
+            )
             
             if success:
                 self.system_status = SystemStatus.IDLE
                 self.logger.info(f"AGV已成功移动到标记点: {marker_id}")
                 self._trigger_callback("on_task_complete", "move_agv", marker_id)
+            elif cancel_event is not None and cancel_event.is_set():
+                self.system_status = SystemStatus.IDLE
+                self.logger.info("AGV任务已受控取消")
             else:
                 self.system_status = SystemStatus.ERROR
                 self.last_error = f"移动AGV到{marker_id}失败"
@@ -350,13 +355,18 @@ class RobotController():
             
             return success
             
+        except ControlledStopError:
+            self.system_status = SystemStatus.ERROR
+            raise
         except Exception as e:
             self.logger.error(f"移动AGV时发生错误: {e}")
             self.system_status = SystemStatus.ERROR
             self.last_error = str(e)
             return False
     
-    def move_robot_to_position(self, position: List[float], velocity: float = None) -> bool:
+    def move_robot_to_position(
+        self, position: List[float], velocity: float = None, cancel_event=None
+    ) -> bool:
         """
         移动机械臂到指定位置
         
@@ -375,11 +385,12 @@ class RobotController():
             self.logger.info(f"移动机械臂到位置: {position}")
             self.system_status = SystemStatus.ARM_OPERATING
             
-            # 调用机械臂控制器的移动方法
+            # 机械臂控制器以 0 表示到位，取消/停止确认失败则抛出 ControlledStopError。
             if hasattr(self.arm_controller, 'rob_moveto'):
-                result = self.arm_controller.rob_moveto(position, vel=velocity)
-                # TODO：重新确认函数返回值含义
-                success = (result is not None)  # 根据实际返回值判断
+                result = self.arm_controller.rob_moveto(
+                    position, vel=velocity, cancel_event=cancel_event
+                )
+                success = result == 0
             else:
                 self.logger.error("机械臂控制器不支持rob_moveto方法")
                 return False
@@ -388,6 +399,9 @@ class RobotController():
                 self.system_status = SystemStatus.IDLE
                 self.logger.info("机械臂移动完成")
                 self._trigger_callback("on_task_complete", "move_robot", position)
+            elif cancel_event is not None and cancel_event.is_set():
+                self.system_status = SystemStatus.IDLE
+                self.logger.info("机械臂任务已受控取消")
             else:
                 self.system_status = SystemStatus.ERROR
                 self.last_error = "机械臂移动失败"
@@ -395,6 +409,9 @@ class RobotController():
             
             return success
             
+        except ControlledStopError:
+            self.system_status = SystemStatus.ERROR
+            raise
         except Exception as e:
             self.logger.error(f"移动机械臂时发生错误: {e}")
             self.system_status = SystemStatus.ERROR
@@ -404,8 +421,8 @@ class RobotController():
     def move_head(self):
         self.arm_controller.move_head()
         
-    def move_ext_to_position(self, position: List[float], velocity: float = None, 
-                           acceleration: float = None) -> bool:
+    def move_ext_to_position(self, position: List[float], velocity: float = None,
+                           acceleration: float = None, cancel_event=None) -> bool:
         """
         移动外部轴到指定位置
         
@@ -425,10 +442,14 @@ class RobotController():
             self.logger.info(f"移动外部轴到位置: {position}")
             self.system_status = SystemStatus.EXT_OPERATING
             
-            # 调用外部轴控制器的移动方法
+            # 外部轴动作不可安全抢占，控制器会在原子请求结束后检查 cancel_event。
             if hasattr(self.arm_controller, 'ext_moveto'):
-                success = self.arm_controller.ext_moveto(position, vel=velocity, acc=acceleration)
-                success =True
+                success = self.arm_controller.ext_moveto(
+                    position,
+                    vel=velocity,
+                    acc=acceleration,
+                    cancel_event=cancel_event,
+                )
             else:
                 self.logger.error("外部轴控制器不支持ext_moveto方法")
                 return False
@@ -437,6 +458,9 @@ class RobotController():
                 self.system_status = SystemStatus.IDLE
                 self.logger.info("外部轴移动完成")
                 self._trigger_callback("on_task_complete", "move_ext", position)
+            elif cancel_event is not None and cancel_event.is_set():
+                self.system_status = SystemStatus.IDLE
+                self.logger.info("外部轴原子动作返回后响应任务取消")
             else:
                 self.system_status = SystemStatus.ERROR
                 self.last_error = "外部轴移动失败"
@@ -444,6 +468,9 @@ class RobotController():
             
             return success
             
+        except ControlledStopError:
+            self.system_status = SystemStatus.ERROR
+            raise
         except Exception as e:
             self.logger.error(f"移动外部轴时发生错误: {e}")
             self.system_status = SystemStatus.ERROR

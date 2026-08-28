@@ -74,7 +74,12 @@ class MockArmController:
         with self._lock:
             return self._arm_joints.copy()
 
-    def rob_moveto(self, jpos: Iterable[float], vel: Optional[float] = None) -> int:
+    def rob_moveto(
+        self,
+        jpos: Iterable[float],
+        vel: Optional[float] = None,
+        cancel_event=None,
+    ) -> int:
         """记录机械臂目标位置并模拟执行成功。"""
         target = self._validate_position(jpos, self.ARM_JOINT_COUNT, "机械臂")
         with self._lock:
@@ -116,6 +121,7 @@ class MockArmController:
         point: Iterable[float],
         vel: Optional[float] = None,
         acc: Optional[float] = None,
+        cancel_event=None,
     ) -> bool:
         """记录外部轴目标位置并模拟执行成功。"""
         target = self._validate_position(point, self.EXT_AXIS_COUNT, "外部轴")

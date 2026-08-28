@@ -12,6 +12,7 @@ from dataModels.TaskModels import (
     TaskStatus, StationTaskStatus, StationExecutionPhase, OperationConfig, RobotMode
 )
 from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus
+from robot.HardwareErrors import ControlledStopError
 from task.TaskDatabase import TaskDatabase
 from utils.logger_config import get_logger
 
@@ -41,6 +42,8 @@ class TaskScheduler:
         # 仅保留当前进程内、最近一个已取消任务代际，供不同取消命令幂等查询。
         self._cancelled_task_generations: Dict[int, Dict[str, Any]] = {}
         self.allow_running_task_cancel = allow_running_task_cancel
+        self._hardware_fault_blocked = False
+        self._hardware_fault_reason = None
         # self.voice_player = VoicePlayer()
 
         # 回调函数注册（每个事件只有一个消费者，使用单个 callable 而非 list）
@@ -71,6 +74,7 @@ class TaskScheduler:
         """停止调度器"""
         self.is_running = False
         with self._task_registry_lock:
+            # 关闭期间不能再等待工作线程完成硬件停止；先唤醒取消请求，明确返回失败。
             for task_id, entry in self._active_tasks.items():
                 if entry["state"] == "cancelling" and not entry["cancel_complete_event"].is_set():
                     entry["cancel_result"] = {
@@ -123,6 +127,9 @@ class TaskScheduler:
         while self.is_running:
             try:
                 if self.current_command is None:
+                    if self._hardware_fault_blocked:
+                        time.sleep(0.1)
+                        continue
                     # 获取下一个命令（非阻塞）
                     try:
                         command = self.command_queue.get_nowait()
@@ -172,6 +179,7 @@ class TaskScheduler:
                 if (entry is None or entry["command"] is not command or
                         entry["cancel_event"].is_set() or
                         command.status == CommandStatus.CANCELLED):
+                    # 取消只标记注册表，不从 PriorityQueue 中删除对象；出队时在此丢弃。
                     self.logger.info(f"跳过已取消的等待任务: task_id={task.task_id}")
                     if entry is not None and entry["command"] is command:
                         self._active_tasks.pop(task.task_id, None)
@@ -252,6 +260,7 @@ class TaskScheduler:
                         "message": "运行中任务取消功能未启用，不支持取消正在运行的任务",
                     }
                 entry["state"] = "cancelling"
+                # cancel_event 是从调度器传到每个控制器原子动作的协作取消信号。
                 entry["cancel_event"].set()
                 return {
                     "pending": True,
@@ -310,7 +319,12 @@ class TaskScheduler:
     # 保留第二步 API 兼容性。
     cancel_waiting_task = cancel_task
 
-    def _raise_if_task_cancelled(self):
+    def _raise_if_task_cancelled(self, cancel_event=None, task_id=None):
+        # 在站点/动作边界调用；禁止在硬件原子动作中途强行打断。
+        if cancel_event is not None:
+            if cancel_event.is_set():
+                raise TaskCancelledError(f"任务已请求取消: {task_id}")
+            return
         task = self.current_task
         if task is None:
             return
@@ -319,7 +333,14 @@ class TaskScheduler:
             if entry is not None and entry["cancel_event"].is_set():
                 raise TaskCancelledError(f"任务已请求取消: {task.task_id}")
 
-    def _cancel_aware_wait(self, timeout: float):
+    def _cancel_aware_wait(
+        self, timeout: float, cancel_event=None, task_id=None
+    ):
+        # 用 Event.wait 替代 sleep，使取消请求可以立即打断重试和轮询等待。
+        if cancel_event is not None:
+            if cancel_event.wait(timeout):
+                raise TaskCancelledError(f"任务已请求取消: {task_id}")
+            return
         task = self.current_task
         with self._task_registry_lock:
             entry = self._active_tasks.get(task.task_id) if task else None
@@ -363,6 +384,7 @@ class TaskScheduler:
                     return
             # 线性化点：此后新取消不再被接受；此前已提交的取消必然胜出。
             entry["state"] = "terminalizing"
+            # terminalizing 是唯一终态决策线性化点：此后取消与完成不会互相覆盖。
             entry["terminal_decision"] = (
                 CommandStatus.CANCELLED if cancelled else
                 CommandStatus.COMPLETED if success and execution_error is None else
@@ -375,12 +397,27 @@ class TaskScheduler:
         task = command.data
         decision = entry["terminal_decision"]
         cancelled = decision == CommandStatus.CANCELLED
+        controlled_stop_failed = isinstance(execution_error, ControlledStopError)
         reason = (
+            f"任务已取消，但受控停止失败: {execution_error}"
+            if cancelled and controlled_stop_failed else
+            f"硬件状态无法确认: {execution_error}" if controlled_stop_failed else
             f"任务已请求取消: {task.task_id}" if cancelled else
             f"回调异常: {execution_error}" if execution_error else
             command.error_message or "命令执行失败"
         )
         cancel_result = entry.get("cancel_result") if entry.get("shutdown_notified") else None
+        if controlled_stop_failed:
+            # 无法确认硬件已停稳时阻塞后续调度，须人工确认并调用 clear_hardware_fault_block。
+            self._hardware_fault_blocked = True
+            self._hardware_fault_reason = reason
+            self.logger.error(f"硬件状态不安全，调度已阻塞: {reason}")
+        if cancelled and controlled_stop_failed and cancel_result is None:
+            cancel_result = {
+                "success": False,
+                "message": reason,
+                "target_command_id": command.command_id,
+            }
         try:
             now = datetime.now()
             command.status = decision
@@ -434,6 +471,7 @@ class TaskScheduler:
                         )
         finally:
             with self._task_registry_lock:
+                # 先写入代际墓碑并唤醒等待者，再释放 task_id；重复取消可稳定重放结果。
                 if cancelled:
                     entry["cancel_result"] = cancel_result or {"success": False, "message": f"取消终态未知: {task.task_id}", "target_command_id": command.command_id}
                     self._cancelled_task_generations[task.task_id] = dict(entry["cancel_result"])
@@ -441,6 +479,12 @@ class TaskScheduler:
                 current = self._active_tasks.get(task.task_id)
                 if current is entry:
                     self._active_tasks.pop(task.task_id, None)
+
+    def clear_hardware_fault_block(self):
+        """由人工确认硬件安全并完成故障恢复后解除调度阻塞。"""
+        self._hardware_fault_blocked = False
+        self._hardware_fault_reason = None
+        self.logger.warning("硬件故障调度阻塞已由外部恢复流程解除")
 
     def _finalize_non_task_command(self, command, success, execution_error):
         try:
@@ -479,7 +523,13 @@ class TaskScheduler:
             command.error_message = f"数据类型错误: {type(task)}"
             return False
 
-        self._raise_if_task_cancelled()
+        with self._task_registry_lock:
+            entry = self._active_tasks.get(task.task_id)
+            if entry is None or entry["command"] is not command:
+                raise RuntimeError(f"任务注册信息不存在: {task.task_id}")
+            cancel_event = entry["cancel_event"]
+
+        self._raise_if_task_cancelled(cancel_event, task.task_id)
         # 设置任务状态为运行中
         task.status = TaskStatus.RUNNING
         self.logger.info(f"任务开始执行: {task.task_id}, 任务名称: {task.task_name}")
@@ -489,8 +539,8 @@ class TaskScheduler:
         self._trigger_callback("on_task_start", task)
 
         # 执行任务
-        success = self._execute_task_internal(task)
-        self._raise_if_task_cancelled()
+        success = self._execute_task_internal(task, cancel_event)
+        self._raise_if_task_cancelled(cancel_event, task.task_id)
 
         # 判断任务状态
         task_status = self._determine_task_status(task)
@@ -533,7 +583,7 @@ class TaskScheduler:
 
         return success
 
-    def _execute_task_internal(self, task: Task) -> bool:
+    def _execute_task_internal(self, task: Task, cancel_event=None) -> bool:
         """执行任务内部逻辑（重构版）
 
         改进：
@@ -560,13 +610,15 @@ class TaskScheduler:
 
             # 顺序执行所有站点任务（失败后继续）
             for i, station in enumerate(sorted_stations, 1):
-                self._raise_if_task_cancelled()
+                self._raise_if_task_cancelled(cancel_event, task.task_id)
                 station_id = station.station_config.station_id
                 self.logger.info(f"执行站点 {i}/{total_stations}: {station_id}")
                 # if task.robot_mode == RobotMode.INSPECTION:
                 #     self.voice_player.play(f"到达站点.mp3")
                 # 执行站点（包含重试逻辑）
-                if self._execute_station_task_with_retry(station):
+                if self._execute_station_task_with_retry(
+                    station, cancel_event, task.task_id
+                ):
                     success_count += 1
                     self.logger.info(f"✓ 站点 {station_id} 执行成功")
                 else:
@@ -581,16 +633,18 @@ class TaskScheduler:
                 f"失败 {failed_count}/{total_stations}"
             )
 
-            self._raise_if_task_cancelled()
+            self._raise_if_task_cancelled(cancel_event, task.task_id)
             # 返回值：至少有一个站点成功则返回 True
             return success_count > 0
-        except TaskCancelledError:
+        except (TaskCancelledError, ControlledStopError):
             raise
         except Exception as e:
             self.logger.error(f"任务执行异常: {e}")
             return False
 
-    def _execute_station_task_with_retry(self, station: Station) -> bool:
+    def _execute_station_task_with_retry(
+        self, station: Station, cancel_event=None, task_id=None
+    ) -> bool:
         """执行站点任务（包含自动重试逻辑）
 
         功能：
@@ -608,7 +662,7 @@ class TaskScheduler:
         max_attempts = station.max_retries + 1  # 首次执行 + 重试次数
 
         for attempt in range(max_attempts):
-            self._raise_if_task_cancelled()
+            self._raise_if_task_cancelled(cancel_event, task_id)
             # 判断是否为重试
             if attempt > 0:
                 station.retry_count = attempt
@@ -627,10 +681,10 @@ class TaskScheduler:
                 self._trigger_callback("on_station_retry", station)
 
                 self.logger.warning(f"站点 {station_id} 第 {attempt}/{station.max_retries} 次重试")
-                self._cancel_aware_wait(1)  # 重试间隔
+                self._cancel_aware_wait(1, cancel_event, task_id)  # 重试间隔
 
             # 执行站点任务
-            if self._execute_station_task(station):
+            if self._execute_station_task(station, cancel_event, task_id):
                 # 成功
                 if attempt > 0:
                     self.logger.info(f"站点 {station_id} 重试成功（第 {attempt} 次重试）")
@@ -673,10 +727,12 @@ class TaskScheduler:
         # 返回 False 表示站点失败
         return False
 
-    def _execute_station_task(self, station: Station) -> bool:
+    def _execute_station_task(
+        self, station: Station, cancel_event=None, task_id=None
+    ) -> bool:
         """执行单个站点任务（添加细粒度进度更新）"""
         try:
-            self._raise_if_task_cancelled()
+            self._raise_if_task_cancelled(cancel_event, task_id)
             self.current_station = station
             station_id = station.station_config.station_id
 
@@ -710,9 +766,10 @@ class TaskScheduler:
             )
 
             success = self.robot_controller.move_to_marker(
-                station.station_config.agv_marker
+                station.station_config.agv_marker,
+                cancel_event=cancel_event,
             )
-            self._raise_if_task_cancelled()
+            self._raise_if_task_cancelled(cancel_event, task_id)
             if not success:
                 station.execution_phase = StationExecutionPhase.FAILED
                 station.error_message = f"AGV 移动失败: {station.station_config.agv_marker}"
@@ -735,9 +792,10 @@ class TaskScheduler:
                 )
 
                 success = self.robot_controller.move_ext_to_position(
-                    station.station_config.ext_pos
+                    station.station_config.ext_pos,
+                    cancel_event=cancel_event,
                 )
-                self._raise_if_task_cancelled()
+                self._raise_if_task_cancelled(cancel_event, task_id)
                 if not success:
                     station.execution_phase = StationExecutionPhase.FAILED
                     station.error_message = "外部轴移动失败"
@@ -758,9 +816,10 @@ class TaskScheduler:
                 )
 
                 success = self.robot_controller.move_robot_to_position(
-                    station.station_config.robot_pos
+                    station.station_config.robot_pos,
+                    cancel_event=cancel_event,
                 )
-                self._raise_if_task_cancelled()
+                self._raise_if_task_cancelled(cancel_event, task_id)
                 if not success:
                     station.execution_phase = StationExecutionPhase.FAILED
                     station.error_message = "机械臂移动失败"
@@ -784,7 +843,7 @@ class TaskScheduler:
                 operation_result = self._execute_operation(
                     station.station_config.operation_config
                 )
-                self._raise_if_task_cancelled()
+                self._raise_if_task_cancelled(cancel_event, task_id)
 
                 # 保存操作结果到metadata
                 if not station.metadata:
@@ -799,15 +858,17 @@ class TaskScheduler:
                     return False
 
             # === 阶段5 === 机械臂和外部轴复位
-            self._raise_if_task_cancelled()
+            self._raise_if_task_cancelled(cancel_event, task_id)
             self.robot_controller.move_robot_to_position(
-                  [0,1.784529347,-0.2298249559,1.5707963268,-1.5105126544,0.7853981634]  
+                  [0,1.784529347,-0.2298249559,1.5707963268,-1.5105126544,0.7853981634],
+                  cancel_event=cancel_event,
                 )
-            self._raise_if_task_cancelled()
+            self._raise_if_task_cancelled(cancel_event, task_id)
             self.robot_controller.move_ext_to_position(
-                    [10,0,0,0]
+                    [10,0,0,0],
+                    cancel_event=cancel_event,
                 )
-            self._raise_if_task_cancelled()
+            self._raise_if_task_cancelled(cancel_event, task_id)
             # === 完成 ===
             station.execution_phase = StationExecutionPhase.COMPLETED
             station.status = StationTaskStatus.COMPLETED
@@ -828,7 +889,7 @@ class TaskScheduler:
 
             return True
 
-        except TaskCancelledError:
+        except (TaskCancelledError, ControlledStopError):
             raise
         except Exception as e:
             station.execution_phase = StationExecutionPhase.FAILED

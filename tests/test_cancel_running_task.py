@@ -13,6 +13,9 @@ from dataModels.TaskModels import (
 from dataModels.UnifiedCommand import CommandStatus, create_unified_command
 import gRPC.RobotService_pb2 as robot_pb2
 from robot.MockRobotController import MockRobotController
+from robot.AGVController import AGVController
+from robot.ArmController import ArmController
+from robot.HardwareErrors import ControlledStopError
 from RobotControlSystem import RobotControlSystem
 from task.TaskDatabase import TaskDatabase
 from task.TaskManager import TaskManager
@@ -117,6 +120,7 @@ class CancelRunningTaskTests(unittest.TestCase):
         release.set()
         cancel.join(3)
         self.assertTrue(self.wait_for(lambda: second.status == CommandStatus.COMPLETED))
+        self.assertTrue(self.wait_for(lambda: 2 not in self.scheduler._active_tasks))
 
     def test_feature_flag_disabled_rejects_running_cancel(self):
         self.scheduler.allow_running_task_cancel = False
@@ -624,6 +628,170 @@ class CancelRunningTaskTests(unittest.TestCase):
         release.set()
         self.assertTrue(self.wait_for(lambda: 1 not in self.scheduler._active_tasks))
         self.assertEqual(self.feedback[-1].status, CommandStatus.FAILED)
+
+    def test_controlled_stop_failure_fails_cancel_and_blocks_next_task(self):
+        started = threading.Event()
+
+        def fail_stop(_marker, cancel_event=None):
+            started.set()
+            self.assertIsNotNone(cancel_event)
+            self.assertTrue(cancel_event.wait(2))
+            raise ControlledStopError("AGV停止状态未知")
+
+        self.robot.move_to_marker = fail_stop
+        first = create_unified_command(
+            "task-stop-fail", CmdType.TASK_CMD, self.make_task(1)
+        )
+        second = create_unified_command(
+            "task-blocked", CmdType.TASK_CMD, self.make_task(2, "marker_2")
+        )
+        self.scheduler.add_command(first)
+        self.scheduler.add_command(second)
+        self.assertTrue(started.wait(2))
+
+        result = self.manager.request_cancel_task("cancel-stop-fail", 1)
+
+        self.assertEqual(result.status, CommandStatus.FAILED)
+        self.assertEqual(first.status, CommandStatus.CANCELLED)
+        self.assertTrue(self.scheduler._hardware_fault_blocked)
+        time.sleep(0.2)
+        self.assertEqual(second.status, CommandStatus.QUEUED)
+
+    def test_agv_status_exception_during_cancel_fails_and_blocks_next_task(self):
+        agv = AGVController({
+            "agv_ip": "test",
+            "agv_port": 1,
+            "agv_status_poll_interval_seconds": 0.001,
+            "agv_stop_timeout_seconds": 0.05,
+        })
+        status_reads = {"count": 0}
+        moving = threading.Event()
+
+        def send(command):
+            if command.startswith("/api/move?marker="):
+                return {"status": "OK"}
+            if command == "/api/move/cancel":
+                return {"status": "OK"}
+            status_reads["count"] += 1
+            if status_reads["count"] == 1:
+                moving.set()
+                return {"status": "OK", "results": {"move_status": "running"}}
+            if status_reads["count"] == 2:
+                return {"status": "OK", "results": {"move_status": "running"}}
+            raise RuntimeError("AGV status unavailable")
+
+        agv._send_command_to_agv = send
+        self.robot.move_to_marker = lambda marker, cancel_event=None: agv.agv_moveto(
+            marker, cancel_event=cancel_event
+        )
+        first = create_unified_command(
+            "task-agv-status-error", CmdType.TASK_CMD, self.make_task(1)
+        )
+        second = create_unified_command(
+            "task-after-agv-status-error", CmdType.TASK_CMD,
+            self.make_task(2, "marker_2"),
+        )
+        self.scheduler.add_command(first)
+        self.scheduler.add_command(second)
+        self.assertTrue(moving.wait(2))
+
+        result = self.manager.request_cancel_task("cancel-agv-status-error", 1)
+
+        self.assertEqual(result.status, CommandStatus.FAILED)
+        self.assertEqual(first.status, CommandStatus.CANCELLED)
+        self.assertTrue(self.scheduler._hardware_fault_blocked)
+        time.sleep(0.1)
+        self.assertEqual(second.status, CommandStatus.QUEUED)
+
+    def test_jaka_stop_status_exception_fails_cancel_and_blocks_next_task(self):
+        started = threading.Event()
+
+        class StatusFailureSdk:
+            def __init__(self):
+                self.aborted = False
+
+            def joint_move(self, **_kwargs):
+                started.set()
+                return (0,)
+
+            def motion_abort(self):
+                self.aborted = True
+                return (0,)
+
+            def get_joint_position(self):
+                if self.aborted:
+                    raise RuntimeError("joint status unavailable")
+                return (0, [0.5] * 6)
+
+        arm = ArmController.__new__(ArmController)
+        arm.logger = get_logger(__name__)
+        arm.robot = StatusFailureSdk()
+        arm.arm_motion_timeout = 1
+        arm.arm_stop_timeout = 0.02
+        arm.arm_poll_interval = 0.001
+        arm.arm_joint_tolerance = 0.0001
+        self.robot.move_to_marker = lambda _marker, cancel_event=None: arm.rob_moveto(
+            [1.0] * 6, cancel_event=cancel_event
+        )
+        first = create_unified_command(
+            "task-jaka-status", CmdType.TASK_CMD, self.make_task(1)
+        )
+        second = create_unified_command(
+            "task-after-jaka-status", CmdType.TASK_CMD,
+            self.make_task(2, "marker_2"),
+        )
+        self.scheduler.add_command(first)
+        self.scheduler.add_command(second)
+        self.assertTrue(started.wait(2))
+
+        result = self.manager.request_cancel_task("cancel-jaka-status", 1)
+
+        self.assertEqual(result.status, CommandStatus.FAILED)
+        self.assertEqual(first.status, CommandStatus.CANCELLED)
+        self.assertTrue(self.scheduler._hardware_fault_blocked)
+        time.sleep(0.2)
+        self.assertEqual(second.status, CommandStatus.QUEUED)
+
+    def test_non_cancelled_hardware_unknown_fails_and_blocks_next_task(self):
+        def fail_without_cancel(_marker, cancel_event=None):
+            raise ControlledStopError("外部轴状态未知")
+
+        self.robot.move_to_marker = fail_without_cancel
+        first = create_unified_command(
+            "task-hardware-unknown", CmdType.TASK_CMD, self.make_task(1)
+        )
+        second = create_unified_command(
+            "task-after-unknown", CmdType.TASK_CMD,
+            self.make_task(2, "marker_2"),
+        )
+        self.scheduler.add_command(first)
+        self.scheduler.add_command(second)
+
+        self.assertTrue(self.wait_for(lambda: first.status == CommandStatus.FAILED))
+        self.assertTrue(self.scheduler._hardware_fault_blocked)
+        time.sleep(0.2)
+        self.assertEqual(second.status, CommandStatus.QUEUED)
+
+    def test_known_non_target_result_can_cancel_without_hardware_block(self):
+        started = threading.Event()
+
+        def known_non_target(_marker, cancel_event=None):
+            started.set()
+            self.assertTrue(cancel_event.wait(2))
+            return False
+
+        self.robot.move_to_marker = known_non_target
+        command = create_unified_command(
+            "task-known-state", CmdType.TASK_CMD, self.make_task(1)
+        )
+        self.scheduler.add_command(command)
+        self.assertTrue(started.wait(2))
+
+        result = self.manager.request_cancel_task("cancel-known-state", 1)
+
+        self.assertEqual(result.status, CommandStatus.COMPLETED)
+        self.assertEqual(command.status, CommandStatus.CANCELLED)
+        self.assertFalse(self.scheduler._hardware_fault_blocked)
 
 
 if __name__ == "__main__":

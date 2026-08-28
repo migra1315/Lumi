@@ -9,6 +9,7 @@ import time
 import requests
 
 from robot.jaka import JAKA
+from robot.HardwareErrors import ControlledStopError
 from utils.logger_config import get_logger
 from utils.voice_player import VoicePlayer
 
@@ -33,6 +34,8 @@ class ArmController(JAKA):
         :param ext_axis_limits: 外部轴关节限制配置
         :param debug: 是否启用调试模式
         """
+        system_config = system_config or {}
+
         # 配置日志
         self.logger = get_logger(__name__)
         
@@ -50,6 +53,25 @@ class ArmController(JAKA):
             self.EXT_RESET_URL = f"{self.ext_base_url}/reset"      # 重置URL
             self.EXT_ENABLE_URL = f"{self.ext_base_url}/enable"    # 使能URL
             self.EXT_GETSTATE_URL = f"{self.ext_base_url}/status"  # 状态获取URL
+        self.ext_request_timeout = (
+            float(system_config.get("ext_connect_timeout_seconds", 3)),
+            float(system_config.get("ext_read_timeout_seconds", 30)),
+        )
+        self.ext_position_tolerance = float(
+            system_config.get("ext_position_tolerance", 0.5)
+        )
+        self.arm_motion_timeout = float(
+            system_config.get("arm_motion_timeout_seconds", 120)
+        )
+        self.arm_stop_timeout = float(
+            system_config.get("arm_stop_timeout_seconds", 5)
+        )
+        self.arm_poll_interval = float(
+            system_config.get("arm_status_poll_interval_seconds", 0.1)
+        )
+        self.arm_joint_tolerance = float(
+            system_config.get("arm_joint_tolerance", 0.01)
+        )
         
         # 加载外部轴关节限制
         self.ext_axis_limits = ext_axis_limits
@@ -125,7 +147,7 @@ class ArmController(JAKA):
             return False
         
         try:
-            response = requests.get(self.EXT_SYSINFO_URL, timeout=2)
+            response = requests.get(self.EXT_SYSINFO_URL, timeout=self.ext_request_timeout)
             if response.status_code == 200:
                 self.logger.info("外部轴连接正常")
                 return True
@@ -146,7 +168,13 @@ class ArmController(JAKA):
             print("外部轴URL未配置")
             return False
             
-        response = requests.post(self.EXT_RESET_URL, json={})
+        try:
+            response = requests.post(
+                self.EXT_RESET_URL, json={}, timeout=self.ext_request_timeout
+            )
+        except requests.RequestException as error:
+            self.logger.error(f"外部轴重置请求异常: {error}")
+            return False
         self.logger.debug(f"外部轴重置请求响应状态: {response}")
         if response.status_code == 200:
             self.logger.info("外部轴重置成功")
@@ -171,6 +199,9 @@ class ArmController(JAKA):
         
         while retry_count < max_retries:
             current_states = self.ext_get_state()
+            if not current_states:
+                self.logger.error("无法读取外部轴使能状态")
+                return False
             
             # 检查所有外部轴是否已经处于目标状态
             all_in_target_state = True
@@ -195,7 +226,11 @@ class ArmController(JAKA):
                 self.ext_reset()
                 
                 # 发送使能/禁用请求
-                response = requests.post(self.EXT_ENABLE_URL, json={"enable": 1 if enable else 0})
+                response = requests.post(
+                    self.EXT_ENABLE_URL,
+                    json={"enable": 1 if enable else 0},
+                    timeout=self.ext_request_timeout,
+                )
                 self.logger.debug(f"外部轴{'使能' if enable else '禁用'}请求响应状态码: {response.status_code}")
                 
                 if response.status_code == 200:
@@ -224,14 +259,33 @@ class ArmController(JAKA):
             print("外部轴URL未配置")
             return None
             
-        response = requests.get(self.EXT_GETSTATE_URL)
-        if response.status_code == 200:
-            return json.loads(response.text)
-        else:
+        try:
+            response = requests.get(
+                self.EXT_GETSTATE_URL, timeout=self.ext_request_timeout
+            )
+            if response.status_code == 200:
+                state = response.json()
+                return state if isinstance(state, list) else None
             self.logger.error(f"获取外部轴状态失败: {response.status_code}")
-            return None
+        except (requests.RequestException, ValueError) as error:
+            self.logger.error(f"获取外部轴状态异常: {error}")
+        return None
+
+    def _ext_state_result(self, states, target):
+        # 返回 (状态是否可解析, 位置是否达到目标)；无法解析时必须按未知处理。
+        if not isinstance(states, list) or len(states) < len(target):
+            return False, False
+        try:
+            positions = [float(state["pos"]) for state in states[:len(target)]]
+            confirmed = all(
+                abs(actual - float(expected)) <= self.ext_position_tolerance
+                for actual, expected in zip(positions, target)
+            )
+            return True, confirmed
+        except (KeyError, TypeError, ValueError):
+            return False, False
     
-    def ext_moveto(self, point, vel=None, acc=None):
+    def ext_moveto(self, point, vel=None, acc=None, cancel_event=None):
         """
         控制外部轴移动到指定位置
         
@@ -243,9 +297,17 @@ class ArmController(JAKA):
         if not self.ext_base_url:
             self.logger.error("外部轴URL未配置")
             return False
-        
+        if cancel_event is not None and cancel_event.is_set():
+            return False
+
+        # 取消前仍需读取一次外部轴状态；读不到状态时抛出受控停止错误并阻塞后续任务。
+        # 外部轴接口没有可靠的中止命令，因此动作作为原子请求完成后再响应 cancel_event。
         # 检查外部轴使能状态
         current_states = self.ext_get_state()
+        if not current_states:
+            if cancel_event is not None and cancel_event.is_set():
+                raise ControlledStopError("取消期间无法确认外部轴状态")
+            return False
         all_in_target_state = True
         for state in current_states:
             self.logger.debug(f"外部轴{state['id']}当前使能状态: {state['enable']}")
@@ -269,18 +331,29 @@ class ArmController(JAKA):
         vel = vel if vel is not None else self.DEFAULT_EXT_VEL
         acc = acc if acc is not None else self.DEFAULT_EXT_ACC
         self.logger.info(f'发送外部轴运动指令, 目标位置: {point}, 速度: {vel}, 加速度: {acc}')
-        response = requests.post(
-            self.EXT_MOVETO_URL,
-            json={"pos": point, "vel": vel, "acc": acc},
+        response = None
+        try:
+            response = requests.post(
+                self.EXT_MOVETO_URL,
+                json={"pos": point, "vel": vel, "acc": acc},
+                timeout=self.ext_request_timeout,
+            )
+            self.logger.info(f'外部轴移动响应: {response}')
+        except requests.RequestException as error:
+            self.logger.error(f"外部轴移动请求异常: {error}")
+
+        # 请求返回不等于运动完成；用位置容差再次确认，避免提前执行下一站点。
+        state_known, confirmed = self._ext_state_result(
+            self.ext_get_state(), point
         )
-        self.logger.info(f'外部轴移动响应: {response}')
-        # TODO:总是收到不到响应，需要检查是否超时
-        if response.status_code == 200:
-            self.logger.info('外部轴移动成功!')
+        if not state_known:
+            raise ControlledStopError("外部轴动作返回后状态无法确认")
+        if response is not None and response.status_code == 200 and confirmed:
+            self.logger.info('外部轴移动成功且位置已确认')
             return True
-        else:
-            self.logger.error(f"外部轴移动失败: {response}")
-            return False
+
+        self.logger.error("外部轴移动失败或目标位置未确认")
+        return False
 
     # ===========================
     # 集成控制功能
@@ -370,7 +443,52 @@ class ArmController(JAKA):
             joints = [0,0,0,0,0,0]
         return joints
     
-    def rob_moveto(self, jpos, vel=None):
+    def _arm_target_reached(self, target):
+        try:
+            joints = self.get_joints()
+            if joints is None or len(joints) != len(target):
+                raise ValueError("JAKA关节状态响应不完整")
+            return all(
+                abs(float(actual) - float(expected)) <= self.arm_joint_tolerance
+                for actual, expected in zip(joints, target)
+            )
+        except ControlledStopError:
+            raise
+        except Exception as error:
+            # 状态接口异常不能被当作“尚未到达”吞掉，否则取消时无法判断是否安全。
+            raise ControlledStopError(f"JAKA运动状态无法确认: {error}") from error
+
+    def _wait_until_arm_stopped(self, timeout=None):
+        # 需要连续两个稳定采样才视为停稳，单次相同读数不足以排除通信旧值。
+        deadline = time.monotonic() + (
+            self.arm_stop_timeout if timeout is None else float(timeout)
+        )
+        previous = None
+        stable_samples = 0
+        while time.monotonic() < deadline:
+            try:
+                joints = self.get_joints()
+                if joints is None or len(joints) != 6:
+                    raise ValueError("JAKA关节状态响应不完整")
+                joints = tuple(float(value) for value in joints)
+                if previous is not None and all(
+                    abs(current - old) <= self.arm_joint_tolerance
+                    for current, old in zip(joints, previous)
+                ):
+                    stable_samples += 1
+                    if stable_samples >= 2:
+                        return True
+                else:
+                    stable_samples = 0
+                previous = joints
+            except Exception as error:
+                self.logger.warning(f"JAKA停止确认读取状态失败: {error}")
+                previous = None
+                stable_samples = 0
+            time.sleep(self.arm_poll_interval)
+        return False
+
+    def rob_moveto(self, jpos, vel=None, cancel_event=None):
         """
         TODO: 机械臂返回数值偶发为-1，需要检查是否为异常值
         控制机器人移动到指定关节角度(弧度)
@@ -382,6 +500,8 @@ class ArmController(JAKA):
         """
 
         vel = vel if vel is not None else self.DEFAULT_ROB_VEL
+        if cancel_event is not None and cancel_event.is_set():
+            return -1
         # self.logger.info(f"输入的关节角度(度): {jpos}")
         
         # # 将角度转换为弧度 - 使用math.radians更精确
@@ -392,6 +512,33 @@ class ArmController(JAKA):
         # 注意参数顺序: joints, sp, move_mode
         # move_mode=0 表示绝对运动模式
         self.logger.info(f"开始执行关节运动, 速度: {vel}, 模式: 绝对运动(0)")
-        ret = self.joint_move_origin(jpos, vel, 0)
-        self.logger.info(f"关节运动结果: {ret}")
-        return ret 
+        # 使用非阻塞 SDK 调用，保留轮询窗口以便及时响应协作取消。
+        ret = self.joint_move_origin(jpos, vel, 0, is_block=False)
+        if ret != 0:
+            self.logger.error(f"关节运动下发失败: {ret}")
+            return -1
+
+        deadline = time.monotonic() + self.arm_motion_timeout
+        while time.monotonic() < deadline:
+            if cancel_event is not None and cancel_event.is_set():
+                # motion_abort 仅发出停止请求；必须继续读取关节状态确认已停稳。
+                if self.motion_abort_origin() != 0:
+                    raise ControlledStopError("JAKA motion_abort调用失败")
+                if not self._wait_until_arm_stopped():
+                    raise ControlledStopError("JAKA中止后未能确认机械臂停止")
+                self.logger.info("JAKA运动已中止并确认停止")
+                return -1
+            if self._arm_target_reached(jpos):
+                self.logger.info("机械臂已确认到达目标关节位置")
+                return 0
+            if cancel_event is not None:
+                cancel_event.wait(self.arm_poll_interval)
+            else:
+                time.sleep(self.arm_poll_interval)
+
+        self.logger.error("机械臂运动超时，尝试中止")
+        if self.motion_abort_origin() != 0:
+            raise ControlledStopError("机械臂运动超时且motion_abort调用失败")
+        if not self._wait_until_arm_stopped():
+            raise ControlledStopError("机械臂运动超时后未能确认停止")
+        return -1

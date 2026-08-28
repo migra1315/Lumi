@@ -42,13 +42,8 @@ except Exception as e1:
         from utils.JAKA_SDK_WINDOWS import jkrc
         print("[INFO] 成功从JAKA_SDK_WINDOWS模块导入jkrc")
     except Exception as e2:
-        raise NameError(
-            f"JAKA SDK path error! 无法导入jkrc模块: {str(e1)} / {str(e2)}\n"
-            f"请确保:\n"
-            f"1. SDK路径正确: {sdk_path}\n"
-            f"2. 已安装 Visual C++ Redistributable 2015-2022\n"
-            f"3. Python 版本与 SDK 编译版本匹配 (通常是 Python 3.8/3.9)"
-        )
+        jkrc = None
+        _JAKA_IMPORT_ERROR = f"{str(e1)} / {str(e2)}"
 
 class JAKA():
     # parameters
@@ -157,15 +152,36 @@ class JAKA():
             time.sleep(0.5)
         return 
 
-    def joint_move_origin(self, joints, sp,move_mode):
+    @staticmethod
+    def sdk_call_succeeded(result):
+        # JAKA SDK 有时返回整数，有时返回 (错误码, 数据)；统一判断错误码 0。
+        if isinstance(result, (tuple, list)):
+            return bool(result) and result[0] == 0
+        return result == 0
+
+    def joint_move_origin(self, joints, sp, move_mode, is_block=True):
         # joints = 180*joints/pi
         move_mode=move_mode if move_mode else 0
         sp=sp if sp else 30
-        ret=self.robot.joint_move(joint_pos=joints, move_mode=move_mode, is_block=True, speed=sp)
-        if ret[0] == 0:
+        ret=self.robot.joint_move(
+            joint_pos=joints,
+            move_mode=move_mode,
+            is_block=is_block,
+            speed=sp,
+        )
+        if self.sdk_call_succeeded(ret):
             return 0
         else:
             return -1
+
+    def motion_abort_origin(self):
+        # 仅封装 SDK 中止调用；调用方必须继续轮询关节位置确认真正停稳。
+        abort = getattr(self.robot, "motion_abort", None)
+        if not callable(abort):
+            self.logger.error("当前JAKA SDK不支持motion_abort")
+            return -1
+        ret = abort()
+        return 0 if self.sdk_call_succeeded(ret) else -1
 
     def get_joints(self):
         # '''
@@ -314,6 +330,9 @@ class JAKA():
         self.logger.info("[JAKA] logout successfully")
 
     def jaka_connect(self):
+        if jkrc is None:
+            self.logger.error(f"JAKA SDK不可用: {_JAKA_IMPORT_ERROR}")
+            return False
         self.logger.info("%s", self.address)
         self.robot = jkrc.RC(self.address)
         if not self.robot:

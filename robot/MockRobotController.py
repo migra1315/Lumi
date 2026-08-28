@@ -130,6 +130,7 @@ class MockRobotController(RobotControllerBase):
 
     def set_action_gate(self, operation_name: str, release_event: threading.Event):
         """测试钩子：让指定 Mock 动作阻塞到 release_event 被设置。"""
+        # started_event 用于确定动作已进入原子区，避免测试在取消前后产生竞态。
         started_event = threading.Event()
         self._action_gates[operation_name] = (started_event, release_event)
         return started_event
@@ -193,7 +194,7 @@ class MockRobotController(RobotControllerBase):
                 self.logger.error(f"环境数据监控异常: {e}")
                 time.sleep(1)
     
-    def move_to_marker(self, marker_id: str) -> bool:
+    def move_to_marker(self, marker_id: str, cancel_event=None) -> bool:
         """Mock移动AGV到标记点"""
         if not self._system_initialized:
             self.logger.error("系统未初始化")
@@ -223,7 +224,7 @@ class MockRobotController(RobotControllerBase):
         
         return success
     
-    def move_robot_to_position(self, position: List[float]) -> bool:
+    def move_robot_to_position(self, position: List[float], cancel_event=None) -> bool:
         """Mock移动机械臂"""
         if not self._system_initialized:
             self.logger.error("系统未初始化")
@@ -250,7 +251,7 @@ class MockRobotController(RobotControllerBase):
         
         return success
     
-    def move_ext_to_position(self, position: List[float]) -> bool:
+    def move_ext_to_position(self, position: List[float], cancel_event=None) -> bool:
         """Mock移动外部轴"""
         if not self._system_initialized:
             self.logger.error("系统未初始化")

@@ -1,4 +1,3 @@
-import time
 import socket
 import sys
 import threading
@@ -7,6 +6,7 @@ import json
 
 sys.path.append('D:\WorkSpace\Lumi')
 from utils.logger_config import get_logger
+from robot.HardwareErrors import ControlledStopError
 import uuid
 
 class AGVController:
@@ -22,12 +22,19 @@ class AGVController:
         :param system_config: 系统配置字典，包含AGV连接信息等
         :param debug: 是否启用调试模式
         """
+        system_config = system_config or {}
+
         # 配置日志
         self.logger = get_logger(__name__)
 
         # AGV控制相关配置
         self.agv_ip = system_config.get("agv_ip")      # AGV IP地址
         self.agv_port = system_config.get("agv_port")  # AGV端口
+        self.socket_timeout = float(system_config.get("agv_socket_timeout_seconds", 5))
+        self.status_poll_interval = float(
+            system_config.get("agv_status_poll_interval_seconds", 0.2)
+        )
+        self.stop_timeout = float(system_config.get("agv_stop_timeout_seconds", 5))
 
         # AGV持续数据接收相关
         self.agv_data_thread = None          # 数据接收线程
@@ -58,6 +65,7 @@ class AGVController:
         try:
             # 创建TCP/IP套接字并连接到服务器
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(self.socket_timeout)
                 sock.connect((self.agv_ip, self.agv_port))
                 _uuid = uuid.uuid4().hex
                 
@@ -101,16 +109,26 @@ class AGVController:
         response = self._send_command_to_agv("/api/robot_status")
         return response
 
-    def agv_moveto(self, point_name):
+    @staticmethod
+    def _move_status(response):
+        # AGV 返回字段可能缺失或大小写不一致；统一为小写，未知值保持 None。
+        if not isinstance(response, dict):
+            return None
+        status = response.get("results", {}).get("move_status")
+        return str(status).strip().lower() if status is not None else None
+
+    def agv_moveto(self, point_name, cancel_event=None):
         """
         控制AGV移动到指定标记点
         
         :param point_name: 目标点位的标记号
         :return: 成功返回True，失败返回False
         """
-        # 发送移动命令
+        # 先下发一次移动命令；取消信号在命令尚未接受时直接阻止下发。
         task_completed = False
         while not task_completed:
+            if cancel_event is not None and cancel_event.is_set():
+                return False
             response = self._send_command_to_agv(f"/api/move?marker={point_name}")
             self.logger.debug(json.dumps(response, indent=4))
             if not response:
@@ -127,10 +145,18 @@ class AGVController:
                 return False
         self.logger.info(f"AGV开始移动到标记点 {point_name}")
 
-        # 等待移动完成
+        # 轮询真实状态；运行中收到取消后必须发 cancel 并确认已停止，不能只返回 False。
         is_done = False
         while not is_done:
-            time.sleep(0.5)
+            if cancel_event is not None and cancel_event.wait(self.status_poll_interval):
+                if not self.agv_cancel_task(
+                    confirm_timeout=self.stop_timeout,
+                    poll_interval=self.status_poll_interval,
+                ):
+                    raise ControlledStopError("AGV取消后未能确认停止")
+                return False
+            if cancel_event is None:
+                time.sleep(self.status_poll_interval)
             try:
                 response = self._send_command_to_agv("/api/robot_status")
                 '''
@@ -138,12 +164,16 @@ class AGVController:
                 当以”location”调用移动接口时, 此字段值为空
                 当调用巡游接口时，此字段为当前正在前往的点位名称
                 '''
-                if response:
-                    if response.get('results', {}).get('move_status') == "succeeded":
+                move_status = self._move_status(response)
+                if move_status:
+                    if move_status == "succeeded":
                         is_done = True
                         self.logger.info(f"AGV已到达标记点 {point_name}")
-                    elif response.get('results', {}).get('move_status') == "failed":
+                    elif move_status == "failed":
                         self.logger.error(f"AGV移动到标记点 {point_name} 失败")
+                        return False
+                    elif move_status in {"canceled", "cancelled", "canceld", "idle"}:
+                        self.logger.warning(f"AGV移动已结束，状态: {move_status}")
                         return False
 
             except Exception as e:
@@ -233,38 +263,66 @@ class AGVController:
             print(f"AGV设置marker点时发生错误: {e}")
             return False
 
-    def agv_cancel_task(self):
+    def agv_cancel_task(self, confirm_timeout=None, poll_interval=None):
         """
         判断当前是否有移动任务，若有则取消当前的移动任务
         
         :return: 成功返回True，失败返回False
         """
+        # 停止确认必须读取实时接口，不能使用监控线程缓存，避免把“未知”误判为已停止。
         try:
-            # 首先判断是否位于移动状态
-            status_response = self.agv_get_status()
+            # 停止确认必须读取实时状态，不能依赖监控线程缓存。
+            status_response = self._send_command_to_agv("/api/robot_status")
         except Exception as e:
             self.logger.error("AGV获取状态时发生错误: %s", e)
             return False
         
+        move_status = self._move_status(status_response)
+        stopped_statuses = {"idle", "canceled", "cancelled", "canceld", "succeeded", "failed"}
+        if move_status in stopped_statuses:
+            self.logger.info(f"当前AGV已停止，状态: {move_status}")
+            return True
+        if move_status != "running":
+            self.logger.error(f"无法确认AGV当前移动状态: {move_status}")
+            return False
+
         # 若有移动任务，发送取消指令
-        if status_response['results']['move_status'] == 'running':
+        if move_status == 'running':
             self.logger.info("当前AGV正在移动中")
             # 发送取消移动指令
             try:
                 response = self._send_command_to_agv("/api/move/cancel")
                 self.logger.debug("任务取消：%s", json.dumps(response, indent=4))
                 if response and response['status'] == 'OK':
-                    self.logger.info("已成功取消当前移动任务")
-                    return True
+                    self.logger.info("AGV取消指令已接受，等待停止确认")
                 else:
                     self.logger.error("取消移动任务失败")
                     return False
             except Exception as e:
                 self.logger.error("AGV获取状态时发生错误: %s", e)
                 return False
-        else:
-            self.logger.info("当前AGV未在移动中")
-            return True
+
+        # cancel 接口通常只表示“请求已接受”，因此在超时前持续轮询终态。
+        timeout = self.stop_timeout if confirm_timeout is None else float(confirm_timeout)
+        interval = self.status_poll_interval if poll_interval is None else float(poll_interval)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                status_response = self._send_command_to_agv("/api/robot_status")
+            except Exception as error:
+                # 停止确认期间通信异常等同于状态未知，不能继续轮询或报告取消成功。
+                self.logger.error("AGV取消后读取停止状态失败: %s", error)
+                return False
+            move_status = self._move_status(status_response)
+            if move_status in stopped_statuses:
+                self.logger.info(f"AGV已确认停止，状态: {move_status}")
+                return True
+            if move_status != "running":
+                self.logger.warning(f"AGV取消后的状态暂不可确认: {move_status}")
+            time.sleep(interval)
+
+        self.logger.error("AGV取消指令已发送，但停止确认超时")
+        return False
 
     def agv_estop(self):
         """

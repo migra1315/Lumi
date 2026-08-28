@@ -70,18 +70,18 @@ class RobotControllerBase(ABC):
         pass
     
     @abstractmethod
-    def move_to_marker(self, marker_id: str) -> bool:
-        """移动AGV到标记点（必须实现）"""
+    def move_to_marker(self, marker_id: str, cancel_event=None) -> bool:
+        """移动AGV到标记点；cancel_event 用于协作取消（必须实现）。"""
         pass
     
     @abstractmethod
-    def move_robot_to_position(self, position: List[float]) -> bool:
-        """移动机械臂到指定位置（必须实现）"""
+    def move_robot_to_position(self, position: List[float], cancel_event=None) -> bool:
+        """移动机械臂到指定位置；底层负责停止确认（必须实现）。"""
         pass
     
     @abstractmethod
-    def move_ext_to_position(self, position: List[float]) -> bool:
-        """移动外部轴到指定位置（必须实现）"""
+    def move_ext_to_position(self, position: List[float], cancel_event=None) -> bool:
+        """移动外部轴到指定位置；原子动作结束后检查 cancel_event（必须实现）。"""
         pass
     
     # ==================== 可选方法（有默认实现） ====================
