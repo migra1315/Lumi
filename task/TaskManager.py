@@ -52,6 +52,7 @@ class TaskManager:
         self._cancel_requests_inflight: Dict[str, threading.Event] = {}
         self._cancel_requests_seen = set()
         cancel_config = self.config.get("task_cancel", {})
+        # 协调器只承载取消控制面请求；容量和等待超时均可配置，避免占满业务线程池。
         self._cancel_wait_timeout = float(cancel_config.get("wait_timeout_seconds", 30))
         coordinator_workers = int(cancel_config.get("coordinator_workers", 4))
         coordinator_capacity = int(cancel_config.get("coordinator_capacity", 32))
@@ -70,6 +71,7 @@ class TaskManager:
         # 初始化数据库和调度器
         self.database = TaskDatabase()
         recovery_message = "机器人进程重启，取消请求结果未知，按失败收敛"
+        # 进程重启后无法证明硬件是否停止，所有遗留 pending 请求必须先落为失败。
         for pending in self.database.fail_pending_task_cancel_requests(recovery_message):
             self.database.update_command_status(
                 pending["cancel_command_id"], CommandStatus.FAILED, recovery_message
@@ -545,6 +547,8 @@ class TaskManager:
 
     def request_cancel_task(self, cancel_command_id: str, task_id: int) -> UnifiedCommand:
         """协调任务取消，并只触发一次取消请求的最终状态回调。"""
+        # cancel_command_id 标识“取消请求”本身；task_id 才是要停止的业务任务。
+        # 两者分离后，重复投递同一取消命令可以幂等重放，且不会误取消其他任务。
         # __new__ 构造的轻量测试实例也使用同一套并发语义。
         if not hasattr(self, "_cancel_request_lock"):
             self._cancel_request_lock = threading.RLock()
@@ -554,6 +558,7 @@ class TaskManager:
         wait_event = None
         recovered_pending = False
         with self._cancel_request_lock:
+            # 数据库中的 pending 记录用于跨进程/重启恢复；进程内 event 只负责唤醒并发等待者。
             created = self.database.begin_task_cancel_request(cancel_command_id, str(task_id))
             if created:
                 owner_event = threading.Event()
@@ -578,6 +583,7 @@ class TaskManager:
                     recovered_pending = True
 
         if wait_event is not None:
+            # 非 owner 请求不重复触碰硬件，等待 owner 提交终态后读取同一结果。
             wait_event.wait()
             saved = self.database.get_task_cancel_request(cancel_command_id)
             if saved and saved["status"] == "pending":
@@ -644,6 +650,7 @@ class TaskManager:
             self.database.save_command(cancel_command)
             result = self.scheduler.cancel_task(task_id)
             if result.get("pending"):
+                # 运行中取消先设置 cancel_event，由工作线程在原子动作边界执行停止并确认。
                 # 该等待只发生在独立取消协调线程，不占用业务 executor。
                 wait_timeout = getattr(self, "_cancel_wait_timeout", 30.0)
                 completed = result["event"].wait(wait_timeout)
@@ -696,6 +703,7 @@ class TaskManager:
                 )
         finally:
             with self._cancel_request_lock:
+                # 无论硬件/数据库结果如何，都唤醒同一 command_id 的等待者。
                 event = self._cancel_requests_inflight.pop(cancel_command_id, None)
                 if event is not None:
                     event.set()
@@ -712,6 +720,7 @@ class TaskManager:
 
     def request_cancel_task_async(self, cancel_command_id: str, task_id: int):
         """立即返回；相同 command_id 只占用一个有界协调 worker。"""
+        # 协议线程只负责入队，实际取消在有界线程池执行，避免阻塞 gRPC 接收循环。
         if not hasattr(self, "_cancel_request_lock"):
             self._cancel_request_lock = threading.RLock()
             self._cancel_requests_inflight = {}
@@ -735,6 +744,7 @@ class TaskManager:
             except Exception:
                 self.logger.exception(f"异步取消处理异常: {cancel_command_id}")
         with self._cancel_request_lock:
+            # future 按取消 command_id 去重；同一 ID 的重试共享原任务结果。
             existing = self._async_cancel_futures.get(cancel_command_id)
             if existing is not None:
                 return existing
@@ -748,6 +758,7 @@ class TaskManager:
                 self._async_cancel_futures[cancel_command_id] = future
 
         if not has_slot:
+            # 槽位耗尽时立即持久化失败终态，让上游重试而不是无限排队。
             # SQLite 和回调必须在 _cancel_request_lock 之外执行。
             self.logger.error(f"取消协调队列已满: {cancel_command_id}")
             rejected = Future()
@@ -768,6 +779,7 @@ class TaskManager:
 
     def _settle_cancel_overload(self, cancel_command_id: str, task_id: int):
         """容量拒绝也按正常取消请求完成幂等终态收敛。"""
+        # 即使未进入协调线程，也保留原 command_id→task_id 绑定，防止后续重放改写目标。
         message = "取消协调队列已满，请稍后重试"
         created = self.database.begin_task_cancel_request(
             cancel_command_id, str(task_id)

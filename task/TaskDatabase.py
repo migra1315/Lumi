@@ -589,6 +589,7 @@ class TaskDatabase:
             return cursor.rowcount == 1
 
     def get_task_cancel_request(self, cancel_command_id: str) -> Optional[Dict[str, Any]]:
+        # 以取消请求自身 ID 查询，调用方据此重放原 task_id 和最终状态。
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -620,6 +621,7 @@ class TaskDatabase:
         message: str
     ) -> bool:
         """条件提交取消请求终态；仅 pending 可成功提交。"""
+        # 条件 UPDATE 保证并发重试只有一个调用者能提交 pending→终态。
         if status not in (CommandStatus.COMPLETED, CommandStatus.FAILED):
             raise ValueError("取消请求只允许保存 COMPLETED 或 FAILED 终态")
         with self._get_connection() as conn:

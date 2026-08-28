@@ -46,6 +46,7 @@ def convert_server_message_to_command_envelope(
         robot_pb2.CmdType.CANCEL_TASK_CMD: CmdType.CANCEL_TASK_CMD,
     }
 
+    # 取消命令同样沿用服务端 command_id 作为幂等键，但目标由 task_cmd.task_id 指定。
     if server_cmd_request.command_type not in cmd_type_map:
         raise CommandValidationError(
             f"不支持的命令类型: {server_cmd_request.command_type}"
@@ -67,6 +68,7 @@ def convert_server_message_to_command_envelope(
         robot_pb2.RobotMode.CHARGE: RobotMode.CHARGE,
     }
     if cmd_type == CmdType.CANCEL_TASK_CMD:
+        # 取消请求不携带完整 Task；严格要求 task_cmd oneof，避免默认 task_id=0 误取消。
         oneof_field = server_cmd_request.WhichOneof('data_json')
         if oneof_field != 'task_cmd':
             raise CommandValidationError(

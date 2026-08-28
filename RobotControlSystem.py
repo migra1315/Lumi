@@ -827,6 +827,7 @@ class RobotControlSystem:
 
             # 取消命令即时分流，不进入普通队列，也不产生 QUEUED/RUNNING 反馈。
             if cmd_type == CmdType.CANCEL_TASK_CMD:
+                # 取消命令不进入普通任务队列：立即交给有界协调器，并以 msg_id 做幂等键。
                 self.task_manager.request_cancel_task_async(
                     msg_id, command_envelope.data.task_id
                 )

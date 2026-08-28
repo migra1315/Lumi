@@ -90,6 +90,7 @@ CMD_TYPE_TO_CATEGORY = {
     CmdType.POSITION_ADJUST_CMD: CommandCategory.CONFIGURATION,
     CmdType.HARDWARE_START_CMD: CommandCategory.CONTROL,
     CmdType.HARDWARE_SHUTDOWN_CMD: CommandCategory.CONTROL,
+    # 取消请求是控制面消息；RobotControlSystem 会即时分流，不实际入队。
     CmdType.CANCEL_TASK_CMD: CommandCategory.CONTROL,
 }
 
