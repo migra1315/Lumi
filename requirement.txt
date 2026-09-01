@@ -1,0 +1,18 @@
+# Python 3.10.x (production logs record Python 3.10.11)
+
+# gRPC / Protobuf. These versions match the checked-in generated code.
+grpcio==1.76.0
+grpcio-tools==1.76.0
+protobuf==6.31.1
+
+# HTTP, serial devices, image processing, and coordinate transforms.
+requests==2.32.5
+pyserial==3.5
+numpy==1.26.4
+opencv-python==4.11.0.86
+
+# Orbbec's package is named pyorbbecsdk2 but provides the pyorbbecsdk module.
+pyorbbecsdk2==2.1.2
+
+# JAKA is not a PyPI dependency. The vendor-provided jkrc extension and native
+# libraries are loaded directly from utils/JAKA_SDK_WINDOWS by robot/jaka.py.

@@ -1,5 +1,7 @@
 __pycache__/*
 *.pyc
+.venv/
+.python/
 utils/JAKA_SDK_LINUX_ARM/*
 utils/JAKA_SDK_LINUX_X86/*
 utils/JAKA_SDK_WINDOWS/*
