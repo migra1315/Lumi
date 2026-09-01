@@ -83,6 +83,10 @@ class RobotControllerBase(ABC):
     def move_ext_to_position(self, position: List[float], cancel_event=None) -> bool:
         """移动外部轴到指定位置；原子动作结束后检查 cancel_event（必须实现）。"""
         pass
+
+    def recover_transport_safe_pose(self, arm_joints: List[float]) -> bool:
+        """将机械臂恢复到允许机器人运输移动的固定安全关节位。"""
+        return self.move_robot_to_position(arm_joints, cancel_event=None)
     
     # ==================== 可选方法（有默认实现） ====================
     def get_status(self) -> Dict[str, Any]:
@@ -134,7 +138,8 @@ class RobotControllerBase(ABC):
         self.status = RobotStatus.IDLE
         return True
     
-    def charge(self, duration: float = 10.0) -> bool:
+    def charge(self, duration: float = 10.0, marker_id: str = None,
+               cancel_event=None) -> bool:
         """充电操作（有默认实现，子类可重写）"""
         self.logger.info(f"开始充电: {duration}秒（基类模拟实现）")
         self.status = RobotStatus.CHARGING
@@ -143,6 +148,9 @@ class RobotControllerBase(ABC):
         import time
         start_time = time.time()
         while time.time() - start_time < min(duration, 5.0):
+            if cancel_event is not None and cancel_event.is_set():
+                self.status = RobotStatus.IDLE
+                return False
             self.battery_level = min(100.0, self.battery_level + 20.0)
             time.sleep(0.5)
 

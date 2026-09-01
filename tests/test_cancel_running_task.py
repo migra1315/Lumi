@@ -103,6 +103,8 @@ class CancelRunningTaskTests(unittest.TestCase):
         self.assertEqual(task.station_list[0].status, StationTaskStatus.CANCELLED)
         self.assertEqual(task.station_list[1].status, StationTaskStatus.CANCELLED)
         self.assertEqual(self.robot.action_history.count("move_to_marker_1"), 1)
+        self.assertEqual(self.robot.robot_joints, [0.0] * 6)
+        self.assertEqual(self.robot.action_history.count("move_robot"), 1)
         self.assertEqual(len(self.feedback), 1)
 
     def test_next_task_does_not_start_before_cancelled_worker_exits(self):
@@ -164,12 +166,74 @@ class CancelRunningTaskTests(unittest.TestCase):
         )
         self.scheduler.add_command(command)
         self.assertTrue(retry_started.wait(2))
+        # 通信故障只用于触发重试；取消终态新增的安全姿态恢复必须能正常执行。
+        self.robot.set_error_scenario("communication_error", False)
         started_at = time.monotonic()
         result = self.manager.request_cancel_task("cancel-retry", 1)
         self.assertLess(time.monotonic() - started_at, 0.8)
         self.assertEqual(result.status, CommandStatus.COMPLETED)
         self.assertEqual(command.retry_count, 0)
         self.assertEqual(command.status, CommandStatus.CANCELLED)
+
+    def test_safe_pose_recovery_failure_fails_cancel_and_blocks_scheduler(self):
+        release = threading.Event()
+        started = self.robot.set_action_gate("move_to_marker_1", release)
+        command = create_unified_command(
+            "task-safe-pose-failure", CmdType.TASK_CMD, self.make_task()
+        )
+        self.scheduler.add_command(command)
+        self.assertTrue(started.wait(2))
+        self.robot.recover_transport_safe_pose = lambda _joints: False
+
+        result_box = {}
+        cancel_thread = threading.Thread(
+            target=lambda: result_box.setdefault(
+                "result",
+                self.manager.request_cancel_task("cancel-safe-pose-failure", 1),
+            )
+        )
+        cancel_thread.start()
+        self.assertTrue(self.wait_for(
+            lambda: self.scheduler._active_tasks[1]["cancel_event"].is_set()
+        ))
+        release.set()
+        cancel_thread.join(3)
+
+        self.assertFalse(cancel_thread.is_alive())
+        self.assertEqual(result_box["result"].status, CommandStatus.FAILED)
+        self.assertEqual(command.status, CommandStatus.CANCELLED)
+        self.assertTrue(self.scheduler.is_hardware_fault_blocked())
+
+    def test_successful_robot_reinitialization_clears_hardware_fault_block(self):
+        self.scheduler._hardware_fault_blocked = True
+        self.scheduler._hardware_fault_reason = "安全姿态恢复失败"
+        self.manager._hardware_lock = threading.RLock()
+        self.manager._hardware_status = {
+            "robot": False, "camera": False, "env_sensor": False,
+        }
+        self.manager.robot_controller = self.robot
+        self.robot.setup_system = lambda: True
+
+        result = self.manager.start_hardware(robot=True)
+
+        self.assertTrue(result["robot"]["success"])
+        self.assertIn("调度阻塞已解除", result["robot"]["message"])
+        self.assertFalse(self.scheduler.is_hardware_fault_blocked())
+
+    def test_starting_already_running_robot_does_not_clear_fault_block(self):
+        self.scheduler._hardware_fault_blocked = True
+        self.scheduler._hardware_fault_reason = "安全姿态恢复失败"
+        self.manager._hardware_lock = threading.RLock()
+        self.manager._hardware_status = {
+            "robot": True, "camera": False, "env_sensor": False,
+        }
+        self.manager.robot_controller = self.robot
+
+        result = self.manager.start_hardware(robot=True)
+
+        self.assertTrue(result["robot"]["success"])
+        self.assertEqual(result["robot"]["message"], "机器人模块已在运行中")
+        self.assertTrue(self.scheduler.is_hardware_fault_blocked())
 
     def test_cancel_flag_wins_completion_callback_race(self):
         self.scheduler.stop()

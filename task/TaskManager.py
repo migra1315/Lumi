@@ -52,6 +52,8 @@ class TaskManager:
         self._cancel_requests_inflight: Dict[str, threading.Event] = {}
         self._cancel_requests_seen = set()
         cancel_config = self.config.get("task_cancel", {})
+        safe_pose_config = cancel_config.get("safe_pose", {})
+        charging_config = self.config.get("charging", {})
         # 协调器只承载取消控制面请求；容量和等待超时均可配置，避免占满业务线程池。
         self._cancel_wait_timeout = float(cancel_config.get("wait_timeout_seconds", 30))
         coordinator_workers = int(cancel_config.get("coordinator_workers", 4))
@@ -96,6 +98,16 @@ class TaskManager:
             self.database,
             allow_running_task_cancel=bool(
                 cancel_config.get("allow_running_task_cancel", False)
+            ),
+            safe_arm_joints=safe_pose_config.get(
+                "arm_joints", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            ),
+            auto_charge_after_cancel=bool(
+                charging_config.get("auto_charge_after_cancel", False)
+            ),
+            charge_marker=charging_config.get("marker"),
+            auto_charge_priority=int(
+                charging_config.get("auto_charge_priority", 9)
             ),
         )
 
@@ -187,6 +199,13 @@ class TaskManager:
                             self._hardware_status["robot"] = True
                             results["robot"]["success"] = True
                             results["robot"]["message"] = "机器人模块启动成功"
+                            scheduler = getattr(self, "scheduler", None)
+                            if (scheduler is not None and
+                                    scheduler.is_hardware_fault_blocked()):
+                                # 硬件启动命令绕过普通调度队列；只有真实重新初始化成功
+                                # 才能作为人工故障恢复入口解除调度阻塞。
+                                scheduler.clear_hardware_fault_block()
+                                results["robot"]["message"] += "，调度阻塞已解除"
                             self.logger.info("机器人模块已启动")
                         else:
                             results["robot"]["message"] = "机器人系统初始化失败"
@@ -698,9 +717,34 @@ class TaskManager:
                     )
                 except Exception:
                     self.logger.exception("取消请求审计日志写入失败")
+
+                # 取消请求的终态先反馈给上位机；自动回充是随后发生的内部行为，
+                # 不得抢在最终反馈之前驱动硬件，也不追溯修改取消结果。
                 self._trigger_system_callback(
                     "on_command_status_change", command=cancel_command
                 )
+
+                if cancel_command.status == CommandStatus.COMPLETED:
+                    try:
+                        auto_charge_result = (
+                            self.scheduler.schedule_auto_charge_after_cancel(
+                                task_id, cancel_command_id
+                            )
+                        )
+                        cancel_command.metadata["auto_charge"] = auto_charge_result
+                        try:
+                            self.database.update_command_metadata(
+                                cancel_command_id, cancel_command.metadata
+                            )
+                        except Exception:
+                            self.logger.exception(
+                                "取消请求自动回充决策 metadata 写入失败"
+                            )
+                    except Exception:
+                        # 自动回充是取消成功后的内部行为，不追溯修改已提交的取消结果。
+                        self.logger.exception(
+                            f"取消成功后生成自动回充命令失败: task_id={task_id}"
+                        )
         finally:
             with self._cancel_request_lock:
                 # 无论硬件/数据库结果如何，都唤醒同一 command_id 的等待者。

@@ -11,7 +11,9 @@ from dataModels.TaskModels import (
     Task, Station, OperationMode,
     TaskStatus, StationTaskStatus, StationExecutionPhase, OperationConfig, RobotMode
 )
-from dataModels.UnifiedCommand import UnifiedCommand, CommandStatus
+from dataModels.UnifiedCommand import (
+    UnifiedCommand, CommandStatus, create_unified_command,
+)
 from robot.HardwareErrors import ControlledStopError
 from task.TaskDatabase import TaskDatabase
 from utils.logger_config import get_logger
@@ -25,7 +27,11 @@ class TaskScheduler:
     """任务调度器 - 负责任务的调度和执行（支持统一命令队列）"""
 
     def __init__(self, robot_controller, database: TaskDatabase,
-                 allow_running_task_cancel: bool = False):
+                 allow_running_task_cancel: bool = False,
+                 safe_arm_joints=None,
+                 auto_charge_after_cancel: bool = False,
+                 charge_marker: Optional[str] = None,
+                 auto_charge_priority: int = 9):
         self.robot_controller = robot_controller
         self.database = database
         # 使用优先级队列，支持UnifiedCommand
@@ -41,7 +47,22 @@ class TaskScheduler:
         self._active_tasks: Dict[int, Dict[str, Any]] = {}
         # 仅保留当前进程内、最近一个已取消任务代际，供不同取消命令幂等查询。
         self._cancelled_task_generations: Dict[int, Dict[str, Any]] = {}
+        self._task_enqueue_generation = 0
         self.allow_running_task_cancel = allow_running_task_cancel
+        configured_safe_joints = (
+            [0.0] * 6 if safe_arm_joints is None else safe_arm_joints
+        )
+        if (not isinstance(configured_safe_joints, (list, tuple)) or
+                len(configured_safe_joints) != 6):
+            raise ValueError("task_cancel.safe_pose.arm_joints 必须包含 6 个关节值")
+        self.safe_arm_joints = [float(value) for value in configured_safe_joints]
+        self.auto_charge_after_cancel = bool(auto_charge_after_cancel)
+        self.charge_marker = (
+            charge_marker.strip() if isinstance(charge_marker, str) else None
+        )
+        self.auto_charge_priority = int(auto_charge_priority)
+        if self.auto_charge_priority <= 5:
+            raise ValueError("charging.auto_charge_priority 必须大于 TASK_CMD 优先级 5")
         self._hardware_fault_blocked = False
         self._hardware_fault_reason = None
         # self.voice_player = VoicePlayer()
@@ -103,6 +124,7 @@ class TaskScheduler:
                 self.database.save_command(command)
                 # 新任务代际开始，旧代际的取消墓碑不再适用。
                 self._cancelled_task_generations.pop(task.task_id, None)
+                self._task_enqueue_generation += 1
                 self._active_tasks[task.task_id] = {
                     "command": command,
                     "cancel_event": threading.Event(),
@@ -110,6 +132,22 @@ class TaskScheduler:
                     "cancel_complete_event": threading.Event(),
                     "cancel_result": None,
                 }
+
+                # 自动回充移动可被新业务任务抢占；底层仍须完成受控停止确认。
+                current = self.current_command
+                if (self._is_internal_auto_charge(current) and
+                        current.status not in (
+                            CommandStatus.COMPLETED,
+                            CommandStatus.FAILED,
+                            CommandStatus.CANCELLED,
+                        )):
+                    cancel_event = getattr(current, "cancel_event", None)
+                    if cancel_event is not None:
+                        cancel_event.set()
+                        self.logger.info(
+                            f"新任务 {task.task_id} 到达，请求停止自动回充: "
+                            f"{current.command_id}"
+                        )
 
                 self.command_queue.put(command)
             else:
@@ -172,7 +210,15 @@ class TaskScheduler:
 
     def _execute_command(self, command: UnifiedCommand):
         """执行命令（统一入口）"""
+        skip_reason = None
         with self._task_registry_lock:
+            if self._is_internal_auto_charge(command):
+                skip_reason = self._auto_charge_skip_reason_locked(command)
+                if skip_reason:
+                    command.status = CommandStatus.CANCELLED
+                    command.completed_at = datetime.now()
+                    command.error_message = skip_reason
+
             if command.cmd_type == CmdType.TASK_CMD:
                 task = command.data
                 entry = self._active_tasks.get(task.task_id)
@@ -187,7 +233,32 @@ class TaskScheduler:
                     return
                 entry["state"] = "running"
 
-            self.current_command = command
+            if not skip_reason:
+                self.current_command = command
+
+        if skip_reason:
+            try:
+                self.database.update_command_status(
+                    command.command_id,
+                    CommandStatus.CANCELLED,
+                    command.error_message,
+                )
+                self.database.log_task_action(
+                    str(command.metadata.get("cancelled_task_id", "")),
+                    "",
+                    "auto_charge_after_cancel",
+                    "cancelled",
+                    skip_reason,
+                )
+            except Exception:
+                self.logger.exception(
+                    f"自动回充跳过状态落盘失败: {command.command_id}"
+                )
+            self.command_queue.task_done()
+            self.logger.info(
+                f"跳过自动回充命令 {command.command_id}: {skip_reason}"
+            )
+            return
 
         # 更新命令状态为运行中
         command.status = CommandStatus.RUNNING
@@ -195,7 +266,8 @@ class TaskScheduler:
         self.database.update_command_status(command.command_id, CommandStatus.RUNNING)
 
         # 触发命令状态变化回调
-        self._trigger_callback("on_command_status_change", command)
+        if not self._is_internal_auto_charge(command):
+            self._trigger_callback("on_command_status_change", command)
 
         self.logger.info(f"开始执行命令: {command.command_id}, 类型: {command.cmd_type.value}")
 
@@ -282,7 +354,7 @@ class TaskScheduler:
             task = command.data
             task.status = TaskStatus.CANCELLED
             for station in task.station_list:
-                if station.status not in (StationTaskStatus.COMPLETED, StationTaskStatus.FAILED):
+                if station.status != StationTaskStatus.COMPLETED:
                     station.status = StationTaskStatus.CANCELLED
 
             # 内存终态与代际墓碑在同一临界区先提交。原命令终态落盘失败时，
@@ -315,6 +387,157 @@ class TaskScheduler:
                 # 审计是非关键附属写，不反转已经持久化的取消终态。
                 self.logger.exception(f"等待任务取消审计写入失败: {task_id}")
             return dict(tombstone)
+
+    def schedule_auto_charge_after_cancel(
+        self, task_id: int, cancel_command_id: str
+    ) -> Dict[str, Any]:
+        """在取消终态已提交后，原子决定是否生成低优先级内部回充命令。"""
+        result = None
+        with self._task_registry_lock:
+            tombstone = self._cancelled_task_generations.get(task_id)
+            if tombstone is None or not tombstone.get("success"):
+                return {
+                    "scheduled": False,
+                    "reason": "目标任务没有可用于回充决策的成功取消终态",
+                }
+
+            previous = tombstone.get("auto_charge_result")
+            if tombstone.get("auto_charge_decided"):
+                replay = dict(previous or {
+                    "scheduled": False,
+                    "reason": "该任务代际已经完成自动回充决策",
+                })
+                replay["replayed"] = True
+                return replay
+
+            if not self.auto_charge_after_cancel:
+                result = {
+                    "scheduled": False,
+                    "reason": "取消后自动回充配置未启用",
+                }
+            elif self._hardware_fault_blocked:
+                result = {
+                    "scheduled": False,
+                    "reason": f"硬件故障阻塞中: {self._hardware_fault_reason}",
+                }
+            elif not self.charge_marker:
+                result = {
+                    "scheduled": False,
+                    "reason": "charging.marker 未配置，不生成自动回充命令",
+                }
+            elif self._has_runnable_task_locked(task_id):
+                result = {
+                    "scheduled": False,
+                    "reason": "取消后仍有后续任务，继续执行任务且不自动回充",
+                }
+            else:
+                target_command_id = tombstone["target_command_id"]
+                auto_charge_command_id = (
+                    f"auto-charge-after-cancel:{target_command_id}"
+                )
+                existing = self.database.get_command_by_id(auto_charge_command_id)
+                if existing is not None:
+                    result = {
+                        "scheduled": False,
+                        "reason": "自动回充命令已存在，不重复生成",
+                        "command_id": auto_charge_command_id,
+                    }
+                else:
+                    command = create_unified_command(
+                        command_id=auto_charge_command_id,
+                        cmd_type=CmdType.CHARGE_CMD,
+                        data={"charge": True},
+                        priority=self.auto_charge_priority,
+                        metadata={
+                            "internal": True,
+                            "source": "auto_charge_after_task_cancel",
+                            "cancelled_task_id": task_id,
+                            "cancel_command_id": cancel_command_id,
+                            "task_enqueue_generation": self._task_enqueue_generation,
+                            "charge_marker": self.charge_marker,
+                        },
+                    )
+                    command.cancel_event = threading.Event()
+                    command.status = CommandStatus.QUEUED
+                    # 与 TASK_CMD 入队相同：先持久化，再向内存队列发布。
+                    self.database.save_command(command)
+                    self.command_queue.put(command)
+                    result = {
+                        "scheduled": True,
+                        "reason": "取消后无后续任务，已生成内部自动回充命令",
+                        "command_id": auto_charge_command_id,
+                    }
+
+            tombstone["auto_charge_decided"] = True
+            tombstone["auto_charge_result"] = dict(result)
+
+        try:
+            self.database.log_task_action(
+                str(task_id),
+                "",
+                "auto_charge_after_cancel",
+                "queued" if result["scheduled"] else "skipped",
+                f"cancel_command_id={cancel_command_id}; {result['reason']}",
+            )
+        except Exception:
+            self.logger.exception(f"自动回充决策审计写入失败: {task_id}")
+        return result
+
+    def _has_runnable_task_locked(self, cancelled_task_id: int) -> bool:
+        runnable_states = {"queued", "running", "cancelling", "terminalizing"}
+        return any(
+            task_id != cancelled_task_id and entry.get("state") in runnable_states
+            for task_id, entry in self._active_tasks.items()
+        )
+
+    @staticmethod
+    def _is_internal_auto_charge(command) -> bool:
+        return bool(
+            command is not None and
+            command.cmd_type == CmdType.CHARGE_CMD and
+            command.metadata and
+            command.metadata.get("internal") and
+            command.metadata.get("source") == "auto_charge_after_task_cancel"
+        )
+
+    def _auto_charge_skip_reason_locked(self, command) -> Optional[str]:
+        cancel_event = getattr(command, "cancel_event", None)
+        if cancel_event is not None and cancel_event.is_set():
+            return "新任务已到达，自动回充在执行前取消"
+        if self._hardware_fault_blocked:
+            return f"硬件故障阻塞中，自动回充取消: {self._hardware_fault_reason}"
+        if not self.charge_marker:
+            return "charging.marker 未配置，自动回充取消"
+        expected_generation = command.metadata.get("task_enqueue_generation")
+        if expected_generation != self._task_enqueue_generation:
+            return "自动回充生成后收到过新任务，跳过本次回充"
+        if self._has_runnable_task_locked(
+            command.metadata.get("cancelled_task_id")
+        ):
+            return "存在后续可执行任务，跳过本次自动回充"
+        return None
+
+    def _recover_transport_safe_pose(self):
+        """恢复配置的运输安全关节位；失败统一升级为硬件状态未知。"""
+        try:
+            recover = getattr(
+                self.robot_controller, "recover_transport_safe_pose", None
+            )
+            if recover is not None:
+                success = recover(self.safe_arm_joints)
+            else:
+                success = self.robot_controller.move_robot_to_position(
+                    self.safe_arm_joints, cancel_event=None
+                )
+        except ControlledStopError:
+            raise
+        except Exception as error:
+            raise ControlledStopError(
+                f"机械臂恢复运输安全姿态异常: {error}"
+            ) from error
+        if not success:
+            raise ControlledStopError("机械臂恢复运输安全姿态失败")
+        return True
 
     # 保留第二步 API 兼容性。
     cancel_waiting_task = cancel_task
@@ -397,6 +620,16 @@ class TaskScheduler:
         task = command.data
         decision = entry["terminal_decision"]
         cancelled = decision == CommandStatus.CANCELLED
+        cancel_result = entry.get("cancel_result") if entry.get("shutdown_notified") else None
+        if (cancelled and cancel_result is None and
+                not isinstance(execution_error, ControlledStopError)):
+            try:
+                self._recover_transport_safe_pose()
+                command.metadata["safe_pose_recovered"] = True
+                command.metadata["safe_arm_joints"] = list(self.safe_arm_joints)
+            except ControlledStopError as error:
+                execution_error = error
+                command.metadata["safe_pose_recovered"] = False
         controlled_stop_failed = isinstance(execution_error, ControlledStopError)
         reason = (
             f"任务已取消，但受控停止失败: {execution_error}"
@@ -406,11 +639,11 @@ class TaskScheduler:
             f"回调异常: {execution_error}" if execution_error else
             command.error_message or "命令执行失败"
         )
-        cancel_result = entry.get("cancel_result") if entry.get("shutdown_notified") else None
         if controlled_stop_failed:
             # 无法确认硬件已停稳时阻塞后续调度，须人工确认并调用 clear_hardware_fault_block。
-            self._hardware_fault_blocked = True
-            self._hardware_fault_reason = reason
+            with self._task_registry_lock:
+                self._hardware_fault_blocked = True
+                self._hardware_fault_reason = reason
             self.logger.error(f"硬件状态不安全，调度已阻塞: {reason}")
         if cancelled and controlled_stop_failed and cancel_result is None:
             cancel_result = {
@@ -471,30 +704,72 @@ class TaskScheduler:
                         )
         finally:
             with self._task_registry_lock:
-                # 先写入代际墓碑并唤醒等待者，再释放 task_id；重复取消可稳定重放结果。
+                # 先写入代际墓碑并释放 task_id，再唤醒等待者；自动回充决策由同一把锁串行化。
                 if cancelled:
                     entry["cancel_result"] = cancel_result or {"success": False, "message": f"取消终态未知: {task.task_id}", "target_command_id": command.command_id}
                     self._cancelled_task_generations[task.task_id] = dict(entry["cancel_result"])
-                    entry["cancel_complete_event"].set()
                 current = self._active_tasks.get(task.task_id)
                 if current is entry:
                     self._active_tasks.pop(task.task_id, None)
+                if cancelled:
+                    entry["cancel_complete_event"].set()
 
     def clear_hardware_fault_block(self):
         """由人工确认硬件安全并完成故障恢复后解除调度阻塞。"""
-        self._hardware_fault_blocked = False
-        self._hardware_fault_reason = None
+        with self._task_registry_lock:
+            self._hardware_fault_blocked = False
+            self._hardware_fault_reason = None
         self.logger.warning("硬件故障调度阻塞已由外部恢复流程解除")
+
+    def is_hardware_fault_blocked(self) -> bool:
+        with self._task_registry_lock:
+            return self._hardware_fault_blocked
 
     def _finalize_non_task_command(self, command, success, execution_error):
         try:
-            status = CommandStatus.COMPLETED if success and execution_error is None else CommandStatus.FAILED
+            internal_auto_charge = self._is_internal_auto_charge(command)
+            cancel_event = getattr(command, "cancel_event", None)
+            cancelled = bool(
+                internal_auto_charge and cancel_event is not None and
+                cancel_event.is_set() and
+                not isinstance(execution_error, ControlledStopError)
+            )
+            status = (
+                CommandStatus.CANCELLED if cancelled else
+                CommandStatus.COMPLETED
+                if success and execution_error is None else
+                CommandStatus.FAILED
+            )
             command.status = status
             command.completed_at = datetime.now()
             if execution_error:
                 command.error_message = f"回调异常: {execution_error}"
+            if isinstance(execution_error, ControlledStopError):
+                reason = f"自动回充期间硬件状态无法确认: {execution_error}"
+                with self._task_registry_lock:
+                    self._hardware_fault_blocked = True
+                    self._hardware_fault_reason = reason
+                command.error_message = reason
+                self.logger.error(f"硬件状态不安全，调度已阻塞: {reason}")
             self.database.update_command_status(command.command_id, status, command.error_message)
-            self._trigger_callback("on_command_complete" if success else "on_command_failed", command)
+            if internal_auto_charge:
+                try:
+                    self.database.log_task_action(
+                        str(command.metadata.get("cancelled_task_id", "")),
+                        "",
+                        "auto_charge_after_cancel",
+                        status.value,
+                        command.error_message or "自动回充命令执行完成",
+                    )
+                except Exception:
+                    self.logger.exception(
+                        f"自动回充终态审计写入失败: {command.command_id}"
+                    )
+            else:
+                self._trigger_callback(
+                    "on_command_complete" if success else "on_command_failed",
+                    command,
+                )
         except Exception:
             self.logger.exception(f"非任务命令终态处理失败: {command.command_id}")
 
@@ -1003,14 +1278,44 @@ class TaskScheduler:
     def _execute_charge_command(self, command: UnifiedCommand) -> bool:
         """执行充电命令 (Trigger信号，无需参数)"""
         try:
-            self.logger.info("执行充电命令 (Trigger信号)")
-            success = self.robot_controller.charge()
+            internal_auto_charge = self._is_internal_auto_charge(command)
+            cancel_event = (
+                getattr(command, "cancel_event", None)
+                if internal_auto_charge else None
+            )
+            marker = (
+                command.metadata.get("charge_marker")
+                if internal_auto_charge else self.charge_marker
+            )
+            if not marker:
+                command.error_message = "charging.marker 未配置"
+                return False
+
+            if internal_auto_charge:
+                if cancel_event is not None and cancel_event.is_set():
+                    command.error_message = "新任务到达，自动回充已取消"
+                    return False
+                # 等待任务取消不改变硬件；在真正驱动 AGV 前统一恢复/确认安全关节位。
+                self._recover_transport_safe_pose()
+                if cancel_event is not None and cancel_event.is_set():
+                    command.error_message = "安全姿态恢复期间收到新任务，自动回充已取消"
+                    return False
+
+            self.logger.info(f"执行充电命令，目标点位: {marker}")
+            success = self.robot_controller.charge(
+                marker_id=marker, cancel_event=cancel_event
+            )
 
             if not success:
-                command.error_message = "充电命令执行失败"
+                if cancel_event is not None and cancel_event.is_set():
+                    command.error_message = "新任务到达，自动回充移动已受控停止"
+                else:
+                    command.error_message = "充电命令执行失败"
 
             return success
 
+        except ControlledStopError:
+            raise
         except Exception as e:
             self.logger.error(f"执行充电命令失败: {e}")
             command.error_message = str(e)
@@ -1042,7 +1347,12 @@ class TaskScheduler:
         """执行位置调整命令 (Trigger信号，无需参数，使用默认充电桩位置)"""
         try:
             self.logger.info("执行位置调整命令 (Trigger信号)")
-            success = self.robot_controller.position_adjust(marker_id='charge_point_1F_6010')
+            if not self.charge_marker:
+                command.error_message = "charging.marker 未配置"
+                return False
+            success = self.robot_controller.position_adjust(
+                marker_id=self.charge_marker
+            )
 
             if not success:
                 command.error_message = "位置调整命令执行失败"

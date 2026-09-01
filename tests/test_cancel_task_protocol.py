@@ -1,8 +1,11 @@
 import unittest
+from unittest.mock import Mock, patch
 
 import gRPC.RobotService_pb2 as robot_pb2
+from RobotControlSystem import RobotControlSystem
 from dataModels.CommandModels import CancelTaskCmd, CmdType
 from dataModels.TaskModels import StationTaskStatus, TaskStatus
+from dataModels.UnifiedCommand import CommandStatus, create_unified_command
 from utils.dataConverter import (
     CommandValidationError,
     convert_server_message_to_command_envelope,
@@ -64,6 +67,45 @@ class CancelTaskProtocolTest(unittest.TestCase):
     def test_internal_cancelled_statuses_are_explicit(self):
         self.assertEqual(TaskStatus.CANCELLED.value, "cancelled")
         self.assertEqual(StationTaskStatus.CANCELLED.value, "cancelled")
+
+    def test_cancel_feedback_matches_command_status_update_contract(self):
+        system = RobotControlSystem.__new__(RobotControlSystem)
+        system.robot_id = self.ROBOT_ID
+        system.logger = Mock()
+        sent = []
+        system.server_command_manager = Mock()
+        system.server_command_manager.send_message.side_effect = sent.append
+        system._save_server_command_message = Mock()
+        command = create_unified_command(
+            "9001", CmdType.CANCEL_TASK_CMD, CancelTaskCmd(task_id=42)
+        )
+        command.status = CommandStatus.COMPLETED
+        command.error_message = "运行任务取消成功: 42"
+
+        with patch("RobotControlSystem.time.time", return_value=123.456):
+            system._send_command_status_update(command)
+
+        self.assertEqual(len(sent), 1)
+        message = sent[0]
+        self.assertEqual(message.command_id, 9001)
+        self.assertEqual(message.command_time, 123456)
+        self.assertEqual(
+            message.command_type, robot_pb2.ClientMessageType.COMMAND_STATUS_UPDATE
+        )
+        self.assertEqual(message.robot_id, self.ROBOT_ID)
+        self.assertEqual(message.command_status.command_id, 9001)
+        self.assertEqual(
+            message.command_status.command_type, robot_pb2.CmdType.CANCEL_TASK_CMD
+        )
+        self.assertEqual(
+            message.command_status.status,
+            robot_pb2.CommandStatus.COMMAND_STATUS_COMPLETED,
+        )
+        self.assertEqual(
+            message.command_status.message, "运行任务取消成功: 42"
+        )
+        self.assertEqual(message.command_status.timestamp, message.command_time)
+        self.assertEqual(message.command_status.retry_count, 0)
 
 
 if __name__ == "__main__":

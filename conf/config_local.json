@@ -36,6 +36,20 @@
             "enabled": true
         }
     },
+    "task_cancel": {
+        "allow_running_task_cancel": false,
+        "wait_timeout_seconds": 30,
+        "coordinator_workers": 4,
+        "coordinator_capacity": 32,
+        "safe_pose": {
+            "arm_joints": [0, 0, 0, 0, 0, 0]
+        }
+    },
+    "charging": {
+        "marker": "charge_point_1F_6010",
+        "auto_charge_after_cancel": true,
+        "auto_charge_priority": 9
+    },
     "env_sensor_config": {
         "port": "COM3",
         "baudrate": 4800,

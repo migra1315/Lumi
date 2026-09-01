@@ -57,13 +57,85 @@ class CancelWaitingTaskTests(unittest.TestCase):
     def test_cancel_marks_unfinished_stations_cancelled(self):
         task, _ = self.add_task()
         station = type("StationStub", (), {"status": StationTaskStatus.PENDING})()
+        failed = type("StationStub", (), {"status": StationTaskStatus.FAILED})()
         completed = type("StationStub", (), {"status": StationTaskStatus.COMPLETED})()
-        task.station_list = [station, completed]
+        task.station_list = [station, failed, completed]
 
         self.manager.request_cancel_task("cancel-stations", task.task_id)
 
         self.assertEqual(station.status, StationTaskStatus.CANCELLED)
+        self.assertEqual(failed.status, StationTaskStatus.CANCELLED)
         self.assertEqual(completed.status, StationTaskStatus.COMPLETED)
+
+    def test_cancel_without_later_task_enqueues_one_internal_auto_charge(self):
+        self.scheduler.auto_charge_after_cancel = True
+        self.scheduler.charge_marker = "charge_point_1F_6010"
+        task, target = self.add_task()
+        original_schedule = self.scheduler.schedule_auto_charge_after_cancel
+
+        def schedule_after_feedback(*args, **kwargs):
+            self.assertEqual(len(self.feedback), 1)
+            return original_schedule(*args, **kwargs)
+
+        self.scheduler.schedule_auto_charge_after_cancel = schedule_after_feedback
+
+        result = self.manager.request_cancel_task("cancel-auto-charge", task.task_id)
+
+        self.assertEqual(result.status, CommandStatus.COMPLETED)
+        self.assertTrue(result.metadata["auto_charge"]["scheduled"])
+        with self.scheduler.command_queue.mutex:
+            queued = list(self.scheduler.command_queue.queue)
+        auto_charge = [
+            command for command in queued
+            if command.metadata.get("source") == "auto_charge_after_task_cancel"
+        ]
+        self.assertEqual(len(auto_charge), 1)
+        self.assertEqual(auto_charge[0].cmd_type, CmdType.CHARGE_CMD)
+        self.assertEqual(auto_charge[0].priority, 9)
+        self.assertEqual(
+            auto_charge[0].metadata["charge_marker"], "charge_point_1F_6010"
+        )
+        self.assertEqual(
+            auto_charge[0].command_id,
+            f"auto-charge-after-cancel:{target.command_id}",
+        )
+
+    def test_cancel_with_later_task_skips_auto_charge(self):
+        self.scheduler.auto_charge_after_cancel = True
+        self.scheduler.charge_marker = "charge_point_1F_6010"
+        first, _ = self.add_task(task_id=1, command_id="task-1")
+        self.add_task(task_id=2, command_id="task-2")
+
+        result = self.manager.request_cancel_task("cancel-with-next", first.task_id)
+
+        self.assertEqual(result.status, CommandStatus.COMPLETED)
+        self.assertFalse(result.metadata["auto_charge"]["scheduled"])
+        self.assertIn("后续任务", result.metadata["auto_charge"]["reason"])
+        with self.scheduler.command_queue.mutex:
+            queued = list(self.scheduler.command_queue.queue)
+        self.assertFalse(any(
+            command.metadata.get("source") == "auto_charge_after_task_cancel"
+            for command in queued
+        ))
+
+    def test_task_arriving_after_auto_charge_decision_cancels_it_before_start(self):
+        self.scheduler.auto_charge_after_cancel = True
+        self.scheduler.charge_marker = "charge_point_1F_6010"
+        task, _ = self.add_task()
+        result = self.manager.request_cancel_task("cancel-before-next", task.task_id)
+        self.assertTrue(result.metadata["auto_charge"]["scheduled"])
+        with self.scheduler.command_queue.mutex:
+            queued = list(self.scheduler.command_queue.queue)
+        auto_charge = next(
+            command for command in queued
+            if command.metadata.get("source") == "auto_charge_after_task_cancel"
+        )
+
+        self.add_task(task_id=2, command_id="task-2")
+        self.scheduler._execute_command(auto_charge)
+
+        self.assertEqual(auto_charge.status, CommandStatus.CANCELLED)
+        self.assertIn("新任务", auto_charge.error_message)
 
     def test_duplicate_cancel_command_is_idempotent_without_second_feedback(self):
         self.add_task()

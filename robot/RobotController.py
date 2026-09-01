@@ -626,24 +626,57 @@ class RobotController():
             self.logger.error(f"操作实验室门时发生错误: {e}")
             return False
     
-    def charge(self) -> bool:
+    def recover_transport_safe_pose(self, arm_joints: List[float]) -> bool:
+        """取消完成前恢复经过配置和现场验证的运输安全关节位。"""
+        if not isinstance(arm_joints, (list, tuple)) or len(arm_joints) != 6:
+            self.logger.error("运输安全关节位必须包含 6 个值")
+            return False
+        return self.move_robot_to_position(
+            [float(value) for value in arm_joints], cancel_event=None
+        )
+
+    def charge(self, marker_id: str = None, cancel_event=None) -> bool:
         """
         充电操作
 
         Returns:
             bool: 操作是否成功
         """
-        self.logger.info(f"开始充电")
-        self.system_status = SystemStatus.CHARGING
+        if not marker_id:
+            charging_config = getattr(self, "system_config", {}).get(
+                "charging", {}
+            )
+            marker_id = charging_config.get("marker")
+        if not marker_id:
+            self.logger.error("充电点位未配置")
+            self.system_status = SystemStatus.ERROR
+            self.last_error = "charging.marker 未配置"
+            return False
+
+        self.logger.info(f"开始回充，目标点位: {marker_id}")
 
         try:
-            move_success = self.move_to_marker("charge_point_1F_6010")
+            move_success = self.move_to_marker(
+                marker_id, cancel_event=cancel_event
+            )
             if not move_success:
-                self.logger.error("无法移动到充电桩")
+                if cancel_event is not None and cancel_event.is_set():
+                    self.logger.info("自动回充移动已受控取消")
+                else:
+                    self.logger.error("无法移动到充电桩")
+                return False
+            if cancel_event is not None and cancel_event.is_set():
+                self.system_status = SystemStatus.IDLE
+                self.logger.info("到达充电点时已有新任务，结束本次自动回充")
                 return False
 
+            self.system_status = SystemStatus.CHARGING
+            self.logger.info(f"已到达充电点并进入充电状态: {marker_id}")
             return True
 
+        except ControlledStopError:
+            self.system_status = SystemStatus.ERROR
+            raise
         except Exception as e:
             self.logger.error(f"充电时发生错误: {e}")
             self.system_status = SystemStatus.ERROR

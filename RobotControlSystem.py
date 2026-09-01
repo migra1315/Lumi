@@ -1216,20 +1216,28 @@ class RobotControlSystem:
                 CmdType.CANCEL_TASK_CMD: robot_pb2.CmdType.CANCEL_TASK_CMD,
             }
 
+            # 同一条反馈的外层和内层共用发送时间；上位机以 status 为主判断，
+            # message 仅承载可选的详细原因。
+            sent_at = int(time.time() * 1000)
+            wire_command_id = (
+                int(command.command_id) if command.command_id.isdigit()
+                else abs(hash(command.command_id)) % (2**31)
+            )
+
             # 创建CommandStatusUpdate消息
             status_update = robot_pb2.CommandStatusUpdate(
-                command_id=int(command.command_id) if command.command_id.isdigit() else abs(hash(command.command_id)) % (2**31),
+                command_id=wire_command_id,
                 command_type=cmd_type_map.get(command.cmd_type, robot_pb2.CmdType.RESPONSE_CMD),
                 status=status_map.get(command.status, robot_pb2.CommandStatus.COMMAND_STATUS_PENDING),
                 message=command.error_message or f"命令状态: {command.status.value}",
-                timestamp=int(time.time() * 1000),
+                timestamp=sent_at,
                 retry_count=command.retry_count
             )
 
             # 创建ClientStreamMessage
             client_msg = robot_pb2.ClientStreamMessage(
-                command_id=int(command.command_id) if command.command_id.isdigit() else abs(hash(command.command_id)) % (2**31),
-                command_time=int(time.time() * 1000),
+                command_id=wire_command_id,
+                command_time=sent_at,
                 command_type=robot_pb2.ClientMessageType.COMMAND_STATUS_UPDATE,
                 robot_id=self.robot_id,
                 command_status=status_update

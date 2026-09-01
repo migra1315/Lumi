@@ -210,7 +210,9 @@ class MockRobotController(RobotControllerBase):
             return False
         
         # 模拟移动过程
-        success = self._simulate_operation(f"move_to_{marker_id}")
+        success = self._simulate_operation(
+            f"move_to_{marker_id}", cancel_event=cancel_event
+        )
         
         if success:
             self.current_position = self._marker_positions[marker_id].copy()
@@ -218,6 +220,9 @@ class MockRobotController(RobotControllerBase):
             self.status = RobotStatus.IDLE
             self.logger.info(f"Mock AGV已到达标记点: {marker_id}")
             self._trigger_callback("on_task_complete", "move_agv", marker_id)
+        elif cancel_event is not None and cancel_event.is_set():
+            self.status = RobotStatus.IDLE
+            self.logger.info("Mock AGV移动已受控取消")
         else:
             self.status = RobotStatus.ERROR
             self.last_error = f"移动AGV到{marker_id}失败"
@@ -238,13 +243,18 @@ class MockRobotController(RobotControllerBase):
         self.status = RobotStatus.ARM_OPERATING
         
         # 模拟移动过程
-        success = self._simulate_operation("move_robot")
+        success = self._simulate_operation(
+            "move_robot", cancel_event=cancel_event
+        )
         
         if success:
             self.robot_joints = position.copy()
             self.status = RobotStatus.IDLE
             self.logger.info("Mock机械臂移动完成")
             self._trigger_callback("on_task_complete", "move_robot", position)
+        elif cancel_event is not None and cancel_event.is_set():
+            self.status = RobotStatus.IDLE
+            self.logger.info("Mock机械臂移动已受控取消")
         else:
             self.status = RobotStatus.ERROR
             self.last_error = "机械臂移动失败"
@@ -265,13 +275,18 @@ class MockRobotController(RobotControllerBase):
         self.status = RobotStatus.EXT_OPERATING
         
         # 模拟移动过程
-        success = self._simulate_operation("move_ext")
+        success = self._simulate_operation(
+            "move_ext", cancel_event=cancel_event
+        )
         
         if success:
             self.ext_axis = position.copy()
             self.status = RobotStatus.IDLE
             self.logger.info("Mock外部轴移动完成")
             self._trigger_callback("on_task_complete", "move_ext", position)
+        elif cancel_event is not None and cancel_event.is_set():
+            self.status = RobotStatus.IDLE
+            self.logger.info("Mock外部轴原子动作返回后响应任务取消")
         else:
             self.status = RobotStatus.ERROR
             self.last_error = "外部轴移动失败"
@@ -358,8 +373,15 @@ class MockRobotController(RobotControllerBase):
         self.status = RobotStatus.IDLE
         return True
     
-    def charge(self) -> bool:
+    def charge(self, marker_id: str = None, cancel_event=None) -> bool:
         """模拟充电操作"""
+        if not marker_id:
+            self.logger.error("充电点位未配置")
+            return False
+        if not self.move_to_marker(marker_id, cancel_event=cancel_event):
+            return False
+        if cancel_event is not None and cancel_event.is_set():
+            return False
         self.logger.info("开始充电")
         self.status = RobotStatus.CHARGING
         
@@ -551,7 +573,7 @@ class MockRobotController(RobotControllerBase):
             
             time.sleep(1)
     
-    def _simulate_operation(self, operation_name: str) -> bool:
+    def _simulate_operation(self, operation_name: str, cancel_event=None) -> bool:
         """模拟操作"""
         self.action_history.append(operation_name)
         gate = self._action_gates.get(operation_name)
@@ -559,6 +581,9 @@ class MockRobotController(RobotControllerBase):
             started_event, release_event = gate
             started_event.set()
             release_event.wait()
+        if cancel_event is not None and cancel_event.is_set():
+            self.logger.info(f"操作已受控取消: {operation_name}")
+            return False
         # 检查是否有错误场景启用
         for scenario, enabled in self.error_scenarios.items():
             if enabled:
@@ -567,7 +592,12 @@ class MockRobotController(RobotControllerBase):
         
         # 模拟延迟
         latency = self.base_latency + random.uniform(0, 0.2)
-        time.sleep(latency)
+        if cancel_event is not None:
+            if cancel_event.wait(latency):
+                self.logger.info(f"操作已受控取消: {operation_name}")
+                return False
+        else:
+            time.sleep(latency)
         
         # 基于成功率决定是否成功
         success = random.random() <= self.success_rate

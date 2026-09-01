@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-09-01T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="cancel-flow" name="1-端到端信息流">
+    <mxGraphModel dx="2050" dy="1180" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2200" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="title" value="任务取消：从上位机指令到唯一终态反馈（当前实现）" style="text;html=1;align=center;verticalAlign=middle;fontSize=22;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="520" y="20" width="1120" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend1" value="蓝色：协议/通信　紫色：取消协调　橙色：调度/硬件　绿色：成功　红色：失败　灰色：持久化" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="520" y="60" width="1120" height="30" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="upper" value="上位机&#xa;ServerStreamMessage&#xa;command_id=取消请求ID&#xa;task_cmd.task_id=目标任务ID" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="120" width="210" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="grpc_in" value="serverCommand 双向流&#xa;接收 CANCEL_TASK_CMD" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="285" y="135" width="190" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="convert" value="dataConverter&#xa;映射 CmdType&#xa;构建 CommandEnvelope + CancelTaskCmd" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="520" y="120" width="230" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="validate" value="严格校验通过？&#xa;robot_id / oneof=task_cmd&#xa;task_id &gt; 0" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="800" y="115" width="210" height="115" as="geometry"/>
+        </mxCell>
+        <mxCell id="reject" value="拒绝命令&#xa;记录本地日志&#xa;不创建取消请求" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="800" y="270" width="210" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="save_received" value="RobotControlSystem&#xa;保存 server_command_received&#xa;processed=false" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="120" width="230" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="async" value="即时分流&#xa;request_cancel_task_async(cancel_command_id, task_id)&#xa;不进入 PriorityQueue&#xa;不发送 QUEUED/RUNNING" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1340" y="110" width="280" height="125" as="geometry"/>
+        </mxCell>
+        <mxCell id="capacity" value="同 ID 已有 Future？&#xa;协调器有容量？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1680" y="115" width="210" height="115" as="geometry"/>
+        </mxCell>
+        <mxCell id="overload" value="容量耗尽&#xa;持久化取消请求 FAILED&#xa;不无限排队" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="1665" y="275" width="240" height="85" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="manager" value="TaskManager.request_cancel_task&#xa;以 cancel_command_id 做幂等 owner 选择" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1380" y="290" width="260" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="cancel_db" value="task_cancel_requests&#xa;INSERT OR IGNORE&#xa;pending / completed / failed&#xa;&#xa;unified_commands&#xa;保存 CANCEL_TASK_CMD" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="275" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="scheduler" value="TaskScheduler.cancel_task(task_id)&#xa;在 _task_registry_lock 内查询 _active_tasks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="755" y="285" width="270" height="95" as="geometry"/>
+        </mxCell>
+        <mxCell id="target_state" value="目标任务状态？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="280" width="190" height="105" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="queued" value="等待队列 queued" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="445" width="190" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="queued_cancel" value="设置 cancel_event&#xa;entry.state=cancelled&#xa;原 TASK_CMD / Task / 未完成 Station = CANCELLED&#xa;持久化并写 cancel_waiting_task 审计" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="25" y="535" width="220" height="125" as="geometry"/>
+        </mxCell>
+        <mxCell id="queue_skip" value="对象可残留在 PriorityQueue&#xa;出队时二次检查并直接丢弃&#xa;不调用硬件" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="25" y="700" width="220" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="queued_success" value="等待任务取消成功&#xa;result.success=true" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="35" y="830" width="200" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="running" value="运行中 running/cancelling" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="285" y="445" width="220" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="flag" value="allow_running_task_cancel？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="300" y="535" width="190" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="flag_off" value="默认 false&#xa;不设置 cancel_event&#xa;取消失败" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="260" y="690" width="170" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="flag_on" value="entry.state=cancelling&#xa;设置共享 cancel_event&#xa;Manager 等待 cancel_complete_event" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="475" y="680" width="235" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="worker" value="任务工作线程在安全检查点响应&#xa;站点 / 重试 / 动作 / 复位边界" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="755" y="690" width="245" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="hardware" value="硬件受控停止&#xa;AGV：move/cancel + 停止确认&#xa;JAKA：motion_abort + 稳定采样&#xa;外部轴/短操作：等待返回 + 状态确认" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="675" width="285" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="done" value="Future 完成&#xa;锁内选择 terminal_decision&#xa;取消时恢复安全关节位 [0,0,0,0,0,0]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="1365" y="690" width="230" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="stop_ok" value="停止/状态确认/安全姿态/原任务终态落盘成功？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="1650" y="675" width="235" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="running_success" value="机械臂已到运输安全关节位&#xa;原任务、Task、非完成Station=CANCELLED&#xa;代际墓碑 success=true" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1635" y="830" width="250" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="running_fail" value="取消请求失败&#xa;停止/状态/落盘失败或协调等待超时&#xa;仅硬件状态未知时：&#xa;_hardware_fault_blocked=true&#xa;阻塞后续调度" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1905" y="825" width="230" height="110" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="other" value="不存在 / 已完成 / 已失败 / terminalizing / 已取消代际" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="445" width="250" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="other_result" value="不存在/已终态：FAILED&#xa;已取消代际：复用墓碑结果&#xa;不重复操作硬件" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="520" y="550" width="230" height="95" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="finalize" value="TaskManager 提交取消请求终态&#xa;Cancel UnifiedCommand：COMPLETED / FAILED&#xa;写 cancel_request 审计" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="760" y="930" width="330" height="125" as="geometry"/>
+        </mxCell>
+        <mxCell id="callback" value="触发一次&#xa;on_command_status_change(cancel command)&#xa;原 TASK_CMD 不额外反馈 CANCELLED" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="940" width="285" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="feedback" value="RobotControlSystem 构建 ClientStreamMessage&#xa;外层：COMMAND_STATUS_UPDATE&#xa;内层：CANCEL_TASK_CMD + COMPLETED/FAILED&#xa;message 可含详情，status 为主判断" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1475" y="930" width="310" height="125" as="geometry"/>
+        </mxCell>
+        <mxCell id="upper_result" value="上位机收到终态反馈&#xa;成功：COMPLETED&#xa;失败：FAILED&#xa;同进程去重；跨重启可幂等重放" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1835" y="940" width="245" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="sent_db" value="server_command_sent&#xa;保存 COMMAND_STATUS_UPDATE&#xa;流不可用则进入离线缓存" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1495" y="1080" width="270" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="processed" value="server_command_received&#xa;processed=true" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="795" y="1085" width="260" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="gap" value="最终反馈提交后：&#xa;取消成功且无后续任务&#xa;生成优先级9内部 CHARGE_CMD&#xa;执行前复检；新任务可受控停止回充&#xa;真机验收前运行取消开关仍关闭" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1850" y="1070" width="280" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="upper" target="grpc_in"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="grpc_in" target="convert"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="convert" target="validate"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#b85450;fontColor=#b85450;" edge="1" parent="1" source="validate" target="reject"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#82b366;fontColor=#82b366;" edge="1" parent="1" source="validate" target="save_received"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="save_received" target="async"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="async" target="capacity"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" value="无容量" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#b85450;fontColor=#b85450;" edge="1" parent="1" source="capacity" target="overload"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e9" value="新 Future / 复用 Future" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="capacity" target="manager"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="manager" target="cancel_db"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="cancel_db" target="scheduler"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="scheduler" target="target_state"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e13" value="queued" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="target_state" target="queued"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e14" value="running" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="target_state" target="running"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e15" value="其他" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="target_state" target="other"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="queued" target="queued_cancel"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="queued_cancel" target="queue_skip"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e18" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="queue_skip" target="queued_success"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e19" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="running" target="flag"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e20" value="否（默认）" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#b85450;fontColor=#b85450;" edge="1" parent="1" source="flag" target="flag_off"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e21" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#82b366;fontColor=#82b366;" edge="1" parent="1" source="flag" target="flag_on"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e22" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="flag_on" target="worker"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e23" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="worker" target="hardware"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e24" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="hardware" target="done"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e25" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="done" target="stop_ok"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e26" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#82b366;fontColor=#82b366;" edge="1" parent="1" source="stop_ok" target="running_success"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e27" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#b85450;fontColor=#b85450;" edge="1" parent="1" source="stop_ok" target="running_fail"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e28" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="other" target="other_result"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e29" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="queued_success" target="finalize"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e30" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="flag_off" target="finalize"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e31" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="other_result" target="finalize"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e32" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="running_success" target="finalize"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e33" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="running_fail" target="finalize"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e34" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="overload" target="callback"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e35" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="finalize" target="callback"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e36" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="callback" target="feedback"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e37" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="feedback" target="upper_result"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e38" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="1" source="feedback" target="sent_db"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e39" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="1" source="finalize" target="processed"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e40" value="反馈提交后的内部行为" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#82b366;fontColor=#82b366;" edge="1" parent="1" source="feedback" target="gap"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram id="cancel-data" name="2-数据结构与状态">
+    <mxGraphModel dx="1800" dy="1080" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="d0"/>
+        <mxCell id="d1" parent="d0"/>
+
+        <mxCell id="dtitle" value="任务取消数据结构、标识关系与状态边界" style="text;html=1;align=center;verticalAlign=middle;fontSize=22;fontStyle=1;" vertex="1" parent="d1">
+          <mxGeometry x="430" y="20" width="1040" height="45" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="req" value="上位机请求：ServerStreamMessage&#xa;────────────────────&#xa;command_id: int64 ＝ 取消请求ID&#xa;command_time: int64&#xa;command_type: CANCEL_TASK_CMD&#xa;robot_id: int64&#xa;oneof data_json.task_cmd.task_id ＝ 目标任务ID" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="40" y="100" width="330" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="envelope" value="内部信封：CommandEnvelope&#xa;────────────────────&#xa;cmd_id: str ＝ 取消请求ID&#xa;cmd_time: int&#xa;cmd_type: CmdType.CANCEL_TASK_CMD&#xa;robot_id: int&#xa;data_json: {cancel_task_cmd: {task_id}}&#xa;data: CancelTaskCmd" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="430" y="100" width="330" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="cancel_model" value="CancelTaskCmd&#xa;────────────&#xa;task_id: int&#xa;&#xa;只保存目标 ID&#xa;不解析完整 Task" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="d1">
+          <mxGeometry x="820" y="115" width="210" height="145" as="geometry"/>
+        </mxCell>
+        <mxCell id="cancel_cmd" value="取消请求 UnifiedCommand&#xa;────────────────────&#xa;command_id ＝ 取消请求ID&#xa;cmd_type = CANCEL_TASK_CMD&#xa;category = CONTROL&#xa;priority = 0（实际不进入普通队列）&#xa;data = CancelTaskCmd&#xa;status = PENDING → COMPLETED / FAILED&#xa;metadata.target_task_id" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="1090" y="95" width="350" height="195" as="geometry"/>
+        </mxCell>
+        <mxCell id="feedback_model" value="上位机反馈：ClientStreamMessage&#xa;────────────────────&#xa;command_id ＝ 取消请求ID&#xa;command_time = 发送时间&#xa;command_type = COMMAND_STATUS_UPDATE&#xa;robot_id&#xa;command_status.command_id ＝ 取消请求ID&#xa;command_status.command_type = CANCEL_TASK_CMD&#xa;status = COMPLETED / FAILED（主判断）&#xa;message = 详细状态消息（按需解析）&#xa;timestamp = 同一发送时间&#xa;retry_count = 0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="1500" y="65" width="350" height="255" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="ids" value="三个 ID 不可混用&#xa;────────────────────────────&#xa;cancel command_id：取消请求幂等与反馈&#xa;target task_id：活动业务任务注册表键&#xa;target command_id：原始 TASK_CMD 标识" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" parent="d1">
+          <mxGeometry x="575" y="330" width="390" height="125" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="registry" value="TaskScheduler._active_tasks[task_id]&#xa;────────────────────────────&#xa;command: 原 TASK_CMD UnifiedCommand&#xa;cancel_event: threading.Event&#xa;state: queued / running / cancelling / terminalizing / cancelled&#xa;cancel_complete_event: threading.Event&#xa;cancel_result: {success, message, target_command_id}&#xa;terminal_decision: CANCELLED / COMPLETED / FAILED" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="40" y="510" width="410" height="220" as="geometry"/>
+        </mxCell>
+        <mxCell id="tombstone" value="_cancelled_task_generations[task_id]&#xa;────────────────────────────&#xa;success / message / target_command_id&#xa;auto_charge_decided: bool&#xa;auto_charge_result: dict&#xa;&#xa;用途：同一任务代际复用取消结果和回充决策，避免重复硬件动作" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="500" y="520" width="350" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="target_models" value="原任务内存状态&#xa;────────────────────&#xa;原 UnifiedCommand.status&#xa;QUEUED / RUNNING → CANCELLED&#xa;&#xa;Task.status → CANCELLED&#xa;Station.status → CANCELLED&#xa;已完成站点保持 COMPLETED&#xa;历史 FAILED 可覆盖为 CANCELLED&#xa;&#xa;当前进程内有效；不跨重启恢复业务任务" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="900" y="510" width="320" height="220" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="db_received" value="server_command_received&#xa;────────────────&#xa;msg_id = cancel command_id&#xa;cmd_type / robot_id / data_json&#xa;processed: false → true" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="1280" y="360" width="260" height="145" as="geometry"/>
+        </mxCell>
+        <mxCell id="db_cancel" value="task_cancel_requests&#xa;────────────────&#xa;cancel_command_id PK&#xa;target_task_id&#xa;status: pending → completed / failed&#xa;message / created_at / completed_at" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="1580" y="350" width="270" height="165" as="geometry"/>
+        </mxCell>
+        <mxCell id="db_commands" value="unified_commands&#xa;────────────────&#xa;原 TASK_CMD：queued/running → cancelled&#xa;取消 CANCEL_TASK_CMD：pending → completed/failed&#xa;内部 CHARGE_CMD：queued → completed/failed/cancelled&#xa;保存 error_message 和 metadata" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="1280" y="555" width="270" height="165" as="geometry"/>
+        </mxCell>
+        <mxCell id="db_audit" value="task_history&#xa;────────────────&#xa;cancel_waiting_task / cancel_request&#xa;cancel_request_conflict&#xa;recover_pending_cancel&#xa;auto_charge_after_cancel" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="1590" y="560" width="250" height="155" as="geometry"/>
+        </mxCell>
+        <mxCell id="db_sent" value="server_command_sent&#xa;────────────────&#xa;msg_id = 发送记录 UUID&#xa;command_id = cancel command_id&#xa;msg_type = COMMAND_STATUS_UPDATE&#xa;data_json / status" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="1430" y="770" width="280" height="165" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="state_cancel" value="取消请求状态&#xa;PENDING → COMPLETED / FAILED&#xa;终态重放保持不变" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="d1">
+          <mxGeometry x="60" y="810" width="280" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="state_target" value="原任务状态&#xa;QUEUED / RUNNING → CANCELLED&#xa;terminalizing 后拒绝新取消" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="d1">
+          <mxGeometry x="400" y="810" width="290" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="state_fault" value="停止/安全恢复失败&#xa;原任务仍 CANCELLED；取消请求 FAILED&#xa;hardware_fault_blocked=true&#xa;硬件关闭→启动成功后解除" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="d1">
+          <mxGeometry x="750" y="800" width="300" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="current_gap" value="安全姿态与自动回充&#xa;────────────────────────&#xa;task_cancel.safe_pose.arm_joints = [0,0,0,0,0,0]&#xa;charging.marker / auto_charge_after_cancel / priority=9&#xa;内部 CHARGE_CMD metadata：source、cancelled_task_id、cancel_command_id、task_enqueue_generation、charge_marker&#xa;内存 cancel_event：新任务到达时受控停止回充" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;align=left;spacingLeft=12;" vertex="1" parent="d1">
+          <mxGeometry x="60" y="950" width="990" height="120" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="de1" value="协议转换" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="d1" source="req" target="envelope"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de2" value="data" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="d1" source="envelope" target="cancel_model"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de3" value="包装" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="d1" source="cancel_model" target="cancel_cmd"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de4" value="终态反馈" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="d1" source="cancel_cmd" target="feedback_model"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de5" value="cancel command_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="d1" source="req" target="ids"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de6" value="target task_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="d1" source="cancel_model" target="ids"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de7" value="以 task_id 查询" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="d1" source="ids" target="registry"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de8" value="取消完成后保存" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="d1" source="registry" target="tombstone"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de9" value="command 指向原任务" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="d1" source="registry" target="target_models"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de10" value="接收记录" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="d1" source="envelope" target="db_received"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de11" value="幂等登记" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="d1" source="cancel_cmd" target="db_cancel"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de12" value="命令持久化" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="d1" source="target_models" target="db_commands"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de13" value="审计" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="d1" source="tombstone" target="db_audit"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de14" value="发送记录" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="d1" source="feedback_model" target="db_sent"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de15" value="状态语义" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="d1" source="cancel_cmd" target="state_cancel"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de16" value="状态语义" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;" edge="1" parent="d1" source="target_models" target="state_target"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="de17" value="异常分支" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#b85450;fontColor=#b85450;" edge="1" parent="d1" source="state_target" target="state_fault"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
